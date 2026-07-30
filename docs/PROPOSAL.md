@@ -12,7 +12,7 @@ tried, then designs what is missing.
 
 Searched the SRFI database (`srfi-common/admin/srfi-data.scm`), the R7RS-large
 dockets, and the academic record. Grouped by which of the three powers each item
-provides. `PLAN.md` section 2b defines the three: premises, policy, layout.
+provides. `RESEARCH.md` section 2 defines the three: premises, policy, layout.
 
 ### 1a. Instructions (type-specific operators): crowded, and active right now
 
@@ -99,7 +99,7 @@ An earlier draft of this document dismissed it on the grounds that it had few
 users. That was a bad argument and it is retracted. Adoption count says nothing
 about whether a technique works, and Stalin's technique demonstrably works: it
 reaches C-competitive numeric code and beats a current Chez by 2x to 4x on float
-and array benchmarks. `PLAN.md` section 5a covers the machinery and the measured
+and array benchmarks. `RESEARCH.md` section 3 covers the machinery and the measured
 profile in detail, and Stalin is now configuration 7 in the experiment.
 
 What Stalin's numbers do show is a different limitation, and it is the one that
@@ -172,12 +172,15 @@ declarations still runs it correctly, only slower.
 and lets a program re-enable one inside a region. CL offers a single `safety` dial
 from 0 to 3, which conflates risks that deserve separate decisions.
 
-The decision does not rest on the Ada manual reading well. `PLAN.md` configuration 8
-measures GNAT with `pragma Suppress` on nbody for exactly this reason. If Ada with
-checks suppressed does not approach scalar C, then per-check suppression buys less
-than the manual implies and this section needs rewriting. Turning off a bounds check in a numeric
-kernel is a bounded and auditable choice. Turning off type checks on data that came
-from a network socket is not. A dial makes you buy both.
+Turning off a bounds check in a numeric kernel is a bounded and auditable choice.
+Turning off type checks on data that came from a network socket is not. A dial makes
+you buy both.
+
+The decision does not rest on the Ada manual reading well. Configuration 8 measures
+GNAT with `pragma Suppress` on nbody for exactly this reason, in phase 4
+(`phases/04-reference-points/PLAN.md`). If Ada with checks suppressed does not
+approach scalar C, then per-check suppression buys less than the manual implies and
+this section needs rewriting.
 
 Proposed check names, deliberately fewer than Ada's fourteen:
 
@@ -249,8 +252,8 @@ enough is an open question.
 contract language. Racket has one and it is large. Drawing the line early and
 defending it is a design requirement, not a detail.
 
-**Whether anybody implements it.** `PLAN.md` already flags that Tangerine itself
-may be thinly implemented. A proposal nobody implements changes nothing. The right
+**Whether anybody implements it.** Phase 1 (`phases/01-toolchain-gate/PLAN.md`) is
+the gate on exactly this: Tangerine may be thinly implemented. A proposal nobody implements changes nothing. The right
 sequence is to build the thing, measure the win on real code, and lead with the
 number.
 
@@ -322,7 +325,7 @@ Naming them separately clarifies what we are choosing between.
 | dynamically observed facts | RyuJIT dynamic PGO | mostly | none | JIT plus warmup |
 
 The idea of a static analysis layer that inserts optimizations where it sees fit is
-the middle row. `PLAN.md` section 5a measured what that alone produces: 2x to 4x
+the middle row. `RESEARCH.md` section 3 measured what that alone produces: 2x to 4x
 faster than Chez where the analysis succeeds, 5x to 16x slower where it does not,
 and nothing in the source tells you which you got. The bottom row works well but
 requires a JIT, and buys its wins precisely where static analysis is weakest, on
@@ -369,7 +372,7 @@ are the direct analogue of `sb-simd`. `Span<T>`, `ref struct` and `stackalloc` a
 allocation-free code without leaving the safe language. `[MethodImpl(AggressiveInlining)]`
 and `[SkipLocalsInit]` are per-site policy attributes, which is the Ada model rather
 than the CL dial. And `unsafe` with `fixed` is the ECMA-334 standardized escape
-hatch, which puts C# in group 1 of `PLAN.md` section 2b's taxonomy.
+hatch, which puts C# in group 1 of `RESEARCH.md` section 2's taxonomy.
 
 ### 4f. How fast is C# really, measured rather than recalled
 
@@ -404,8 +407,8 @@ outright on fannkuchredux and reaches parity on spectralnorm and pidigits. The
 geometric mean is dragged up almost entirely by binarytrees at 5.84 and mandelbrot
 at 3.10. binarytrees is a pure allocation and collection benchmark, so a tracing
 collector losing to Rust's ownership-based arena allocation is expected and says
-nothing about code generation quality. The same entry-quality caveat from section 1
-of `PLAN.md` applies here too: fastest-entry-per-language measures contributor effort
+nothing about code generation quality. The same entry-quality caveat from
+`RESEARCH.md` section 4 applies here too: fastest-entry-per-language measures contributor effort
 alongside compiler quality.
 
 **hanabi1224/Programming-Language-Benchmarks, dotnet 9.0.303 against rustc 1.88.0**,
@@ -439,8 +442,9 @@ and the type system decision in 4b is why, not JIT cleverness.
 
 ## 5. Sequence
 
-1. Run the `PLAN.md` nbody experiment. Get the number for what the missing policy
-   switch actually costs. Everything else waits on this.
+1. Run the nbody experiment in phase 3 (`phases/03-core-measurement/PLAN.md`). Get
+   the number for what the missing policy switch actually costs. Everything else
+   waits on this.
 2. Build the portable library from section 2 over existing SRFIs, with
    implementation-specific back ends for Chez and Racket.
 3. Show it reaches implementation-specific tuned speed from portable source.
