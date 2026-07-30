@@ -181,6 +181,7 @@ accident.
 
 | phase | directory | goal | gates |
 |---|---|---|---|
+| **0** | **`phases/00-compiler-research/`** | **the seminal-works bibliography, links verified reachable** | **7** |
 | 1 | `phases/01-toolchain-gate/` | install, and find out whether Tangerine is implemented anywhere | everything |
 | 2 | `phases/02-calibration/` | real dev-N timings and the machine noise floor | 3, 4 |
 | 3 | `phases/03-core-measurement/` | configurations 1 to 6. The number the project exists for | 5, 6 |
