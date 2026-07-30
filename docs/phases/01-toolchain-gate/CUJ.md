@@ -1,20 +1,21 @@
 # Phase 1 CUJ: Toolchain and the Tangerine Gate
 
-Technical implementation document. The journey here is an operator sitting down at a
-clean machine and ending with a written verdict on whether portable tuned numeric
-Scheme is expressible at all.
+Technical implementation document. Companion to `PLAN.md` in this directory, which
+covers why. This covers how.
 
-Companion to `PLAN.md` in this directory, which covers why. This covers how.
+**The gate question is already answered.** `RESULTS.md` in this directory records the
+verdict, determined by reading the Chez and Racket source rather than by probing. Nobody
+implements R7RS-large Tangerine. Chez has no R7RS support at all and ships full R6RS
+instead. Racket's SRFI package stops at SRFI 98.
 
 ## Journey summary
 
-The operator installs toolchains, then runs a probe per implementation that attempts
-to import each Tangerine numeric library and reports what resolved. Then a second,
-harder probe determines whether `assume` actually buys anything by reading emitted
-code rather than trusting a timing. Then the ahead-of-time compilation recipes get
-written and verified against a deliberate trap: touch the source mtime and confirm
-the reported time does not move. The phase ends with a support matrix and a go or
-no-go on configurations 2 and 3.
+The operator installs toolchains, spends five minutes confirming the packaged builds
+match what upstream source says, then determines whether `assume` is honored as an
+optimization license by reading emitted code. Then the ahead-of-time compilation recipes
+get written and verified against a deliberate trap: touch the source mtime and confirm
+the reported time does not move. The phase ends with working recipes and a runtime
+answer on `sb-simd` and `perf`.
 
 ## Preconditions
 
@@ -52,110 +53,83 @@ gcc --version
 Failure branch: if `chezscheme` installs a binary under a different name, find it with
 `dpkg -L chezscheme | grep bin/` and record the real invocation. Do not guess.
 
-## Step 2: the Tangerine probe
+## Step 2: confirm the Tangerine verdict at runtime
 
-This is the phase's reason for existing. Write one probe per implementation that
-attempts each import independently, so a single failure does not mask the rest.
+**Already answered by reading source. See `RESULTS.md` in this directory.** Neither Chez
+nor Racket ships the Tangerine numeric libraries. Chez has no R7RS support at all and
+ships full R6RS instead, including `(rnrs arithmetic fixnums)` and
+`(rnrs arithmetic flonums)`. Racket's SRFI package stops at SRFI 98.
 
-Target libraries, from the Tangerine edition:
+Both are open source. Designing a runtime probe to discover this was the wrong move and
+the probe design that used to live here has been deleted.
 
-| library | SRFI | what it gives |
-|---|---|---|
-| `(scheme flonum)` | 144 | `fl+`, `fl*`, `flsqrt` and the rest |
-| `(scheme fixnum)` | 143 | `fx+`, `fx*` and the rest |
-| `(scheme vector f64)` | 160 | `f64vector`, `f64vector-ref`, unboxed storage |
-| `(scheme bitwise)` | 151 | not needed for nbody, probe anyway |
+What remains is a five-minute confirmation that the installed packages match what the
+upstream source says, since a distribution can patch or backport:
 
-Probe shape, one import per file so failures isolate:
+```
+echo '(import (rnrs arithmetic flonums)) (display (fl+ 1.0 2.0))' \
+  | chezscheme -q --program /dev/stdin
+racket -e '(require racket/flonum) (displayln (fl+ 1.0 2.0))'
+racket -e '(require srfi/144)'          # expect: collection not found
+```
+
+If any of these disagree with `RESULTS.md`, the distribution patched something and
+`RESULTS.md` needs correcting.
+
+### What configuration 2 becomes
+
+Since portable Tangerine is not writeable, configuration 2 splits in two. Both get
+measured; see `../../PLAN.md` section 2.
+
+- **2a, R6RS portable.** `(rnrs arithmetic flonums)` and `(rnrs arithmetic fixnums)`,
+  which Chez actually ships. This is the real standardized instruction-level hatch and
+  it has existed since 2007.
+- **2b, Tangerine over a shim.** Ship SRFI 144 and SRFI 160 reference implementations
+  ourselves and import them as `(scheme flonum)` and `(scheme vector f64)`. Measures
+  what Tangerine would give you if anyone implemented it. The shim is a cost that gets
+  reported alongside the number.
+
+## Step 3: does anything honor an assumption as an optimization license?
+
+Neither implementation ships SRFI 145, so `assume` has to be defined locally before it
+can be tested at all. That reframes the question usefully: the interesting thing is not
+whether `assume` works, it is whether either compiler will delete a check when told the
+type another way.
+
+Two experiments, both read from emitted code rather than from timing, because timing
+cannot distinguish "treated as a no-op" from "treated as a cheap check" at this scale.
+
+**Experiment one, Chez.** Chez's source optimizer (`cp0.ss`) and its type recovery pass
+(`cptypes.ss`, `cptypes-lattice.ss`) already know about `flvector`, which the source read
+confirmed. So Chez has an internal type lattice. The question is whether a user-visible
+form can feed it.
 
 ```scheme
-;; probe-scheme-flonum.scm
-(import (scheme base) (scheme write) (scheme flonum))
-(display (fl+ 1.0 2.0)) (newline)
+;; does a predicate test upstream let cptypes drop the check downstream?
+(define (ref-guarded v i)
+  (if (and (flvector? v) (fixnum? i))
+      (flvector-ref v i)
+      (error 'ref "bad")))
+(define (ref-bare v i) (flvector-ref v i))
 ```
 
-```scheme
-;; probe-scheme-vector-f64.scm
-(import (scheme base) (scheme write) (scheme vector f64))
-(let ((v (make-f64vector 4 1.5)))
-  (display (f64vector-ref v 2)) (newline))
-```
+Inspect with `(expand/optimize ...)` for source-level output, and the assembly-output
+parameter for machine code. Compare against the same procedure at `optimize-level 3`,
+which is known to remove checks. If the guarded version at level 2 matches the level 3
+output, then Chez's existing type recovery is already doing what a declaration would ask
+for, and the gap is smaller than the standards analysis implies. That would be a
+significant finding and it would change `../../PROPOSAL.md`.
 
-Run each under each implementation's R7RS mode. Exact invocations are
-implementation-specific and are themselves an output of this step, so record them:
+**Experiment two, Racket.** `raco decompile` on the compiled zo. Compare
+`flvector-ref` against `unsafe-flvector-ref` to establish what check removal looks like
+in that output, then check whether any safe form reaches it.
 
-- Chez: R7RS library support exists but the invocation for loading an R7RS program
-  differs from loading a script. Determine and record it.
-- Racket: R7RS support arrives through a package rather than the core distribution.
-  Determine whether it is installed, and if not whether `raco pkg install r7rs`
-  is needed.
+**Baseline, SBCL.** `(disassemble #'f)` with and without `(declare (type fixnum i))` at
+`(safety 0)`. This is the reference for what a declaration-driven compiler emits, and it
+is what configurations 2a and 2b are ultimately being measured against.
 
-Then probe the native equivalents separately, because these are what configuration 4
-will actually use and they are near-certain to exist:
-
-```scheme
-;; Chez native
-(display (fl+ 1.0 2.0))
-(let ((v (make-flvector 4 1.5))) (display (flvector-ref v 2)))
-```
-
-```racket
-#lang racket/base
-(require racket/flonum racket/unsafe/ops)
-(displayln (fl+ 1.0 2.0))
-(define v (make-flvector 4 1.5))
-(displayln (flvector-ref v 2))
-(displayln (unsafe-flvector-ref v 2))
-```
-
-Record into a matrix with four states per cell: native, via portable SRFI shim,
-absent, or unknown. Do not collapse "absent" and "absent under the R7RS shim" into one
-value, because they have different consequences for the proposal.
-
-Failure branch, the one that matters: if `(scheme flonum)` and `(scheme vector f64)`
-resolve nowhere, configuration 2 cannot be written as specified. Fall back in this
-order, and record which was used:
-
-1. Standalone SRFI 143, 144 and 160 reference implementations, loaded as libraries.
-2. Native `flvector` plus native `fl` operators, with a portability caveat attached to
-   every number derived from it.
-
-Either fallback is a publishable finding. "The standard exists and nobody ships it" is
-a stronger result than a small performance delta would be.
-
-## Step 3: the `assume` optimization-license probe
-
-Harder, because a conforming implementation may treat `(assume expr)` as a checked
-assertion, as a no-op, or as an optimization license, and timing alone will not
-distinguish the first two from each other reliably at this scale.
-
-Read the emitted code. Write two versions of one procedure, identical except for the
-assumption:
-
-```scheme
-(define (ref-checked v i) (f64vector-ref v i))
-(define (ref-assumed v i)
-  (assume (fixnum? i))
-  (assume (f64vector? v))
-  (f64vector-ref v i))
-```
-
-Then inspect, per implementation:
-
-- Chez: `(expand/optimize '(lambda (v i) ...))` shows source-level output after the
-  optimizer. For machine code, set the assembly-output parameter. Compare whether a
-  bounds or type check disappears.
-- Racket: `raco decompile` on the compiled zo file.
-- SBCL, for the comparison baseline: `(disassemble #'ref-assumed)` against the same
-  procedure with `(declare (type fixnum i))`.
-
-Record a three-way verdict per implementation: honors as optimization license, treats
-as runtime check, or ignores entirely.
-
-Expected outcome, stated so we notice if it is wrong: no implementation honors it as a
-license. SRFI 145 sits in no ratified edition, and support is likely to be a plain
-assertion where it exists at all. If that holds, configuration 3 measures the cost of
-an unratified proposal, which is still worth one data point.
+Record per implementation: does a user-writable form cause a check to disappear, yes or
+no, with the emitted code as evidence.
 
 ## Step 4: the `sb-simd` check
 

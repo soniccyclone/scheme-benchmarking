@@ -32,7 +32,7 @@ and five reps is well under a minute of compute, which is the practical win of t
 narrowed scope. Report-grade measurement (bare metal, official N, real confidence
 intervals) stays explicitly out of scope so the dev harness does not grow into it.
 
-**Dependencies.** All nine configurations, with resolved installed sizes using
+**Dependencies.** All configurations, with resolved installed sizes using
 `--no-install-recommends`:
 
 | packages | for | size |
@@ -52,17 +52,20 @@ alongside theirs.
 6, and Rust adds a third compiler's variance without adding insight into the
 declaration question.
 
-**The two verification gates before any number is trusted.** First, does any
-implementation actually ship Tangerine's `(scheme flonum)` and `(scheme vector
-f64)`? Section 2's whole argument depends on this and it may fail. Fallbacks are
-the standalone SRFI 143/144/160 reference implementations, or native `flvector`
-with a portability caveat attached to every result. Second, ahead-of-time
-compilation per implementation, which is where naive comparisons go wrong: Racket
-must go through `raco make` or it recompiles per invocation and looks
-catastrophically slow for reasons unrelated to Racket, Chez needs `compile-program`
-or it interprets, SBCL wants a saved core or at minimum a fasl. Acceptance
-criterion for every configuration: the second run is not slower than the first, and
-the time does not change when the source mtime is touched.
+**The verification gate before any number is trusted.** Ahead-of-time compilation per
+implementation, which is where naive comparisons go wrong: Racket must go through
+`raco make` or it recompiles per invocation and looks catastrophically slow for reasons
+unrelated to Racket, Chez needs `compile-program` or it interprets, SBCL wants a saved
+core or at minimum a fasl. Acceptance criterion for every configuration: the second run
+is not slower than the first, and the time does not change when the source mtime is
+touched.
+
+**The Tangerine question is settled and the answer was no.** Determined by reading the
+Chez and Racket source; see `phases/01-toolchain-gate/RESULTS.md`. Chez ships no
+`(scheme ...)` libraries at all and provides R6RS instead, including
+`(rnrs arithmetic flonums)` and `(rnrs arithmetic fixnums)` plus a native `flvector`.
+Racket's SRFI package stops at SRFI 98. Configuration 2 therefore split into 2a, the
+R6RS path that actually exists, and 2b, Tangerine over a shim we ship ourselves.
 
 **Corpora already fetched**, parked in the scratchpad so nothing refetches: the
 Benchmarks Game clone (60 MB, program sources in

@@ -48,13 +48,10 @@ out to be more interesting than a flat no.
 
 ---
 
-
----
-
 ## 2. The experiment
 
-One program, nine configurations, each isolating one standards-level feature or
-providing one reference point. This validates section 2's prediction rather than
+One program, ten configurations, each isolating one standards-level feature or
+providing one reference point. This validates `RESEARCH.md` section 1's prediction rather than
 being a benchmarking project in its own right.
 
 **Program: nbody.** Serial in every published entry so no thread confound, pure
@@ -65,23 +62,47 @@ to sanity-check against.
 | # | configuration | role |
 |---|---|---|
 | 1 | portable R7RS-small, generic arithmetic, `vector` | the floor: no hatches exist |
-| 2 | R7RS-large Tangerine: `(scheme flonum)` + `(scheme vector f64)` | what portable tuned Scheme can do today |
-| 3 | Tangerine + SRFI 145 `assume` | what the orphaned premise hatch is worth |
+| 2a | **R6RS: `(rnrs arithmetic flonums)` + `(rnrs arithmetic fixnums)`** | **the only standardized hatch with a real implementation, available since 2007** |
+| 2b | **Tangerine over a shim we ship: SRFI 144 + SRFI 160** | **what Tangerine would give you if anyone implemented it** |
+| 3 | assumption as optimization license, however it can be expressed | what a premise buys, if anything |
 | 4 | implementation-specific max: Chez `optimize-level 3`, Racket unsafe ops | the folklore ceiling |
 | 5 | SBCL, `declare` + `(safety 0)`, scalar, no `sb-simd` | tuned conformant CL |
 | 6 | `gcc -O2 -fno-tree-vectorize`, and `-O3 -march=native` | scalar and vectorized C reference |
-| 7 | **Stalin, whole-program inference** | **the Scheme ceiling, reached by the other route** |
-| 8 | **GNAT Ada, `pragma Suppress`, per-check** | **the design we are copying, measured** |
-| 9 | **ECL and CLISP, same source as 5** | **is it Common Lisp or is it SBCL?** |
+| 7 | Stalin, whole-program inference | the Scheme ceiling, reached by the other route |
+| 8 | GNAT Ada, `pragma Suppress`, per-check | the design we are copying, measured |
+| 9 | ECL and CLISP, same source as 5 | is it Common Lisp or is it SBCL? |
+
+### Why configuration 2 split
+
+Phase 1 answered the gate question by reading the Chez and Racket source, and the answer
+killed configuration 2 as originally written. See
+`phases/01-toolchain-gate/RESULTS.md` for the evidence.
+
+Chez has **no R7RS support of any kind**. Zero `(scheme ...)` libraries; the only
+occurrences of "r7rs" in the entire codebase are two incidental comments. It ships full
+R6RS instead, including `(rnrs arithmetic fixnums)` and `(rnrs arithmetic flonums)`, plus
+a native `flvector` that its type recovery pass already understands. Racket's SRFI
+package stops at SRFI 98, so no 143, 144, 145, 160 or 253.
+
+So there is no implementation on which `(import (scheme flonum) (scheme vector f64))`
+resolves. Tangerine is a dead letter seven years after it was assembled.
+
+That reshapes the finding into something stronger than a measured delta. The
+instruction-level escape hatches were standardized by R6RS in 2007, removed by R7RS-small
+in 2013, nominally restored by R7RS-large Tangerine in 2019, and remain unimplemented by
+either leading implementation in 2026. Configuration 2a measures the path that actually
+exists. Configuration 2b measures the path the standard promises, with the shim cost
+reported alongside it.
 
 Run configurations 1 through 4 on both Chez and Racket, since section 5's data says
 they are within 15% on numeric code and any large divergence here would itself be a
 finding.
 
-The deltas answer specific questions. 1 to 2 is what Tangerine bought Scheme. 2 to
-3 is what ratifying `assume` would buy. 2 to 4 is the cost of the missing policy
-switch, which is the number the whole project exists to produce. 4 to 5 is whether
-CL's inference beats Scheme's hand-written instructions with both sides maximally
+The deltas answer specific questions. 1 to 2a is what R6RS bought Scheme in 2007. 2a to
+2b is whether Tangerine over a shim beats the R6RS path or just adds shim cost. 2b to 3
+is what a premise buys where one can be expressed at all. 2a to 4 is the cost of the
+missing policy switch, which is the number the whole project exists to produce. 4 to 5 is
+whether CL's inference beats Scheme's hand-written instructions with both sides maximally
 tuned. 5 to 6 re-runs Verna's claim on 2026 hardware.
 
 ### Why 7, 8 and 9 are in the matrix
@@ -93,8 +114,8 @@ which is the point of including them.
 reaches C-competitive numeric code by inference instead of declaration. If Stalin
 already beats every declaration-based configuration by a wide margin, then the
 interesting problem is inference and not standardization, and this project is aimed
-at the wrong target. Section 5a covers what it actually does and what the existing
-data says. Caveats about its vintage go there too.
+at the wrong target. `RESEARCH.md` section 3 covers the machinery, the measured profile,
+and the caveats about its vintage.
 
 **Ada (8) measures the design we decided to copy.** `PROPOSAL.md` follows Ada's
 named per-check suppression rather than CL's single dial. That decision should not

@@ -6,10 +6,17 @@ portable source.
 
 Companion to `PLAN.md` in this directory.
 
+**This library is an instrument, not the destination.** The plan is to write our own
+Scheme. Building over Chez and Racket first is worth doing because every wall the macro
+layer hits becomes a documented requirement for that compiler, established cheaply and
+with a measurement attached. The section "What this phase tells the compiler" is the real
+output of this phase; the performance number is secondary.
+
 ## Journey summary
 
 The operator builds a macro layer providing named check suppression and type
-declarations over whatever phase 1 found available. Back ends detect the host at
+declarations over what phase 1 found actually shipped, which is R6RS operators and native
+`flvector` rather than anything Tangerine. Back ends detect the host at
 expansion time and lower to native mechanisms. Then nbody gets written once, in portable
 source with declarations, and measured against configuration 4. Tier two attempts an
 expansion-time type propagator so the programmer stops writing `fl*` by hand.
@@ -83,22 +90,19 @@ slower.
 
 ### Chez
 
-Suppression maps to `optimize-level`. The awkward part is that `optimize-level` is a
-compile-time parameter rather than a lexical form, so a lexically scoped `suppress`
-cannot lower to it directly. Two options, and choosing between them is real design work
-in this phase:
+Declarations lower to native `fl` operators plus `flvector` access. Straightforward.
 
-1. Lower `suppress` to the unsafe primitive variants at each site inside the scope. More
-   faithful to lexical scoping, more work, and it needs a mapping from each check name
-   to the primitives it affects.
-2. Document that Chez suppression is file-granular and lower to a compile-time setting.
-   Honest and much simpler, but it gives up the scoping property that motivated the Ada
-   design.
+Suppression does not lower cleanly, and that is a finding rather than a problem to solve.
+Chez's `optimize-level` is a compile-time parameter, not a lexical form, so lexically
+scoped `suppress` has no faithful target. The workaround is to lower each check name to
+the unsafe primitive variants at every site inside the scope, which is mechanical but
+partial: it covers the primitives we enumerate and silently misses anything else.
 
-Option 1 is what the proposal actually promises. Start with option 2 to get an
-end-to-end measurement, then implement option 1 and confirm it does not regress.
-
-Declarations lower to native `fl` operators plus `flvector` access.
+**Do not contort the design to fit this.** Chez cannot express scoped check suppression
+because Chez was not built to. Record it as a requirement for our own implementation
+(section "What this phase tells the compiler" below) and ship the mechanical
+site-rewriting version here, which is good enough to produce the measurement this phase
+exists for.
 
 ### Racket
 
@@ -201,6 +205,41 @@ property.
    operator. Compare expanded output, not timing.
 4. Propagation, tier two only: property-style tests that a declared type flows to every
    arithmetic site in a body.
+
+## What this phase tells the compiler
+
+The library is a measurement instrument, not the deliverable. Its job is to establish
+what a macro layer over existing implementations can and cannot reach, so that our own
+Scheme knows what it has to do differently. Every place the library hits a wall is a
+requirement, and those requirements are the real output of this phase.
+
+Running list, to be extended as the work turns up more:
+
+**Scoped check suppression must be a first-class lexical form.** Chez's `optimize-level`
+is a compile-time parameter, so scoped suppression cannot be expressed faithfully over
+it. Our compiler needs suppression in the core language, entering and leaving scope like
+any other binding form, with the policy carried in the compilation environment rather
+than in a global parameter. This is the Ada model and neither Chez nor Racket can host
+it.
+
+**Declarations must reach the type lattice, not just the expander.** A macro layer can
+select operators at sites it can see lexically and nothing more. It cannot delete a
+bounds check, because that decision lives in the compiler. Our compiler needs the
+declaration to enter the same lattice its own inference uses, which is what SBCL does:
+IR1 derives types from declarations, IR2 selects representations from the derived types.
+Chez already has such a lattice, visible in `cptypes-lattice.ss`, with no user-facing way
+to feed it. That gap is the whole argument for building our own.
+
+**Suppression must interact soundly with continuations.** Flagged as the hardest open
+problem in `../../PROPOSAL.md` section 3, and no macro layer can address it because the
+capture happens at runtime. Our compiler has to decide what a re-entered continuation
+means for an in-scope suppression, and Ada and Common Lisp offer no precedent because
+neither has first-class continuations.
+
+**Separate compilation must survive.** Stalin's closed-world assumption is what makes its
+inference powerful and what makes it unusable. Declaration-anchored local inference does
+not need a closed world, which is the property worth preserving deliberately rather than
+by accident.
 
 ## Artifacts produced
 
