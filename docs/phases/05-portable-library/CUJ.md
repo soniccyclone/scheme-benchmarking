@@ -222,13 +222,15 @@ any other binding form, with the policy carried in the compilation environment r
 than in a global parameter. This is the Ada model and neither Chez nor Racket can host
 it.
 
-**Declarations must reach the type lattice, not just the expander.** A macro layer can
-select operators at sites it can see lexically and nothing more. It cannot delete a
-bounds check, because that decision lives in the compiler. Our compiler needs the
-declaration to enter the same lattice its own inference uses, which is what SBCL does:
-IR1 derives types from declarations, IR2 selects representations from the derived types.
-Chez already has such a lattice, visible in `cptypes-lattice.ss`, with no user-facing way
-to feed it. That gap is the whole argument for building our own.
+**The type lattice must carry integer ranges, not just categories.** This is now the top
+requirement and it is specific. `../../CHEZ-ANALYSIS.md` records the source reading: Chez
+already narrows types from predicate tests and already promotes safe primitives to unsafe
+ones automatically when the argument types check out, so a macro is sufficient for the
+arithmetic half and no compiler is needed there. What Chez cannot do is elide a bounds
+check, because that needs the relational fact `i < (flvector-length v)` and its lattice
+holds flat categories rather than intervals. ANSI CL standardized integer range types, so
+SBCL had to build ranges into its lattice and can therefore elide bounds checks from
+declarations. Our compiler needs ranges for the same reason.
 
 **Suppression must interact soundly with continuations.** Flagged as the hardest open
 problem in `../../PROPOSAL.md` section 3, and no macro layer can address it because the

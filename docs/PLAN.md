@@ -13,6 +13,7 @@ documents, so each phase can get a CUJ document and a task breakdown of its own.
 | `RESEARCH.md` | standards survey, cross-language comparison, Stalin analysis, measurement evidence |
 | `PROPOSAL.md` | prior art, the design we would propose, .NET architecture notes, compiler layering |
 | `METHOD.md` | machine, measurement method, dependency table |
+| `CHEZ-ANALYSIS.md` | what Chez's optimizer already does, read from source, and the one capability it lacks |
 | `phases/NN-name/PLAN.md` | per phase: goal, inputs, work items, acceptance criteria, risks |
 | `phases/NN-name/CUJ.md` | per phase: the technical implementation journey. Commands, code shapes, schemas, decision branches |
 
@@ -64,6 +65,7 @@ to sanity-check against.
 | 1 | portable R7RS-small, generic arithmetic, `vector` | the floor: no hatches exist |
 | 2a | **R6RS: `(rnrs arithmetic flonums)` + `(rnrs arithmetic fixnums)`** | **the only standardized hatch with a real implementation, available since 2007** |
 | 2b | **Tangerine over a shim we ship: SRFI 144 + SRFI 160** | **what Tangerine would give you if anyone implemented it** |
+| 2c | **predicate-guarded entry at `optimize-level 2`, otherwise portable** | **the arithmetic win Chez already gives you for free. See `CHEZ-ANALYSIS.md`** |
 | 3 | assumption as optimization license, however it can be expressed | what a premise buys, if anything |
 | 4 | implementation-specific max: Chez `optimize-level 3`, Racket unsafe ops | the folklore ceiling |
 | 5 | SBCL, `declare` + `(safety 0)`, scalar, no `sb-simd` | tuned conformant CL |
@@ -100,8 +102,10 @@ finding.
 
 The deltas answer specific questions. 1 to 2a is what R6RS bought Scheme in 2007. 2a to
 2b is whether Tangerine over a shim beats the R6RS path or just adds shim cost. 2b to 3
-is what a premise buys where one can be expressed at all. 2a to 4 is the cost of the
-missing policy switch, which is the number the whole project exists to produce. 4 to 5 is
+is what a premise buys where one can be expressed at all. **2a to 2c is what Chez's
+existing type-driven unsafe promotion gives you for free. 2c to 4 isolates bounds-check
+elision, which is the capability Chez's lattice cannot express.** 2a to 4 is the total cost
+of the missing policy switch. 4 to 5 is
 whether CL's inference beats Scheme's hand-written instructions with both sides maximally
 tuned. 5 to 6 re-runs Verna's claim on 2026 hardware.
 
