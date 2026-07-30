@@ -323,34 +323,71 @@ existing ones.
 
 ## 4. The experiment
 
-One program, six configurations, each step isolating exactly one standards-level
-feature. This is now validation for section 2's prediction rather than a
-benchmarking project in its own right.
+One program, nine configurations, each isolating one standards-level feature or
+providing one reference point. This validates section 2's prediction rather than
+being a benchmarking project in its own right.
 
 **Program: nbody.** Serial in every published entry so no thread confound, pure
 double-float over a small fixed working set so it isolates boxing and storage
 cleanly, and the program both Pecsek and Smith used so there are external numbers
 to sanity-check against.
 
-| # | configuration | what it isolates |
+| # | configuration | role |
 |---|---|---|
 | 1 | portable R7RS-small, generic arithmetic, `vector` | the floor: no hatches exist |
 | 2 | R7RS-large Tangerine: `(scheme flonum)` + `(scheme vector f64)` | what portable tuned Scheme can do today |
 | 3 | Tangerine + SRFI 145 `assume` | what the orphaned premise hatch is worth |
 | 4 | implementation-specific max: Chez `optimize-level 3`, Racket unsafe ops | the folklore ceiling |
 | 5 | SBCL, `declare` + `(safety 0)`, scalar, no `sb-simd` | tuned conformant CL |
-| 6 | `gcc -O2 -fno-tree-vectorize`, and `-O3 -march=native` | scalar and vectorized reference |
+| 6 | `gcc -O2 -fno-tree-vectorize`, and `-O3 -march=native` | scalar and vectorized C reference |
+| 7 | **Stalin, whole-program inference** | **the Scheme ceiling, reached by the other route** |
+| 8 | **GNAT Ada, `pragma Suppress`, per-check** | **the design we are copying, measured** |
+| 9 | **ECL and CLISP, same source as 5** | **is it Common Lisp or is it SBCL?** |
 
-The deltas are the results, and each one answers a specific question. 1 to 2 is
-what Tangerine bought Scheme. 2 to 3 is what ratifying `assume` would buy. 2 to 4
-is the cost of the missing policy switch, which is the number that answers your
-question. 4 to 5 is whether CL's inference beats Scheme's hand-written
-instructions once both sides are maximally tuned. 5 to 6 is Verna's claim,
-re-run on 2026 hardware.
+Run configurations 1 through 4 on both Chez and Racket, since section 5's data says
+they are within 15% on numeric code and any large divergence here would itself be a
+finding.
 
-Run configurations 1 through 4 on both Chez and Racket, since revision 2's data
-says they are within 15% on numeric code and any large divergence here would be a
-finding in itself.
+The deltas answer specific questions. 1 to 2 is what Tangerine bought Scheme. 2 to
+3 is what ratifying `assume` would buy. 2 to 4 is the cost of the missing policy
+switch, which is the number the whole project exists to produce. 4 to 5 is whether
+CL's inference beats Scheme's hand-written instructions with both sides maximally
+tuned. 5 to 6 re-runs Verna's claim on 2026 hardware.
+
+### Why 7, 8 and 9 are in the matrix
+
+These three are not filler. Each one can falsify a different part of the argument,
+which is the point of including them.
+
+**Stalin (7) is the Scheme ceiling and the control on our whole approach.** It
+reaches C-competitive numeric code by inference instead of declaration. If Stalin
+already beats every declaration-based configuration by a wide margin, then the
+interesting problem is inference and not standardization, and this project is aimed
+at the wrong target. Section 5a covers what it actually does and what the existing
+data says. Caveats about its vintage go there too.
+
+**Ada (8) measures the design we decided to copy.** `PROPOSAL.md` follows Ada's
+named per-check suppression rather than CL's single dial. That decision should not
+rest on the elegance of the Ada manual. If GNAT with `pragma Suppress` lands at or
+near scalar C on this program, the mechanism is validated at the language level and
+we are copying something that demonstrably works. If Ada with all checks suppressed
+is still well off scalar C, then per-check suppression buys less than the manual
+implies, and the design needs revisiting. `gnat-15` 15.2.0 is packaged, so this is
+cheap.
+
+**ECL and CLISP (9) test the framing of the original question.** Running the same
+tuned CL source under three implementations separates "Common Lisp is fast" from
+"SBCL is fast." CLISP largely ignores declarations, so it should be slow, and that
+result is the demonstration that the standard obliges implementors to accept the
+notation without obliging them to act on it. This sharpens section 1's thesis
+instead of undermining it.
+
+**SIMD stays out of scope**, deliberately. The fast Benchmarks Game and PLB Common
+Lisp entries use `sb-simd` (verified: `grep -rl sb-simd` hits nbody 3 through 6 and
+spectral-norm 2 through 7 in the PLB tree, with Bela Pecsek's attribution and
+"Based on 2.zig" headers). That is why configuration 5 excludes it. A portable
+Scheme SIMD library is writeable and is a separate project. Mixing it in here would
+confound the standards question with an intrinsics question.
 
 **SIMD is out of scope**, deliberately. The fast Benchmarks Game and PLB Common
 Lisp entries use `sb-simd` (verified: `grep -rl sb-simd` hits nbody 3 through 6
@@ -359,6 +396,121 @@ and spectral-norm 2 through 7 in the PLB tree, with Bela Pecsek's attribution an
 that a portable Scheme SIMD library is writeable, and it is a separate project;
 mixing it in here would confound the standards question with an intrinsics
 question. Noted in section 7 as a follow-on.
+
+---
+
+## 5a. How Stalin works, and what its numbers already show
+
+Stalin deserves its own section because it is the strongest counterexample to
+"Scheme is slow," and because an earlier revision of this document dismissed it on
+the grounds that it had few users. That was a bad argument. Adoption is not
+evidence about a technique. Stalin producing C-competitive numeric code is the
+relevant fact, and it makes Stalin the ceiling that any declaration-based approach
+has to be measured against.
+
+### The machinery
+
+Stalin is a batch whole-program compiler by Jeffrey Mark Siskind that emits C.
+Everything it does follows from one decision: it assumes a closed world, meaning it
+sees the entire program at once and no code can be added later. That assumption is
+what licenses the rest.
+
+From Siskind's own announcement, the pass list is polyvariant interprocedural flow
+analysis, flow-directed interprocedural escape analysis, flow-directed lightweight
+CPS conversion, flow-directed lightweight closure conversion, flow-directed
+interprocedural lifetime analysis, automatic inlining, unboxing, and flow-directed
+program-specific and program-point-specific low-level representation selection and
+code generation.
+
+Two of those matter most for our question.
+
+**Representation selection is the one that produces the speed.** Because the
+analysis derives a precise type for every expression, Stalin picks the machine
+representation per program point. A value known to be a double becomes a raw
+unboxed C double with no tag and no header. This is the same thing SBCL's IR2
+representation pass does, and the same thing `(scheme vector f64)` plus
+`(scheme flonum)` approximate by hand. Stalin derives it instead of being told.
+
+**Lifetime analysis decides where allocation goes.** Siskind's announcement says it
+"automatically estimates the lifetime of data allocated at each allocation point"
+and then chooses stack, region, or heap. Whatever it cannot bound falls to the
+heap, and the heap is managed by the Boehm conservative collector.
+
+That last detail is load-bearing, and it predicts the shape of Stalin's results.
+
+### What the existing data shows
+
+Extracted from `ecraven/r7rs-benchmarks` `all.csv`, the same corpus section 5 uses.
+Stalin against Chez 10.3.0, on the 31 benchmarks both completed. Ratio above 1 means
+Stalin is faster.
+
+| benchmark | stalin | chez | chez/stalin | character |
+|---|---|---|---|---|
+| mbrot | 1.850 | 7.155 | **3.87** | float, mandelbrot |
+| pnpoly | 1.540 | 4.319 | **2.80** | float, point-in-polygon |
+| array1 | 2.590 | 5.783 | **2.23** | vector alloc and fill |
+| paraffins | 2.990 | 5.494 | 1.84 | mixed |
+| simplex | 1.190 | 2.174 | 1.83 | float, linear programming |
+| ntakl | 2.670 | 3.990 | 1.49 | recursion on lists |
+| primes | 0.640 | 0.921 | 1.44 | fixnum |
+| ... | | | | |
+| destruc | 8.950 | 1.878 | 0.21 | destructive list ops |
+| sum | 16.550 | 2.649 | 0.16 | fixnum loop |
+| graphs | 19.230 | 2.093 | **0.11** | heavy allocation |
+| ack | 25.770 | 2.037 | **0.08** | deep non-tail recursion |
+| divrec | 22.270 | 1.592 | **0.07** | recursive list division |
+| diviter | 19.550 | 1.156 | **0.06** | iterative list division |
+
+Median 0.77, geometric mean 0.63, range 0.06 to 3.87.
+
+The distribution is bimodal and the mechanism explains it exactly. On float and
+array code, where the analysis succeeds and representation selection can unbox,
+Stalin beats a 2026 Chez by 2x to 4x. On allocation-heavy list code, where lifetime
+analysis cannot bound the data and everything falls through to Boehm, Stalin loses
+by 5x to 16x. Stalin's wins come from the analysis. Its losses come from the
+collector it falls back to when the analysis runs out.
+
+### The finding that matters for our design
+
+**Whole-program inference is all-or-nothing, and you cannot tell from the source
+which case you are in.** Where it works it is spectacular. Where it fails you fall
+off a cliff, silently, with no annotation in the program to indicate which happened.
+
+That is the same complaint the soft typing retrospective records, showing up as a
+performance profile rather than as an error message. `PROPOSAL.md` section 1e
+records the usability failure. This table is the performance shadow of it.
+
+It argues directly for declarations over inference, and not on grounds of achievable
+speed. Inference clearly reaches higher on the cases it handles. Declarations give
+you *predictable and local* performance: you can read a procedure, see what was
+asserted, and reason about what the compiler was permitted to do. That property is
+what makes tuning an engineering activity instead of a guessing game.
+
+### Caveats, stated plainly
+
+Stalin 0.11 dates from October 2006 and is unmaintained. Chez 10.3.0 is current.
+Comparing them on absolute time is unfair to Stalin by roughly twenty years of
+compiler engineering, and the wins above are more impressive than they look for
+that reason. The bimodal *shape*, though, is a property of the technique rather
+than the vintage, and that is what we are drawing from it.
+
+Stalin completed 33 of the 57 benchmarks. It failed 23 that Chez ran, including
+`sumfp`, `fibfp`, `mbrotZ`, `matrix`, `ray`, `quicksort`, `bv2string` and
+`chudnovsky`. That is a language coverage problem and not an optimizer limit:
+Stalin targets full R4RS with minor omissions, and these are R7RS-era programs
+using bytevectors, exactness features and libraries that postdate it by seven years
+or more. Do not read the failures as "Stalin cannot optimize floats," because
+`mbrot`, `pnpoly`, `array1` and `simplex` all ran and Stalin won all four.
+
+Documented practical limitations: the compiler runs slowly, there is little or no
+support for debugging, and the closed-world assumption rules out separate
+compilation entirely. For our purposes none of that matters, because nbody is one
+small file and we only want the number.
+
+`stalin` 0.11-11build1 is packaged for Ubuntu 26.04. Getting a 2006 R4RS compiler
+to accept our nbody is real work, and it is the most likely configuration to be
+dropped for cost. Budget it as optional in phase 3 and do not let it block the
+rest.
 
 ---
 
@@ -422,18 +574,25 @@ and five reps is well under a minute of compute, which is the practical win of t
 narrowed scope. Report-grade measurement (bare metal, official N, real confidence
 intervals) stays explicitly out of scope so the dev harness does not grow into it.
 
-**Dependencies.** Tier 1 is `sbcl chezscheme racket hyperfine unzip`, about 872 MB
-resolved across 13 packages with `--no-install-recommends`. `sbcl` 2.6.0,
-`chezscheme` 10.0.0, `racket` 8.18, `hyperfine` 1.19.0; gcc 15.2.0 is already
-installed and covers configuration 6. Note our toolchains are newer than the frozen
-corpus measured, which is fine for internal comparison and needs stating if the
-numbers are ever printed alongside theirs.
+**Dependencies.** All nine configurations, with resolved installed sizes using
+`--no-install-recommends`:
 
-`ecl` and `clisp` are worth 199 MB as a cheap control on section 1's thesis. If
-tuned CL is fast under SBCL and slow under CLISP, which largely ignores
-declarations, that demonstrates the standard obliges implementors to have a story
-without guaranteeing they tell a good one. It sharpens the thesis rather than
-undermining it, and it is the cheapest experiment here.
+| packages | for | size |
+|---|---|---|
+| `sbcl chezscheme racket hyperfine unzip` | configs 1 to 5 | ~872 MB, 13 pkgs |
+| `ecl clisp` | config 9, the CL controls | ~199 MB |
+| `gnat-15` | config 8, Ada | check at install |
+| `stalin` | config 7, optional | small, 0.11-11build1 |
+
+Versions: `sbcl` 2.6.0, `chezscheme` 10.0.0, `racket` 8.18, `hyperfine` 1.19.0,
+`gnat-15` 15.2.0, `stalin` 0.11-11build1. gcc 15.2.0 is already installed and covers
+configuration 6. Our toolchains are newer than the frozen corpus measured, which is
+fine for internal comparison and needs stating if the numbers are ever printed
+alongside theirs.
+
+`rustc` and `cargo` stay optional. C is the reference that matters for configuration
+6, and Rust adds a third compiler's variance without adding insight into the
+declaration question.
 
 **The two verification gates before any number is trusted.** First, does any
 implementation actually ship Tangerine's `(scheme flonum)` and `(scheme vector
@@ -458,21 +617,27 @@ requirements, so preserve headers.
 
 ## 7. Phases
 
-**Phase 1, the gate.** Install tier 1 plus `ecl` and `clisp`. Determine which
-implementations actually provide Tangerine's `(scheme flonum)` and `(scheme vector
-f64)`, and whether any honours SRFI 145 `assume` as an optimization license rather
-than as a plain assertion. This single question determines whether section 4's
-configurations 2 and 3 are measurable at all. Write and verify the AOT recipes.
-Test `perf` counters.
+**Phase 1, the gate.** Install everything in section 6's dependency table.
+Determine which implementations actually provide Tangerine's `(scheme flonum)` and
+`(scheme vector f64)`, and whether any honours SRFI 145 `assume` as an optimization
+license rather than as a plain assertion. This single question determines whether
+section 4's configurations 2 and 3 are measurable at all. Write and verify the AOT
+recipes. Test `perf` counters.
 
 **Phase 2, calibrate.** Real dev-N timings, fix the N table, establish the noise
 floor by running one binary twenty times so we know how large a difference has to
 be before it means anything on this machine.
 
-**Phase 3, the six-way measurement.** Section 4, on Chez and Racket for
-configurations 1 through 4. Produces the number that answers the question.
+**Phase 3, the core measurement.** Configurations 1 through 6, on Chez and Racket
+for 1 through 4. Produces the number the project exists for. Do this before
+touching 7, 8 or 9.
 
-**Phase 4, the CL control.** Same tuned CL program under SBCL, ECL and CLISP.
+**Phase 3b, the reference points.** Configuration 8 (Ada) first, because it
+validates or refutes the design decision in `PROPOSAL.md` and is cheap.
+Configuration 9 (ECL, CLISP) second, cheaper still. Configuration 7 (Stalin) last
+and optional, because porting nbody to a 2006 R4RS compiler is the highest-effort
+item in the matrix and the existing `r7rs-benchmarks` data in section 5a already
+tells us most of what Stalin has to say. Drop it if it fights.
 
 **Phase 5, the superset.** Build the compatibility layer from section 3, starting
 with the honest version. Validate by showing it reaches configuration 4's

@@ -94,15 +94,30 @@ very hard to trace back to its cause. Inferred types grow unwieldy and become ha
 for a person to read. And with no declarations in the source, a programmer gets no
 help from tools.
 
-Stalin took the other inference route, whole-program analysis with no annotations,
-and it produced very fast code and almost no users. Typed Racket is the modern
-successor and it works, and its optimizer does use the types, but it is a Racket
-feature rather than a portable one.
+Stalin took the other inference route, whole-program analysis with no annotations.
+An earlier draft of this document dismissed it on the grounds that it had few
+users. That was a bad argument and it is retracted. Adoption count says nothing
+about whether a technique works, and Stalin's technique demonstrably works: it
+reaches C-competitive numeric code and beats a current Chez by 2x to 4x on float
+and array benchmarks. `PLAN.md` section 5a covers the machinery and the measured
+profile in detail, and Stalin is now configuration 7 in the experiment.
 
-The lesson is the one Common Lisp encoded in 1994. Declarations beat inference for
-this job, because a declaration is something a person writes on purpose, can read
-back, and can be blamed for. Our design should therefore be declaration-first and
-should treat inference as an optional extra.
+What Stalin's numbers do show is a different limitation, and it is the one that
+matters here. Its performance is bimodal. Where the flow analysis succeeds it
+unboxes and wins by multiples. Where lifetime analysis cannot bound the data,
+everything falls to the Boehm collector and it loses by 5x to 16x. Nothing in the
+source tells you which case you are in.
+
+Typed Racket is the modern successor. It works, its optimizer does use the types,
+and it is a Racket feature rather than a portable one.
+
+The lesson is the one Common Lisp encoded in 1994, and it is not about achievable
+speed. Inference clearly reaches higher than declarations on the cases it handles.
+Declarations win on *predictability*: a person writes one on purpose, reads it back
+later, and owns the mistake when it is wrong, and the performance consequence is
+local to the code you can see. That is what makes tuning an engineering activity
+rather than a guessing game. So this design is declaration-first and treats
+inference as an optional extra.
 
 ### 1f. Summary of the gap
 
@@ -153,9 +168,14 @@ declarations still runs it correctly, only slower.
 
 ### 2b. Piece one: named check suppression
 
-Follow Ada, not Common Lisp. Ada names each check and lets a program re-enable one
-inside a region. CL offers a single `safety` dial from 0 to 3, which conflates
-risks that deserve separate decisions. Turning off a bounds check in a numeric
+**Decision, ratified 2026-07-29: follow Ada, not Common Lisp.** Ada names each check
+and lets a program re-enable one inside a region. CL offers a single `safety` dial
+from 0 to 3, which conflates risks that deserve separate decisions.
+
+The decision does not rest on the Ada manual reading well. `PLAN.md` configuration 8
+measures GNAT with `pragma Suppress` on nbody for exactly this reason. If Ada with
+checks suppressed does not approach scalar C, then per-check suppression buys less
+than the manual implies and this section needs rewriting. Turning off a bounds check in a numeric
 kernel is a bounded and auditable choice. Turning off type checks on data that came
 from a network socket is not. A dial makes you buy both.
 
