@@ -6,8 +6,13 @@ Assemble the seminal works on implementing a performant Scheme, with direct link
 can be pulled and ingested in bulk.
 
 **The output of this phase is an OKF bundle**, not a pile of PDFs. See section 0 below for
-the bundle design. The bibliography in sections 1 through 13 is the fetch list that feeds
-it.
+the bundle design.
+
+The bibliography comes in two parts. Sections 1 through 13 cover the Lisp and Scheme
+lineage. **Sections 14 through 21 cover the wider field**, and they exist because the first
+draft of this document pigeonholed itself into Lisp. Most of the work on compiler
+optimization happened elsewhere, and the SELF lineage in particular is the seminal work on
+making a dynamically typed language fast without declarations.
 
 ---
 
@@ -209,6 +214,59 @@ rather than a search. It maps directly onto the pass list in `../07-compiler/CUJ
 
 ---
 
+## Ingestion rules
+
+**Read the entire document. Every time.** Not the abstract, not the introduction and
+conclusion, not a skim for the fields the frontmatter needs. If a work is long enough that
+one pass will not hold it, take it in steps by chapter or by section and accumulate. A
+dissertation and a book are multi-pass jobs, not skip-the-middle jobs.
+
+The reason is that the value of this bundle is in `techniques/`, and a technique document
+is a synthesis. Synthesis from abstracts produces a bundle that repeats what everyone
+already believes about these papers, which is worth nothing and would be worse than
+nothing because it would look authoritative.
+
+Practical consequence: cost per work is not flat. Shivers' dissertation, the SSA Book, and
+Appel's *Modern Compiler Implementation* are large. Budget them as multi-session units and
+do not batch them alongside a thirty-page conference paper as if they were equivalent.
+
+## Wave 0: discovery and prefetch
+
+Runs before any ingestion. Two jobs, and the second one is the point.
+
+**Job one, finish discovery.** The known-gaps list below names works with no reachable
+open link found from this machine. Search for each, verify reachability the same way, and
+add it to the fetch manifest. Where nothing open exists, record that explicitly rather
+than leaving a hole.
+
+**Job two, prefetch everything to a local cache before any agent reads anything.**
+
+```
+knowledge/.cache/
+├── manifest.tsv          url, sha256, local path, http status, fetched-at, content-type
+└── pdf/
+    ├── <sha256>.pdf
+    └── ...
+```
+
+Every subsequent agent reads from the cache by path, never from the network. This matters
+for three reasons:
+
+1. **A restarted agent costs nothing.** If an ingest agent fails halfway through a
+   dissertation, the retry re-reads a local file rather than re-downloading it. With
+   multi-pass reading of large documents, restarts are expected rather than exceptional.
+2. **It removes host politeness from the fan-out calculation entirely.** The corpus is
+   concentrated: 11 of the verified URLs are on `www.cs.indiana.edu` alone, 4 on
+   `dspace.mit.edu`, 4 on `www.cs.princeton.edu`. Prefetching serially per host means the
+   ingest wave can then fan out as wide as we like without touching those hosts again.
+3. **It makes the corpus reproducible.** The sha256 in the manifest pins exactly what was
+   read. A paper that moves or changes does not silently change our conclusions.
+
+Prefetch is sequential per host, parallel across hosts, and it is the only stage that
+touches the network.
+
+---
+
 ## How to use the bibliography below
 
 This is the fetch list that feeds section 0's bundle. Nothing here has been read or
@@ -360,6 +418,96 @@ Stage 8. Where the actual speed comes from.
 
 ---
 
+## Part II: the wider field
+
+Sections 1 through 13 are Lisp-heavy by construction, and that is a defect rather than a
+scope decision. Most of the work on compiler optimization did not happen in the Lisp world,
+and the sections below are the pillars that were missing. All links verified reachable
+2026-07-30.
+
+The most important omission was the SELF lineage. It is the seminal work on making a
+dynamically typed language fast, it is not Lisp, and its techniques (type feedback,
+customization, polymorphic inline caches) are the direct ancestors of everything .NET and
+the JVM do today.
+
+### 14. Dynamically typed language optimization: the SELF lineage
+
+| work | why it matters here | link |
+|---|---|---|
+| Chambers & Ungar, *An Efficient Implementation of SELF* (OOPSLA 1989) | how you make a dynamic language fast without declarations | https://bibliography.selflanguage.org/_static/implementation.pdf |
+| Hölzle & Ungar, *Optimizing Dynamically-Dispatched Calls with Run-Time Type Feedback* (PLDI 1994) | the ancestor of .NET's guarded devirtualization, which `../../PROPOSAL.md` section 4b covers | https://bibliography.selflanguage.org/_static/type-feedback.pdf |
+| Chambers & Ungar, *Customization: Optimizing Compiler Technology for SELF* (PLDI 1989) | monomorphizing a dynamic language by specializing per receiver type | https://people.cs.umass.edu/~emery/classes/cmpsci710-spring2003/p146-chambers.pdf |
+
+### 15. SSA form
+
+Relevant because ABCD (section 8) is formulated on SSA, and stage 7 of
+`../07-compiler/CUJ.md` notes the representation may move there.
+
+| work | why | link |
+|---|---|---|
+| Cytron, Ferrante, Rosen, Wegman & Zadeck, *Efficiently Computing Static Single Assignment Form* (TOPLAS 1991) | **the** SSA paper. Title confirmed by text extraction | https://c9x.me/compile/bib/ssa.pdf |
+| Same, mirror | alternate host | https://www.cs.utexas.edu/~pingali/CS380C/2010/papers/ssaCytron.pdf |
+| Braun et al., *Simple and Efficient Construction of Static Single Assignment Form* (CC 2013) | the construction you would actually implement | https://c9x.me/compile/bib/braun13cc.pdf |
+| Cooper, Harvey & Kennedy, *A Simple, Fast Dominance Algorithm* | prerequisite for SSA construction. Title confirmed | https://c9x.me/compile/bib/quickdom.pdf |
+| Rastello et al., *SSA-based Compiler Design* (the SSA Book) | book-length treatment of everything downstream of SSA | https://pfalcon.github.io/ssabook/latest/book-full.pdf |
+
+### 16. Classical dataflow optimization
+
+| work | why | link |
+|---|---|---|
+| Wegman & Zadeck, *Constant Propagation with Conditional Branches* (SCCP) | the algorithm our interval domain generalizes | https://c9x.me/compile/bib/constpropssa.pdf |
+| Click, global value numbering and code motion | redundancy elimination on SSA | https://c9x.me/compile/bib/click-gvn.pdf |
+
+### 17. Instruction selection
+
+Stage 11 of `../07-compiler/CUJ.md`.
+
+| work | why | link |
+|---|---|---|
+| Aho, Ganapathi & Tjiang, *Code Generation Using Tree Matching and Dynamic Programming* (twig) | the foundational formulation. Title confirmed | https://c9x.me/compile/bib/twig.pdf |
+| Fraser, Hanson & Proebsting, *Engineering a Simple, Efficient Code Generator Generator* (iburg) | the practical one | https://c9x.me/compile/bib/iburg.pdf |
+
+### 18. Register allocation, beyond linear scan
+
+Stage 12. Section 11 has only two entries and both are baselines.
+
+| work | why | link |
+|---|---|---|
+| George & Appel, *Iterated Register Coalescing* (TOPLAS 1996) | the graph-coloring answer, and coalescing is what makes it usable | https://c9x.me/compile/bib/irc.pdf |
+| Wimmer & Franz, *Linear Scan Register Allocation on SSA Form* (CGO 2010) | the bridge if we adopt SSA | https://c9x.me/compile/bib/Wimmer10a.pdf |
+
+### 19. Pointer and alias analysis
+
+Stage 9, which currently has no literature behind it at all.
+
+| work | why | link |
+|---|---|---|
+| Steensgaard, *Points-to Analysis in Almost Linear Time* (POPL 1996) | the cheap unification-based approach, right scale for our needs | https://www.cs.cornell.edu/courses/cs711/2005fa/papers/steensgaard-popl96.pdf |
+
+### 20. Modern compiler architecture and rewriting
+
+| work | why | link |
+|---|---|---|
+| Lattner & Adve, *LLVM: A Compilation Framework for Lifelong Program Analysis* (CGO 2004) | the reference architecture we are deliberately not using, worth understanding before rejecting | https://llvm.org/pubs/2004-01-30-CGO-LLVM.pdf |
+| Willsey et al., *egg: Fast and Extensible Equality Saturation* (POPL 2021) | e-graphs. The modern answer to phase-ordering, and a candidate for our optimizer structure | https://arxiv.org/abs/2004.03082 |
+
+### 21. Books, wider field
+
+| work | link |
+|---|---|
+| Appel, *Modern Compiler Implementation in C* | https://www.cs.princeton.edu/~appel/modern/c/ |
+
+### A note on four links in this part
+
+`iburg.pdf`, `irc.pdf`, `constpropssa.pdf` and `click-gvn.pdf` are all reachable and all
+served from `c9x.me/compile/bib`, a curated compiler bibliography maintained by the author
+of QBE. Text extraction failed on them because they use Type 1 font encoding, so their
+identity is inferred from conventional filenames in a curated list rather than confirmed by
+reading the file. The ingesting agent should confirm the title on first read and correct
+this document if any is wrong.
+
+---
+
 ## Known gaps
 
 Works that belong in this bibliography but for which no reachable open link was found from
@@ -386,6 +534,26 @@ complete. Most exist behind `dl.acm.org`, which is bot-blocked but valid in a br
   Client Compiler* (2007).
 - Muchnick, *Advanced Compiler Design and Implementation*, and Queinnec, *Lisp in Small
   Pieces*. Commercial books, no legitimate free source.
+
+Wider-field gaps, found while assembling Part II and still unresolved:
+
+- Kildall, *A Unified Approach to Global Program Optimization* (POPL 1973). The dataflow
+  framework everything in section 16 sits inside.
+- Morel & Renvoise, *Global Optimization by Suppression of Partial Redundancies* (CACM
+  1979), and Knoop, Rüthing & Steffen, *Lazy Code Motion* (PLDI 1992). Partial redundancy
+  elimination.
+- Choi et al., *Escape Analysis for Java* (OOPSLA 1999), and Blanchet, *Escape Analysis for
+  Object-Oriented Languages* (OOPSLA 1999). Directly relevant, since automatic stack
+  allocation is one of the four ways `../07-compiler/PLAN.md` claims we exceed SBCL.
+- Feautrier's affine scheduling work and Bondhugula et al., *Pluto* (PLDI 2008). The
+  polyhedral tradition. Section 9 currently has only SLP, which is basic-block
+  vectorization; polyhedral is the loop-nest answer and is the stronger technique where it
+  applies.
+- Wolf & Lam, *A Data Locality Optimizing Algorithm* (PLDI 1991). Cache blocking.
+- Deutsch & Schiffman, *Efficient Implementation of the Smalltalk-80 System* (POPL 1984).
+  Inline caches, the technique section 14's type feedback builds on.
+- Andersen's 1994 dissertation on points-to analysis, the inclusion-based counterpart to
+  Steensgaard.
 
 ## Suggested ingestion order
 
