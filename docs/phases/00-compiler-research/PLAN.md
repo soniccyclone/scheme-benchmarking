@@ -2,12 +2,216 @@
 
 ## Goal
 
-Assemble the seminal works on implementing a performant Scheme, with direct links, so
-they can be pulled and ingested in bulk.
+Assemble the seminal works on implementing a performant Scheme, with direct links, so they
+can be pulled and ingested in bulk.
 
-## How to use this document
+**The output of this phase is an OKF bundle**, not a pile of PDFs. See section 0 below for
+the bundle design. The bibliography in sections 1 through 13 is the fetch list that feeds
+it.
 
-This is a fetch list, not a reading list that has been read. Nothing here has been
+---
+
+## 0. The deliverable: an OKF bundle
+
+### What OKF is
+
+The Open Knowledge Format is an open specification from Google Cloud that formalizes the
+LLM-wiki pattern: a bundle is a directory tree of markdown files with YAML frontmatter, and
+nothing more. It is vendor-neutral, readable in any editor, and shippable as a tarball or a
+git repo.
+
+| resource | link |
+|---|---|
+| Specification, currently **v0.2** | https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md |
+| Raw spec, for an agent to fetch | https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/main/okf/SPEC.md |
+| The `okf` directory, with sample bundles and the visualizer | https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf |
+| Announcement, McVeety & Hormati, 2026-06-12 | https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing |
+| Karpathy's LLM-wiki gist, the pattern OKF formalizes | https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f |
+| `openknowledge` CLI for managing bundles | https://github.com/openknowledge-sh/openknowledge |
+| `okf-skills`, an OKF toolkit packaged for Claude Code | https://github.com/scaccogatto/okf-skills |
+
+All seven verified reachable 2026-07-30.
+
+**Note the version.** The Google Cloud announcement describes v0.1, and `SPEC.md` is now
+v0.2. Two breaking changes matter for us: `timestamp` is superseded by
+`generated: {by, at}`, and a body `# Citations` list is superseded by a `sources`
+frontmatter family. Build against v0.2.
+
+### Why this format for this project
+
+The `sources` and `verified` frontmatter families map onto exactly what this phase
+produces. Every entry in the bibliography below has a checked-reachable URL and a date, and
+those become `sources[].resource` and a `verified` event rather than prose in a table.
+
+More importantly, `type` is the only required field and consumers **must not** reject a
+bundle for unknown additional frontmatter keys or broken cross-links. So we can add
+domain-specific fields without leaving the format, and a partially-ingested bundle is still
+conformant and still traversable.
+
+### Bundle layout
+
+```
+knowledge/                        bundle root
+├── index.md                      carries okf_version: 0.2
+├── log.md                        chronological ingest record
+├── works/                        one file per paper. The ingest target
+│   ├── index.md
+│   ├── steele-1978-rabbit.md
+│   ├── dybvig-1987-three-implementation-models.md
+│   ├── logozzo-2008-pentagons.md
+│   └── ...
+├── techniques/                   synthesis across works. What later sessions query
+│   ├── index.md
+│   ├── interval-domain.md
+│   ├── pentagon-domain.md
+│   ├── bounds-check-elimination.md
+│   ├── slp-vectorization.md
+│   ├── stack-segment-continuations.md
+│   └── storage-class-assignment.md
+├── implementations/              what we learned reading real compilers
+│   ├── index.md
+│   ├── chez.md
+│   ├── sbcl.md
+│   ├── stalin.md
+│   └── bigloo.md
+└── decisions/                    our choices, each traceable to evidence
+    ├── index.md
+    ├── native-back-end.md
+    ├── pentagon-not-octagon.md
+    ├── declaration-anchored-inference.md
+    └── ada-style-check-suppression.md
+```
+
+Four layers, and the separation is the point.
+
+`works/` is raw ingest, one document per paper, and is what a bulk-fetch agent produces.
+
+`techniques/` is the synthesis layer, and it is what a later planning session actually
+queries. Nobody asks "what does Logozzo 2008 say"; they ask "how do I eliminate a bounds
+check, and what does it cost." A technique document answers that and cites the works
+underneath it.
+
+`implementations/` encodes what we already established by reading source. That knowledge
+currently lives in `../../CHEZ-ANALYSIS.md` as prose and should be queryable: which
+techniques Chez implements, which it lacks, and where in its source the evidence is.
+
+`decisions/` closes the loop. A later session can ask "why native rather than C" and get a
+document that cites the implementation findings and the works behind them, rather than
+re-deriving the argument.
+
+### Frontmatter conventions
+
+Only `type` is required by the spec. These are the four types we use and the fields we
+attach, all of which are legal additions under v0.2's tolerance rules.
+
+**`type: paper`**, in `works/`:
+
+```yaml
+---
+type: paper
+title: "Pentagons: A Weakly Relational Abstract Domain for the Efficient Validation of Array Accesses"
+description: An abstract domain capturing x in [a,b] and x < y, designed for array bounds validation.
+resource: https://web.archive.org/web/2020/https://www.microsoft.com/en-us/research/wp-content/uploads/2009/01/pentagons.pdf
+tags: [abstract-domain, bounds-check, relational, level-3]
+authors: [Francesco Logozzo, Manuel Fahndrich]
+year: 2008
+venue: SAC 2008, Science of Computer Programming 2010
+informs: [/techniques/pentagon-domain.md]
+pipeline_stage: 06-pentagon
+status: stable
+generated: { by: "process:phase-0-ingest", at: "2026-07-30T00:00:00Z" }
+verified: [{ by: "process:link-check", at: "2026-07-30T00:00:00Z" }]
+---
+```
+
+**`type: technique`**, in `techniques/`:
+
+```yaml
+---
+type: technique
+title: Pentagon abstract domain
+description: Intervals plus strict upper-bound relations between variables. Level 3 in the domain hierarchy.
+tags: [abstract-domain, bounds-check]
+sources:
+  - resource: /works/logozzo-2008-pentagons.md
+  - resource: /works/cousot-1977-abstract-interpretation.md
+implemented_by: [/implementations/sbcl.md]
+absent_from: [/implementations/chez.md]
+used_by: [/decisions/pentagon-not-octagon.md]
+pipeline_stage: 06-pentagon
+---
+```
+
+**`type: implementation`**, in `implementations/`. The `lacks` field is the one that earns
+its keep, because it turns the central finding of this project into queryable data:
+
+```yaml
+---
+type: implementation
+title: Chez Scheme
+description: Fast-compiling native Scheme with a category-level type lattice and no loop analysis.
+resource: https://github.com/cisco/ChezScheme
+tags: [scheme, native, nanopass]
+implements: [/techniques/stack-segment-continuations.md, /techniques/predicate-narrowing.md]
+lacks: [/techniques/interval-domain.md, /techniques/pentagon-domain.md, /techniques/loop-analysis.md, /techniques/slp-vectorization.md]
+evidence:
+  - s/cptypes-lattice.ss:573-574 collapses index, length, sub-index to fixnum-pred
+  - no induction, licm or hoist anywhere in s/*.ss
+  - s/x86_64.ss emits only scalar sd instructions
+verified: [{ by: "human:nathan", at: "2026-07-30T00:00:00Z" }]
+---
+```
+
+**`type: decision`**, in `decisions/`:
+
+```yaml
+---
+type: decision
+title: Native back end, not C emission
+description: Emit x86-64 directly rather than C, because C forecloses precise GC roots, calling convention control, and full continuations.
+status: stable
+sources:
+  - resource: /implementations/chez.md
+  - resource: /implementations/stalin.md
+supersedes: []
+tags: [architecture, back-end]
+generated: { by: "human:nathan", at: "2026-07-30T00:00:00Z" }
+---
+```
+
+### Acceptance criteria for the bundle
+
+- Bundle root `index.md` carries `okf_version: 0.2`.
+- Every non-reserved `.md` file has parseable YAML frontmatter with a non-empty `type`.
+- Every `works/` document has a `resource` that was checked reachable, and a `verified`
+  event recording when.
+- Every `works/` document names at least one `techniques/` document in `informs`, so no
+  paper is ingested without being connected to something we are building.
+- Every `techniques/` document cites at least one work in `sources`.
+- Every `decisions/` document cites either an implementation or a work. No decision rests
+  on nothing.
+- `log.md` records each ingest batch, newest first.
+- The bundle validates against the `openknowledge` CLI, and renders in Google's static
+  visualizer.
+
+### Traversal, which is the point
+
+Later planning and design sessions read this bundle rather than re-deriving. The questions
+it should answer without further research:
+
+- What eliminates a bounds check, what domain does it need, and what does that domain cost?
+- Which of these techniques does Chez have, which does SBCL have, and where is the evidence?
+- Why did we choose Pentagon over Octagon, and what would change that?
+- Which paper informs pipeline stage 06, and what does it actually require?
+
+The `pipeline_stage` field on works and techniques is what makes the last one a lookup
+rather than a search. It maps directly onto the pass list in `../07-compiler/CUJ.md`.
+
+---
+
+## How to use the bibliography below
+
+This is the fetch list that feeds section 0's bundle. Nothing here has been read or
 ingested. Every link was checked for reachability on 2026-07-30 from this machine and
 resolves to the document named.
 

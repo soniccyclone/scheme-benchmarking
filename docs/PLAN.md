@@ -16,6 +16,7 @@ documents, so each phase can get a CUJ document and a task breakdown of its own.
 | `CHEZ-ANALYSIS.md` | what Chez's optimizer already does, read from source, and the one capability it lacks |
 | `phases/NN-name/PLAN.md` | per phase: goal, inputs, work items, acceptance criteria, risks |
 | `phases/NN-name/CUJ.md` | per phase: the technical implementation journey. Commands, code shapes, schemas, decision branches |
+| `knowledge/` | the OKF bundle produced by phase 0. Traversable in later planning sessions |
 
 `PLAN.md` in a phase directory says what and why. `CUJ.md` says how, concretely enough
 to break into tasks. Each `CUJ.md` ends with task decomposition notes naming what is
@@ -181,7 +182,7 @@ accident.
 
 | phase | directory | goal | gates |
 |---|---|---|---|
-| **0** | **`phases/00-compiler-research/`** | **the seminal-works bibliography, links verified reachable** | **7** |
+| **0** | **`phases/00-compiler-research/`** | **an OKF bundle of compiler and language-design knowledge, built from a verified bibliography** | **7** |
 | 1 | `phases/01-toolchain-gate/` | install, and find out whether Tangerine is implemented anywhere | everything |
 | 2 | `phases/02-calibration/` | real dev-N timings and the machine noise floor | 3, 4 |
 | 3 | `phases/03-core-measurement/` | configurations 1 to 6. The number the project exists for | 5, 6 |
