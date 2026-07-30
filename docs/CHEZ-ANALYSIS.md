@@ -164,28 +164,114 @@ not connect the comparison to the reference.
 
 ---
 
-## 4. The real gap, stated precisely
+## 4. The real gap, placed in the abstract-domain hierarchy
 
-ANSI Common Lisp standardized **integer range types**. `(integer 0 9)`, `(mod 10)`,
-`(unsigned-byte 8)` are standard type specifiers, so every conforming implementation has to
-understand ranges as types. That is what lets SBCL elide a bounds check from a declaration:
-the declared type of the index and the derived length of the array are both range facts in
-the same lattice, and the comparison is a lattice operation.
+Bounds check elimination is one of the most studied problems in compiler optimization, so
+the answer does not need guessing or measuring. It needs placing both compilers on the
+known hierarchy of numerical abstract domains, which dates to Cousot and Cousot's 1977
+abstract interpretation framework.
 
-Scheme standardized **no type language at all**. So its implementations built lattices out
-of flat predicates, because predicates are what the language gave them to work with. Chez's
-lattice is good, and it is a lattice of *categories* rather than *values with ranges*.
+| level | domain | expresses | can eliminate bounds checks? |
+|---|---|---|---|
+| 1 | finite type/category lattice | membership in a fixed set of categories | no, cannot represent an index range at all |
+| 2 | Interval | `x ∈ [a,b]` | only when the array length is a compile-time constant |
+| 3 | **Pentagon** (Logozzo & Fähndrich 2008) | `x ∈ [a,b] ∧ x < y` | **yes. Purpose-built for this** |
+| 4 | Octagon (Miné 2006) | `±x ± y ≤ c` | yes, at O(n²) space and O(n³) time |
+| 5 | Polyhedra (Cousot & Halbwachs 1978) | general linear inequalities | yes, exponential worst case |
 
-So the folk claim partly reduces to something much more specific and much more
-interesting than "CL is faster than Scheme":
+Pentagons were designed for exactly this problem. From the paper: the domain "captures
+properties of the form `x in [a, b] & x < y`", is "more precise than the well-known
+Interval domain, but less precise than the Octagon domain", and exists to "quickly prove
+the safety of most array accesses, restricting the use of more precise (but also more
+expensive) domains to only a small fraction of the code."
 
-**SBCL's type lattice carries integer ranges and Chez's does not, and the reason is that
-CL's standard type language demanded ranges while Scheme's absent type language demanded
-nothing.**
+### Where each compiler sits
 
-That is a compiler capability difference caused by a standards difference. It is a sharper
-version of the thesis in `PLAN.md` section 1, and it is measurable: nbody's inner loop is
-bounds-check dominated once the arithmetic is unboxed.
+**Chez is at level 1.** `cptypes-lattice.ss` is a finite lattice of categories. `index`,
+`length`, `sub-index` and `u8` all collapse to `fixnum-pred` (lines 573 to 574). There is
+no numeric range, so Chez cannot even express "i is in [0,5)", let alone relate it to a
+vector's length. Bounds check elimination is not merely unimplemented, it is
+unrepresentable in the current domain.
+
+**SBCL sits at roughly level 3, by two separate mechanisms.**
+
+Interval reasoning comes from the standard type language. `src/compiler/array-tran.lisp`,
+`check-bound-empty-p` at line 2183:
+
+```lisp
+(defun check-bound-empty-p (bound index)
+  (let* ((bound-type (make-numeric-type 'mod (cond ((constant-lvar-p bound) ...))))
+         (index-type (lvar-type index)))
+    (eq (type-intersection bound-type index-type) *empty-type*)))
+```
+
+It builds a `mod` type from the bound, intersects it with the index's type, and folds the
+check when the intersection is empty. That is interval arithmetic performed in CL's
+standard type lattice. `srctran.lisp` contains 598 references to `interval`, so the
+interval machinery is extensive.
+
+The relational part comes from `src/compiler/constraint.lisp`, 1791 lines of global flow
+analysis. Line 95 defines the constraint kinds:
+
+```lisp
+(kind nil :type (member typep < > = >= <= eql equality set))
+```
+
+`<`, `>`, `<=`, `>=` between variables is precisely the strict-inequality component of a
+Pentagon. `equality-constraints.lisp` adds another 1366 lines.
+
+### Two independent gaps, not one
+
+The domain is the first. The second is structural and I missed it initially:
+
+**Chez has no loop analysis whatsoever.** Grepping `s/*.ss` for `induction`,
+`loop-invariant`, `licm` and `hoist` returns nothing. There is no loop recognition pass in
+the entire compiler. SBCL has `src/compiler/loop.lisp` with `loop-analyze` and natural-loop
+detection.
+
+This matters because the classical bounds-check-elimination techniques are loop-based.
+Gupta's 1993 flow-analysis method and the ABCD algorithm (Bodík, Gupta and Sarkar, PLDI
+2000) both work by hoisting or coalescing checks across loop iterations using induction
+variable information. Without loop structure, even a Pentagon domain would only remove
+checks whose safety is locally provable within a basic block, which is a much weaker
+result.
+
+So Chez needs a two-level domain lift *and* a loop analysis pass it does not currently
+have.
+
+### Why Chez is built this way, stated fairly
+
+This is a deliberate engineering position, not an oversight. Chez's passes are `cp0` for
+inlining (Waddell and Dybvig's fast procedure inlining), `cptypes` for cheap type recovery,
+and a nanopass backend. Dybvig optimized for compilation speed, and classical loop
+optimization is expensive. Chez compiles very fast and produces good code, and the absent
+loop optimizer is part of how it achieves the first of those.
+
+### The standards connection, corrected
+
+An earlier draft of this section said SBCL elides bounds checks "because it has ranges."
+That was incomplete. Intervals alone suffice only when the array length is a compile-time
+constant. For dynamic lengths, the relational constraints from `constraint.lisp` are what
+carry it. Both mechanisms exist in SBCL and cover different cases.
+
+The standards point survives, in a narrower form. ANSI CL standardized integer range types:
+`(integer 0 9)`, `(mod 10)` and `(unsigned-byte 8)` are standard specifiers, so every
+conforming implementation must represent ranges, which puts level 2 in reach by obligation.
+Scheme standardized no type language, so its implementations built level 1 lattices,
+because flat predicates are what the language offered. The relational layer at level 3 is
+beyond what either standard requires, and SBCL built it anyway.
+
+### A prediction that follows from theory, not measurement
+
+nbody uses five bodies. Declared in CL as `(simple-array double-float (5))`, the length is a
+compile-time constant, so **level 2 suffices and SBCL will fold the bounds checks with
+interval reasoning alone.** Chez at level 1 cannot, regardless of how the source is written,
+because no user-writable predicate puts a range into its lattice.
+
+So the 2c-to-4 gap on nbody should be substantial and should be specifically an
+interval-domain gap. Pentagon-class relational reasoning is not even required to explain it.
+That is a falsifiable prediction derived from reading both codebases against the literature,
+and phase 3 tests it rather than discovering it.
 
 ---
 
@@ -205,13 +291,20 @@ effects the earlier plan conflated.
 for the arithmetic half. The suppression form is only needed for the bounds half, and for
 that half no macro suffices on Chez.
 
-**The compiler requirement list narrows usefully.** From `phases/05-portable-library/CUJ.md`,
-the "what this phase tells the compiler" section, the top item is now specific: our lattice
-needs integer ranges, not just categories. That single capability is what unlocks
-declaration-driven bounds elision, and it is what Chez is missing while SBCL has it because
-the CL standard required it.
+**The compiler requirement list is now specific and citable.** Two items, in order:
 
-**Do not build a whole compiler to test this.** The 2c measurement establishes how much of
-the gap is arithmetic (already solved by a macro) versus bounds (needs the lattice work).
-If arithmetic is most of it, the SRFI is a macro and the compiler is optional. If bounds are
-most of it, the compiler has one clear job.
+1. Lift the lattice from level 1 to level 2 (intervals). This alone handles
+   constant-length arrays, which covers nbody and a large fraction of real numeric code.
+2. Add the strict-inequality relations to reach level 3 (Pentagon). This handles dynamic
+   lengths. Logozzo and Fähndrich chose Pentagon over Octagon precisely because it is the
+   cheap domain that still proves most array accesses safe, so it is the right target and
+   Octagon is over-engineering.
+
+A loop analysis pass is a third item and is needed before either domain can hoist a check
+out of a loop rather than proving it locally.
+
+**Do not build a whole compiler to test this.** The 2c measurement quantifies how much of
+the gap is arithmetic, which a five-line macro already solves, versus bounds, which needs
+the domain work. Theory predicts bounds will dominate on nbody. If that prediction holds,
+the compiler has one clearly specified job with a named target domain and a published cost
+profile. If arithmetic dominates instead, the SRFI is a macro and no compiler is needed.
