@@ -1,4 +1,12 @@
 # slug	section	url
+# The four MIT AI Lab memos resolve through the DSpace 7 REST API, not the
+# handle. A handle URL answers 202 with an HTML landing page. Walk
+# /server/api/pid/find?id=hdl:1721.1/<id> to the ORIGINAL bundle and take the
+# bitstream content link.
+sussman-steele-scheme-an-interpreter-for-extended-lambda-c	1	https://dspace.mit.edu/server/api/core/bitstreams/70ab0fe6-0e7a-41ef-99fb-ac2c9481a05e/content
+steele-sussman-lambda-the-ultimate-imperative-1976	1	https://dspace.mit.edu/server/api/core/bitstreams/9c2034d7-786c-4a93-bae9-d4e2dc5f1b17/content
+steele-sussman-lambda-the-ultimate-declarative-1976	1	https://dspace.mit.edu/server/api/core/bitstreams/9faf11a4-9c0e-4870-a650-8d0cf29c68af/content
+steele-rabbit-a-compiler-for-scheme-1978	1	https://dspace.mit.edu/server/api/core/bitstreams/2b2eba0e-c065-4999-90ef-e08a811d7475/content
 ghuloum-an-incremental-approach-to-compiler-construction-2	1	http://scheme2006.cs.uchicago.edu/11-ghuloum.pdf
 keep-a-nanopass-framework-for-commercial-compiler-developm	2	https://andykeep.com/pubs/dissertation.pdf
 keep-dybvig-nanopass-preprint	2	https://andykeep.com/pubs/np-preprint.pdf
@@ -8,7 +16,7 @@ shivers-control-flow-analysis-of-higher-order-languages-19	6	https://www.ccs.neu
 cartwright-fagan-soft-typing-retrospective	6	https://www.cs.rice.edu/~javaplt/papers/sigplan39-4.pdf
 aiken-wimmers-lakshman-soft-typing-with-conditional-types-	6	https://theory.stanford.edu/~aiken/publications/papers/popl94.pdf
 cousot-cousot-abstract-interpretation-popl-1977	7	https://www.di.ens.fr/~cousot/COUSOTpapers/publications.www/CousotCousot-POPL-77-ACM-p238--252-1977.pdf
-min-the-octagon-abstract-domain-2006	7	https://arxiv.org/pdf/cs/0703084
+mine-octagon-ast-2001	7	https://arxiv.org/pdf/cs/0703084
 logozzo-f-hndrich-pentagons-2008-2010	7	https://web.archive.org/web/2020/https://www.microsoft.com/en-us/research/wp-content/uploads/2009/01/pentagons.pdf
 bod-k-gupta-sarkar-abcd-eliminating-array-bounds-checks-on	8	https://www.classes.cs.uchicago.edu/archive/2006/spring/32630-1/papers/p321-bodik.pdf
 larsen-amarasinghe-exploiting-superword-level-parallelism-	9	https://groups.csail.mit.edu/cag/slp/SLP-PLDI-2000.pdf
@@ -34,3 +42,5 @@ wimmer-franz-linear-scan-register-allocation-on-ssa-form-c	18	https://c9x.me/com
 steensgaard-points-to-analysis-in-almost-linear-time-popl-	19	https://www.cs.cornell.edu/courses/cs711/2005fa/papers/steensgaard-popl96.pdf
 lattner-adve-llvm-a-compilation-framework-for-lifelong-pro	20	https://llvm.org/pubs/2004-01-30-CGO-LLVM.pdf
 willsey-et-al-egg-fast-and-extensible-equality-saturation-	20	https://arxiv.org/pdf/2004.03082
+mine-octagon-abstract-domain-hosc-2006	7	https://web.archive.org/web/20170829060101if_/https://www-apr.lip6.fr/~mine/publi/article-mine-HOSC06.pdf
+cousot-halbwachs-automatic-discovery-of-linear-restraints-	7	https://www.di.ens.fr/~cousot/COUSOTpapers/publications.www/CousotHalbwachs-POPL-78-ACM-p84--97-1978.pdf

@@ -51,6 +51,18 @@ mkdir -p "$OUT_DIR"
 
 host_of() { printf '%s' "${1#*://}" | cut -d/ -f1; }
 
+# Preserve provenance across reruns. Without this the cache-hit path rewrites a
+# row's status from ok to cached and blanks content_type, so every invocation
+# silently discards what the original fetch recorded.
+PRIOR_DIR="$(mktemp -d)"
+trap 'rm -rf "$PRIOR_DIR"' EXIT
+if [ -f "$MANIFEST" ]; then
+  while IFS=$'\t' read -r pslug prest; do
+    case "$pslug" in ''|\#*) continue ;; esac
+    printf '%s\t%s\n' "$pslug" "$prest" >"$PRIOR_DIR/$pslug"
+  done < <(tail -n +2 "$MANIFEST")
+fi
+
 # sleep for Retry-After if it is a sane integer, else exponential backoff with jitter
 backoff() {
   local attempt="$1" retry_after="$2" delay
@@ -74,6 +86,19 @@ fetch_one() {
   if [ "$FORCE" -eq 0 ] && [ -s "$dest" ] && [ "$(head -c 4 "$dest")" = "%PDF" ]; then
     sha="$(sha256sum "$dest" | cut -d' ' -f1)"
     bytes="$(wc -c <"$dest" | tr -d ' ')"
+    # If the prior manifest recorded this exact file, replay that row verbatim so
+    # the original status, content_type and fetched_at survive the rerun.
+    if [ -f "$PRIOR_DIR/$slug" ]; then
+      local prior psha
+      prior="$(cat "$PRIOR_DIR/$slug")"
+      psha="$(printf '%s' "$prior" | cut -f5)"
+      if [ "$psha" = "$sha" ]; then
+        printf '%s\n' "$prior"
+        printf '  [skip] %s (unchanged)\n' "$slug" >&2
+        return 0
+      fi
+      printf '  [warn] %s content changed since last fetch\n' "$slug" >&2
+    fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$slug" "$section" "$url" "cached" "$sha" "$bytes" "-" "$(date -u +%FT%TZ)"
     printf '  [skip] %s\n' "$slug" >&2
@@ -189,7 +214,10 @@ if [ -f "$MANIFEST" ]; then
   ok=$(awk -F'\t' '$4=="ok"{n++} END{print n+0}' "$MANIFEST")
   cached=$(awk -F'\t' '$4=="cached"{n++} END{print n+0}' "$MANIFEST")
   bad=$(awk -F'\t' 'NR>1 && $4!="ok" && $4!="cached"{n++} END{print n+0}' "$MANIFEST")
-  printf '\nfetched %s, cached %s, failed %s, of %s\n' "$ok" "$cached" "$bad" "$total" >&2
+  # "ok" counts manifest rows with a good payload, which includes rows replayed
+  # from a previous run. It is not a count of downloads performed.
+  printf '\nmanifest: %s ok, %s revalidated, %s failed, of %s\n' \
+    "$ok" "$cached" "$bad" "$total" >&2
   if [ "$bad" -gt 0 ]; then
     printf '\nfailures:\n' >&2
     awk -F'\t' 'NR>1 && $4!="ok" && $4!="cached"{printf "  %-12s %s\n  %s\n", $4, $1, $3}' "$MANIFEST" >&2

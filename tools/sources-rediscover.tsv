@@ -1,8 +1,4 @@
 # slug	section	url	problem
-sussman-steele-scheme-an-interpreter-for-extended-lambda-c	1	https://dspace.mit.edu/handle/1721.1/5794
-steele-sussman-lambda-the-ultimate-imperative-1976	1	https://dspace.mit.edu/handle/1721.1/5790
-steele-sussman-lambda-the-ultimate-declarative-1976	1	https://dspace.mit.edu/handle/1721.1/6091
-steele-rabbit-a-compiler-for-scheme-1978	1	https://dspace.mit.edu/handle/1721.1/6913
 dybvig-three-implementation-models-for-scheme-1987	1	https://www.cs.indiana.edu/~dyb/pubs/3imp.pdf
 dybvig-et-al-the-development-of-chez-scheme-icfp-2006	1	https://www.cs.indiana.edu/~dyb/pubs/hocs.pdf
 sarkar-waddell-dybvig-a-nanopass-infrastructure-for-compil	2	https://www.cs.indiana.edu/~dyb/pubs/nano-jfp.pdf
@@ -10,12 +6,7 @@ keep-dybvig-a-nanopass-framework-for-commercial-compiler-d	2	https://www.cs.indi
 hieb-dybvig-bruggeman-representing-control-in-the-presence	3	https://www.cs.indiana.edu/~dyb/pubs/stack.pdf
 bruggeman-waddell-dybvig-representing-control-in-the-prese	3	https://www.cs.indiana.edu/~dyb/pubs/oneshot.pdf
 dybvig-hieb-on-call-1cc	3	https://www.cs.indiana.edu/~dyb/pubs/call1cc.pdf
-appel-compiling-with-continuations-book	4	https://www.cs.princeton.edu/~appel/papers/cwc.html
 waddell-dybvig-fast-and-effective-procedure-inlining-sas-1	5	https://www.cs.indiana.edu/~dyb/pubs/inlining.pdf
 keep-hearn-dybvig-optimizing-closures-in-o-0-time	5	https://www.cs.indiana.edu/~dyb/pubs/closureopt.pdf
-cousot-halbwachs-automatic-discovery-of-linear-restraints-	7	https://www.di.ens.fr/~cousot/COUSOTpapers/POPL78.shtml
-min-octagon-hal-mirror	7	https://hal.science/hal-00136664/document
 burger-dybvig-fern-ndez-register-allocation-using-lazy-sav	11	https://www.cs.indiana.edu/~dyb/pubs/Reg-Alloc-PLDI95.pdf
 dybvig-et-al-bibop	12	https://www.cs.indiana.edu/~dyb/pubs/bibop.pdf
-appel-modern-compiler-implementation	13	https://www.cs.princeton.edu/~appel/modern/
-appel-modern-compiler-implementation-in-c	21	https://www.cs.princeton.edu/~appel/modern/c/

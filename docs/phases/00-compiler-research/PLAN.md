@@ -359,7 +359,7 @@ Informs the core language and whether we go SSA later for ABCD-style analysis.
 |---|---|---|
 | Flanagan, Sabry, Duba & Felleisen, *The Essence of Compiling with Continuations* (PLDI 1993) | A-normal form. Why you may not need full CPS | https://users.soe.ucsc.edu/~cormac/papers/pldi93.pdf |
 | Appel, *SSA is Functional Programming* (1998) | the bridge between our functional core and SSA-based analyses | https://www.cs.princeton.edu/~appel/papers/ssafun.pdf |
-| Appel, *Compiling with Continuations* (book) | the standard treatment | https://www.cs.princeton.edu/~appel/papers/cwc.html |
+| Appel, *Compiling with Continuations* (1992) | the standard treatment. **Not free.** Purchase reference, ISBN 978-0-521-03311-4. Cite Cambridge Core, not the Princeton sales page | (no open full text) |
 
 ## 5. Inlining and closure representation
 
@@ -433,7 +433,6 @@ Stage 8. Where the actual speed comes from.
 | work | link |
 |---|---|
 | Abelson & Sussman, *SICP* | https://web.mit.edu/6.001/6.037/sicp.pdf |
-| Appel, *Modern Compiler Implementation* | https://www.cs.princeton.edu/~appel/modern/ |
 
 ---
 
@@ -514,7 +513,8 @@ Stage 9, which currently has no literature behind it at all.
 
 | work | link |
 |---|---|
-| Appel, *Modern Compiler Implementation in C* | https://www.cs.princeton.edu/~appel/modern/c/ |
+| Appel, *Modern Compiler Implementation in C* (1998) | **Not free.** Purchase reference, ISBN 978-0-521-60765-0 |
+| Appel, Tiger compiler skeleton source | free and live, and the part we would actually use: https://www.cs.princeton.edu/~appel/modern/c/project.html |
 
 ### A note on four links in this part
 
@@ -552,7 +552,12 @@ complete. Most exist behind `dl.acm.org`, which is bot-blocked but valid in a br
 - Würthinger, Wimmer & Mössenböck, *Array Bounds Check Elimination for the Java HotSpot
   Client Compiler* (2007).
 - Muchnick, *Advanced Compiler Design and Implementation*, and Queinnec, *Lisp in Small
-  Pieces*. Commercial books, no legitimate free source.
+  Pieces*. Commercial books, no legitimate free source. Same for Appel's *Compiling with
+  Continuations* and *Modern Compiler Implementation in C*, checked directly: Appel
+  self-archives paywalled papers on his own index with `[local copy]` links and pointedly
+  did not do so for these, and the advertised sample chapters at `modern/*/extract.pdf`
+  now 404. A full scan of *Compiling with Continuations* circulates on a third party's
+  course-reserve page; it is not authorized and is deliberately not used here.
 
 Wider-field gaps, found while assembling Part II and still unresolved:
 
