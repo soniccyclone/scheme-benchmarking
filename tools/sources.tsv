@@ -44,3 +44,12 @@ lattner-adve-llvm-a-compilation-framework-for-lifelong-pro	20	https://llvm.org/p
 willsey-et-al-egg-fast-and-extensible-equality-saturation-	20	https://arxiv.org/pdf/2004.03082
 mine-octagon-abstract-domain-hosc-2006	7	https://web.archive.org/web/20170829060101if_/https://www-apr.lip6.fr/~mine/publi/article-mine-HOSC06.pdf
 cousot-halbwachs-automatic-discovery-of-linear-restraints-	7	https://www.di.ens.fr/~cousot/COUSOTpapers/publications.www/CousotHalbwachs-POPL-78-ACM-p84--97-1978.pdf
+dybvig-three-implementation-models-for-scheme-1987	1	https://web.archive.org/web/20050208204106id_/http://www.cs.indiana.edu:80/~dyb/pubs/3imp.pdf
+dybvig-et-al-the-development-of-chez-scheme-icfp-2006	1	https://web.archive.org/web/20061205234158id_/http://www.cs.indiana.edu/~dyb/pubs/hocs.pdf
+sarkar-waddell-dybvig-a-nanopass-infrastructure-for-compil	2	https://web.archive.org/web/20180922154152id_/http://www.cs.indiana.edu/~dyb/pubs/nano-jfp.pdf
+hieb-dybvig-bruggeman-representing-control-in-the-presence	3	https://web.archive.org/web/20041107141004id_/http://www.cs.indiana.edu/~dyb/pubs/stack.pdf
+bruggeman-waddell-dybvig-representing-control-in-the-prese	3	https://web.archive.org/web/20050208193549id_/http://www.cs.indiana.edu/~dyb/pubs/call1cc.pdf
+waddell-dybvig-fast-and-effective-procedure-inlining-sas-1	5	https://web.archive.org/web/20041107121602id_/http://www.cs.indiana.edu/~dyb/pubs/inlining.pdf
+keep-hearn-dybvig-optimizing-closures-in-o-0-time	5	https://andykeep.com/pubs/scheme-12a.pdf
+burger-waddell-dybvig-register-allocation-pldi-1995	11	https://web.archive.org/web/20050312122528id_/http://www.cs.indiana.edu/~dyb/pubs/Reg-Alloc-PLDI95.pdf
+dybvig-et-al-bibop	12	https://web.archive.org/web/20050208204441id_/http://www.cs.indiana.edu/~dyb/pubs/bibop.pdf

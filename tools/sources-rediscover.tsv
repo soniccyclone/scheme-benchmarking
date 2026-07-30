@@ -1,12 +1,2 @@
 # slug	section	url	problem
-dybvig-three-implementation-models-for-scheme-1987	1	https://www.cs.indiana.edu/~dyb/pubs/3imp.pdf
-dybvig-et-al-the-development-of-chez-scheme-icfp-2006	1	https://www.cs.indiana.edu/~dyb/pubs/hocs.pdf
-sarkar-waddell-dybvig-a-nanopass-infrastructure-for-compil	2	https://www.cs.indiana.edu/~dyb/pubs/nano-jfp.pdf
-keep-dybvig-a-nanopass-framework-for-commercial-compiler-d	2	https://www.cs.indiana.edu/~dyb/pubs/nano-icfp.pdf
-hieb-dybvig-bruggeman-representing-control-in-the-presence	3	https://www.cs.indiana.edu/~dyb/pubs/stack.pdf
-bruggeman-waddell-dybvig-representing-control-in-the-prese	3	https://www.cs.indiana.edu/~dyb/pubs/oneshot.pdf
-dybvig-hieb-on-call-1cc	3	https://www.cs.indiana.edu/~dyb/pubs/call1cc.pdf
-waddell-dybvig-fast-and-effective-procedure-inlining-sas-1	5	https://www.cs.indiana.edu/~dyb/pubs/inlining.pdf
-keep-hearn-dybvig-optimizing-closures-in-o-0-time	5	https://www.cs.indiana.edu/~dyb/pubs/closureopt.pdf
-burger-dybvig-fern-ndez-register-allocation-using-lazy-sav	11	https://www.cs.indiana.edu/~dyb/pubs/Reg-Alloc-PLDI95.pdf
-dybvig-et-al-bibop	12	https://www.cs.indiana.edu/~dyb/pubs/bibop.pdf
+# all resolved 2026-07-30

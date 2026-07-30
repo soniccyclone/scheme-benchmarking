@@ -277,6 +277,26 @@ Ingestion order suggestion is at the bottom. The grouping below is by role in ou
 pipeline (`../07-compiler/CUJ.md`), not by publication date, so an agent pulling these can
 map each work to the pass it informs.
 
+### Correction: several entries in this bibliography were wrong
+
+Beyond the reachability problem below, running the recovery found that some entries here
+were simply incorrect, and all four errors were mine:
+
+- `oneshot.pdf` never existed at that path. The one-shot continuations paper was published
+  as `call1cc.pdf`. There is also no separate Dybvig & Hieb `call/1cc` paper, so what were
+  listed as two works are one work.
+- `nano-icfp.pdf` never existed either. The ICFP 2013 nanopass paper was
+  `commercial-nanopass.pdf`, and it is byte-identical to the copy already held from
+  `andykeep.com`.
+- The PLDI 1995 register allocation paper is Burger, **Waddell** & Dybvig. There is no
+  Fernández on it.
+- A file named for the ICFP nanopass paper is in fact Keep's dissertation.
+
+The lesson generalizes past this document: a plausible-looking filename on an author's
+publication index is not evidence that the file exists or that the citation is right.
+`scheme.com/pubs/` supplied the authoritative filename-to-title mapping even though every
+one of its links is dead.
+
 ### Correction: status codes are not payload verification
 
 An earlier revision of this document claimed all 55 links verified reachable. That claim
@@ -348,8 +368,7 @@ Relevant because owning the back end puts full `call/cc` back on the table
 | work | why | link |
 |---|---|---|
 | Hieb, Dybvig & Bruggeman, *Representing Control in the Presence of First-Class Continuations* (PLDI 1990) | **the** stack-segment paper. How to have `call/cc` and cheap calls | https://www.cs.indiana.edu/~dyb/pubs/stack.pdf |
-| Bruggeman, Waddell & Dybvig, *Representing Control in the Presence of One-Shot Continuations* (PLDI 1996) | the cheaper common case | https://www.cs.indiana.edu/~dyb/pubs/oneshot.pdf |
-| Dybvig & Hieb, on `call/1cc` | one-shot continuations | https://www.cs.indiana.edu/~dyb/pubs/call1cc.pdf |
+| Bruggeman, Waddell & Dybvig, *Representing Control in the Presence of One-Shot Continuations* (PLDI 1996) | the cheaper common case. Published as `call1cc.pdf`; there was never an `oneshot.pdf`, and there is no separate Dybvig & Hieb call/1cc paper | see `tools/sources.tsv` |
 
 ## 4. Intermediate representation, CPS and ANF
 
@@ -418,7 +437,7 @@ Stage 8. Where the actual speed comes from.
 
 | work | why | link |
 |---|---|---|
-| Burger, Dybvig & Fernández, *Register Allocation Using Lazy Saves, Eager Restores, and Greedy Shuffling* (PLDI 1995) | what Chez actually does | https://www.cs.indiana.edu/~dyb/pubs/Reg-Alloc-PLDI95.pdf |
+| Burger, **Waddell** & Dybvig, *Register Allocation Using Lazy Saves, Eager Restores, and Greedy Shuffling* (PLDI 1995) | what Chez actually does. Author list corrected against the title page; there is no Fernández | see `tools/sources.tsv` |
 | Poletto & Sarkar, *Linear Scan Register Allocation* (TOPLAS 1999) | the documented baseline | https://web.cs.ucla.edu/~palsberg/course/cs132/linearscan.pdf |
 
 ## 12. Memory management
