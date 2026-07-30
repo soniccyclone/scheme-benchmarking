@@ -277,6 +277,25 @@ Ingestion order suggestion is at the bottom. The grouping below is by role in ou
 pipeline (`../07-compiler/CUJ.md`), not by publication date, so an agent pulling these can
 map each work to the pass it informs.
 
+### Correction: status codes are not payload verification
+
+An earlier revision of this document claimed all 55 links verified reachable. That claim
+was wrong and is retracted.
+
+The check used `curl -sIL` and looked only at the HTTP status. Running the actual fetch
+showed that **20 of the 55 URLs do not serve a PDF**, and several return HTTP 200 while
+doing it. All 11 `www.cs.indiana.edu` links returned the identical 67253-byte HTML landing
+page, a soft-404 with a 200 status. arXiv `/abs/` pages, DSpace `/handle/` pages, and the
+Cousot `.shtml` pages are HTML by design and need their `/pdf/`, bitstream, or linked-PDF
+form instead.
+
+`tools/fetch-sources.sh` now validates the `%PDF` magic bytes on every download and on
+every cached file, and records `not_pdf` rather than `ok`. A 200 is not evidence.
+
+Current state: `tools/sources.tsv` holds 35 URLs confirmed to serve real PDFs, all fetched.
+`tools/sources-rediscover.tsv` holds the 20 that need a correct URL found, which is wave
+0's first job.
+
 ### Verification method and what the status codes mean
 
 Each URL was checked with `curl -sIL`, falling back to a ranged GET where HEAD was

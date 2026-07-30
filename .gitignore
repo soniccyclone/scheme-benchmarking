@@ -1,0 +1,19 @@
+# Downloaded source documents. Local only.
+# The repo is public, so these academic PDFs are never committed. Redistributing
+# them would be a copyright problem independent of their size.
+# The manifest IS tracked, so the corpus stays reproducible without shipping it.
+knowledge/sources/*
+!knowledge/sources/.gitkeep
+!knowledge/sources/manifest.tsv
+
+# Compiler build output
+build/
+compiler/build/
+*.so
+*.o
+*.fasl
+*.zo
+compiled/
+
+# Benchmark run output
+results/*.json
