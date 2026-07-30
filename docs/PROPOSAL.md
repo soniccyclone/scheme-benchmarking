@@ -261,7 +261,125 @@ document should be abandoned. Measure first.
 
 ---
 
-## 4. Sequence
+## 4. Where optimization information comes from
+
+Notes toward an eventual implementation, prompted by the question of how .NET got
+fast and whether we should copy its "lowering" architecture.
+
+### 4a. Correcting the model: lowering is not the optimizer
+
+Roslyn's lowering phase runs at the end of the Binding phase, after type checking
+has passed. It is semantics-preserving desugaring, not optimization. `foreach`
+becomes an enumerator-driven `while` loop via `LocalRewriter_ForEachStatement.cs`.
+`using` becomes `try`/`finally`. `async`/`await` becomes a state machine class.
+`yield return` becomes an iterator state machine. Records get generated members.
+Roslyn then emits fairly naive IL on purpose and does very little optimization.
+
+Every optimization decision in .NET happens later, in RyuJIT. So "lowering" is the
+wrong thing to borrow, and Scheme already has a better version of it. Macro
+expansion is a user-extensible lowering pass, and the declaration forms in section 2
+are exactly that: surface syntax lowered into core forms plus permissions.
+
+### 4b. What actually makes .NET fast
+
+Two things, and the order matters.
+
+**The type system keeps representation information that Java throws away.** `struct`
+is genuinely inline: no header, no pointer. Generics are reified rather than erased,
+so the CLR instantiates a separate native specialization per value type and
+`List<int>` is a flat array of ints. Java's `ArrayList<Integer>` is an array of
+pointers to boxed Integers, because type erasure was forced on it by the need to
+stay compatible with pre-Java 5 bytecode. Microsoft had no such legacy and changed
+the runtime instead.
+
+This is the same axis as our project. The question is whether representation
+information survives to the point where a compiler can act on it. Java erases it and
+asks the JIT to guess. C# keeps it. SBCL keeps it through declarations and
+specialized array types. `(scheme vector f64)` keeps it. A boxed `vector` of flonums
+throws it away and no amount of optimizer cleverness fully recovers it.
+
+**RyuJIT then wins with information a static compiler cannot have.** Tier0 compiles
+fast with instrumentation probes collecting block execution counts, type histograms
+at virtual and interface call sites, and edge frequencies. Tier1 recompiles using
+that profile. The headline optimization is guarded devirtualization: when the profile
+shows one type dominating a call site, the JIT emits a type test and devirtualizes
+and inlines on the hit path. The runtime design doc is explicit that static
+compilation cannot do this, because static analysis has no data on which types
+actually appear. Profile-guided inlining is described there as the biggest win.
+
+.NET 9 and 10 added conditional escape analysis, which stack-allocates enumerators
+once devirtualization and inlining prove they do not escape. That is Stalin's
+lifetime analysis arriving in a mainstream runtime twenty years later.
+
+### 4c. Three sources of optimization information
+
+Naming them separately clarifies what we are choosing between.
+
+| source | example | reliable? | cost to programmer | needs |
+|---|---|---|---|---|
+| declared facts | SBCL `declare`, Ada `pragma Suppress`, section 2 | yes, always honored | annotation effort | nothing |
+| statically inferred facts | Stalin | no, bimodal | none | closed world |
+| dynamically observed facts | RyuJIT dynamic PGO | mostly | none | JIT plus warmup |
+
+The idea of a static analysis layer that inserts optimizations where it sees fit is
+the middle row. `PLAN.md` section 5a measured what that alone produces: 2x to 4x
+faster than Chez where the analysis succeeds, 5x to 16x slower where it does not,
+and nothing in the source tells you which you got. The bottom row works well but
+requires a JIT, and buys its wins precisely where static analysis is weakest, on
+polymorphic dispatch.
+
+### 4d. The architecture worth building: declaration-anchored local inference
+
+Stalin's bimodality has a specific cause. It has nothing to anchor on, so it must
+derive every type from a closed-world whole-program analysis, and wherever that
+analysis loses precision the imprecision cascades. The closed-world requirement is
+also what rules out separate compilation.
+
+Declarations fix this, and not only by supplying facts the compiler must honor. They
+supply *anchors that make inference tractable and local*. Given declared parameter
+types at a procedure boundary, ordinary local flow analysis propagates through the
+body with no whole-program analysis and no closed-world assumption. You get Stalin's
+representation selection on the declared paths, you can reason about it by reading
+one procedure, and separate compilation survives.
+
+This is not speculative. It is what SBCL already does: IR1 derives types from
+declarations by flow analysis, and IR2 selects representations from the derived
+types. The model exists and is known to work. Scheme simply lacks the declarations
+to anchor it, which is the whole subject of this document.
+
+So the layering for an eventual implementation:
+
+1. Declarations are the contract. Always honored, always predictable, the floor.
+2. Local inference propagates from them. Anchored, so no closed world needed.
+3. Opportunistic global analysis on top, strictly best-effort, never required for
+   the declared performance. This is where a Stalin-style pass belongs.
+
+Ordering matters and the .NET history argues for it. .NET got value types and
+reified generics into the type system in 2005, and spent twenty years building
+optimizers that exploit them. Dynamic PGO only became the default in .NET 8, in
+2023. The representation decisions came first. The clever analysis came second and
+took two decades. That is the case for getting the knobs specified before building
+the analysis layer.
+
+### 4e. Other .NET features worth stealing later
+
+Hardware intrinsics, `Vector128<T>` through `Vector512<T>` plus platform-specific
+classes, are a far more developed story than Java's still-incubating Vector API and
+are the direct analogue of `sb-simd`. `Span<T>`, `ref struct` and `stackalloc` allow
+allocation-free code without leaving the safe language. `[MethodImpl(AggressiveInlining)]`
+and `[SkipLocalsInit]` are per-site policy attributes, which is the Ada model rather
+than the CL dial. And `unsafe` with `fixed` is the ECMA-334 standardized escape
+hatch, which puts C# in group 1 of `PLAN.md` section 2b's taxonomy.
+
+A caveat on the framing that prompted this section. .NET is generally not as fast as
+Rust. On compute-bound work it usually sits somewhere around 1.2x to 2x off, and the
+gap is smallest on code written with structs and spans. What is true is that it got
+dramatically closer than Java, and the reason is the type system decision in 4b
+rather than JIT cleverness.
+
+---
+
+## 5. Sequence
 
 1. Run the `PLAN.md` nbody experiment. Get the number for what the missing policy
    switch actually costs. Everything else waits on this.
