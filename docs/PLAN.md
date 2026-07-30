@@ -13,7 +13,14 @@ documents, so each phase can get a CUJ document and a task breakdown of its own.
 | `RESEARCH.md` | standards survey, cross-language comparison, Stalin analysis, measurement evidence |
 | `PROPOSAL.md` | prior art, the design we would propose, .NET architecture notes, compiler layering |
 | `METHOD.md` | machine, measurement method, dependency table |
-| `phases/NN-name/PLAN.md` | one per phase |
+| `phases/NN-name/PLAN.md` | per phase: goal, inputs, work items, acceptance criteria, risks |
+| `phases/NN-name/CUJ.md` | per phase: the technical implementation journey. Commands, code shapes, schemas, decision branches |
+
+`PLAN.md` in a phase directory says what and why. `CUJ.md` says how, concretely enough
+to break into tasks. Each `CUJ.md` ends with task decomposition notes naming what is
+parallelizable, what is on the critical path, and what forms a single indivisible unit.
+
+Results land in `phases/NN-name/RESULTS.md` as each phase completes.
 
 ---
 
