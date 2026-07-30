@@ -2,12 +2,12 @@
 
 Technical implementation document. Companion to `PLAN.md` in this directory.
 
-The journey is an operator going from an empty directory to a compiler that emits C which
-gcc vectorizes, beating tuned scalar SBCL on nbody.
+The journey is an operator going from an empty directory to a native x86-64 compiler that
+emits packed AVX-512 for an f64 loop, which no Lisp-family compiler currently does.
 
 ## Preconditions
 
-Phase 1 complete, so Chez is installed as the host and gcc is verified. Nothing else.
+Phase 1 complete, so Chez is installed as the host. Nothing else.
 This phase does not wait on phases 2 through 5.
 
 ## Repo layout
@@ -26,12 +26,15 @@ compiler/
     05-intervals.ss       level 2 domain
     06-pentagon.ss        level 3 domain
     07-loops.ss           loop recognition, induction variables
-    08-represent.ss       representation selection
-    09-alias.ss           alias analysis for restrict
-    10-emit-c.ss          C emission
+    08-represent.ss       storage class assignment
+    09-alias.ss           alias analysis
+    10-vectorize.ss       scalar f64 loop to packed, the pass nobody has
+    11-select.ss          instruction selection
+    12-regalloc.ss        linear scan register allocation
+    13-assemble.ss        x86-64 + AVX-512 encoding, emit an object file
   runtime/
     gc.c gc.h             precise generational copying collector
-    rt.c rt.h             primitives, entry point
+    rt.c rt.h             entry point, foreign boundary
   tests/
     pass/                 one test per pass, on core-language fixtures
     programs/             end-to-end: nbody, fannkuchredux, spectralnorm
@@ -149,58 +152,87 @@ Reference algorithms: Gupta 1993 for the flow-analysis formulation, and ABCD
 (Bodík, Gupta and Sarkar, PLDI 2000) for the demand-driven version on SSA. ABCD's
 inequality-graph approach is the better fit if the representation moves to SSA later.
 
-## Step 4: representation selection and C emission
+## Step 4: representation, vectorization, and native emission
 
-### Stage 8, representation
+### Stage 8, storage class assignment
 
-Once the domain proves a value is a flonum and never escapes as a general object, give it
-a native C type.
+Follow SBCL's IR2 model. Each value gets a storage class, not just a type.
 
 ```
-absval kind 'flonum, does not escape   ->   double
-absval kind 'fixnum, bounds fit i64    ->   int64_t
-flvector                                ->   double*  plus a length
-everything else                         ->   tagged word
+proven flonum, does not escape          ->  xmm register, unboxed f64
+proven flonum, escapes                  ->  boxed, tagged pointer
+proven fixnum, bounds fit 61-bit tag    ->  general register, tagged
+proven fixnum, loop index only          ->  general register, untagged
+flvector                                ->  pointer plus known or derived length
+anything unproven                        ->  tagged descriptor
 ```
 
-This is SBCL's IR2 representation selection, and it is the pass that produces the actual
-speed.
+The untagged loop index case matters more than it looks. A tagged fixnum needs a shift for
+multiplication; an untagged index used only for addressing does not. SBCL wins some of its
+margin here.
 
 ### Stage 9, alias analysis
 
-Only needs to be good enough to emit `restrict`. Two vectors do not alias if they come
-from distinct `make-flvector` calls that both do not escape, which is decidable locally
-for the benchmark shapes and is the common case in numeric kernels.
+Only needs to answer one question: are these two flvectors provably distinct? Two values
+from distinct `make-flvector` calls that do not escape are distinct, which is decidable
+locally and covers the numeric kernel shapes. Anything unproven is assumed to alias.
 
-Emitting `restrict` wrongly is undefined behavior, so be conservative: emit it only when
-provable, never by default.
+Getting this wrong makes vectorization miscompile, so default to aliasing and only claim
+distinctness when proven.
 
-### Stage 10, C emission
+### Stage 10, vectorization
 
-Target shape, which is what gcc vectorizes:
+The pass no Lisp compiler has. Preconditions, all supplied by earlier stages:
 
-```c
-static void advance(double * restrict xs, double * restrict ys,
-                    double * restrict vxs, double s, long n) {
-  for (long i = 0; i < n; i++) {      /* no bounds check inside */
-    vxs[i] += s * xs[i];
-  }
-}
+1. The loop is recognized and has an induction variable with a derived range (stage 7).
+2. No bounds check remains in the body (stage 5 or 6).
+3. Array operands are provably non-aliasing (stage 9).
+4. Every value in the body is a proven unboxed f64 (stage 8).
+5. The body has no calls, no allocation, and no control flow.
+
+Then rewrite:
+
+```
+for i in [0, n):  a[i] = a[i] + s * b[i]
+
+becomes
+
+vbroadcastsd  zmm2, s
+for i in [0, n - n mod 8) step 8:
+    vmovupd       zmm0, [a + i*8]
+    vmovupd       zmm1, [b + i*8]
+    vfmadd231pd   zmm0, zmm1, zmm2
+    vmovupd       [a + i*8], zmm0
+for i in [n - n mod 8, n):        ; scalar remainder
+    a[i] = a[i] + s * b[i]
 ```
 
-Rules that matter for the vectorizer:
+**The floating point trap, decided per loop and not discovered later.** Element-wise
+operations like the above are safe: each lane computes exactly what the scalar loop
+computed for that index. Reductions are not. Vectorizing a sum reassociates the additions
+and changes the result, and nbody's output is diffed against a fixture to nine decimal
+places. So: vectorize element-wise loops freely, and for reductions either keep them scalar
+or use an ordered reduction. Never silently reassociate.
 
-- No bounds checks inside the loop. Stage 5 or 7 must have removed them.
-- `restrict` on every non-aliasing pointer parameter. Stage 9.
-- Loop bound in a local variable, not reloaded from memory each iteration.
-- No function calls in the body unless inlined. Emit `static inline` and let gcc decide.
-- Prefer `long` for induction variables so gcc does not worry about wraparound.
+### Stages 11 through 13, native emission
 
-Tail calls: `[[gnu::musttail]]`, verified working on gcc 15.2. Self tail calls can also be
-a plain `goto` to the top of the function, which is cheaper and always available.
+Instruction selection over the core language after representation assignment. Register
+allocation by linear scan, which is well documented and adequate; graph coloring is better
+and much slower to write, and a bad allocator would hide every gain from the analysis
+passes, so measure before reaching for it.
 
-Build: `gcc -O3 -march=native`. Check the vectorizer with
-`-fopt-info-vec-optimized` and diagnose failures with `-fopt-info-vec-missed`.
+Two separate register files to allocate: general purpose for tagged values and untagged
+integers, and `xmm`/`zmm` for unboxed floats. Respect the platform ABI only at the foreign
+boundary; inside Lisp code the convention is ours, which is one of the reasons for owning
+the back end.
+
+For encodings, `sbcl/src/compiler/x86-64/avx512-insts.lisp` and `avx2-insts.lisp` are the
+reference. For register allocation structure, Chez's `s/x86_64.ss` and `s/np-register.ss`
+(168 lines, small and readable) are the reference.
+
+**Precise GC roots are why this is worth the work.** At every call site the allocator knows
+which registers and stack slots hold live references, so emit a stack map. That is what a
+precise generational collector needs and what a C back end cannot provide.
 
 ## Step 5: the runtime
 
@@ -208,9 +240,9 @@ Deliberately small. A precise generational copying collector, not Boehm, because
 `../../RESEARCH.md` section 3 showed Boehm is where Stalin loses 5x to 16x on
 allocation-heavy code.
 
-Minimum viable: two generations, bump allocation in the nursery, Cheney scan on
-collection, a shadow stack or explicit root registration since C owns the real stack.
-Precise beats conservative here and the nursery is where nbody's few allocations live.
+Minimum viable: two generations, bump allocation in the nursery, Cheney scan on collection,
+and precise roots from the stack maps stage 13 emits. No shadow stack is needed, because we
+own the frame layout.
 
 Escape analysis for stack allocation is a later milestone and is one of the four
 capabilities in `PLAN.md` where we would exceed SBCL, since CL's `dynamic-extent` is
@@ -230,18 +262,20 @@ dangerous failure mode in this project.
 3. **End-to-end differential testing.** Compile each benchmark, diff output against the
    Benchmarks Game fixture. Compile the same program with all optimization disabled and
    diff the two outputs against each other. Any divergence is an unsound analysis.
-4. **Emitted-code assertions.** For nbody, assert `-fopt-info-vec-optimized` reports the
-   inner loop vectorized. That is milestone 3 and it should be a test, not an observation.
+4. **Disassembly assertions.** Milestones are verified in emitted code, not by timing.
+   Assert no bounds-check branch remains in nbody's inner loop (milestone 2) and that
+   `vfmadd231pd` on a `zmm` register appears (milestone 4). Both are greps over our own
+   disassembler output and both should be tests rather than observations.
 
 ## Milestone checkpoints
 
 | milestone | check |
 |---|---|
-| 1 | nbody compiles and matches the fixture, no optimization |
-| 2 | bounds checks gone from nbody's inner loop, verified in emitted C |
-| 3 | gcc reports the inner loop vectorized |
-| 4 | beats phase 3 configuration 5, tuned scalar SBCL |
-| 5 | beats phase 3 configuration 6 scalar C |
+| 1 | nbody compiles to native code, runs, matches the fixture |
+| 2 | no bounds-check branch in the inner loop, verified in disassembly |
+| 3 | beats phase 3 configuration 5, tuned scalar SBCL |
+| 4 | packed AVX-512 in the inner loop, verified in disassembly |
+| 5 | beats phase 3 configuration 6 at `-O3 -march=native` |
 | 6 | Pentagon and loop analysis carry fannkuchredux |
 
 Measure with the phase 2 harness, same pinning and the same reporting convention, so the
@@ -249,10 +283,12 @@ numbers are directly comparable to the rest of the project.
 
 ## Task decomposition notes
 
-Steps 1 and 2 gate everything. The domain module in step 3 is the critical path and the
-highest-risk item; build and test it standalone before wiring it into a pass. Stage 5 alone
-should reach milestone 2, so stages 6 and 7 can be deferred until nbody works. Step 5, the
-runtime, is independent of the whole analysis track and parallelizable; a stub allocator
-that never collects is enough to reach milestone 3 on nbody, which allocates almost
-nothing. Stage 9 is small and gates milestone 3, so it should not be left to last despite
-appearing late in the pipeline order.
+Steps 1 and 2 gate everything. The back end (stages 11 through 13) is the largest piece and
+gates milestone 1, so it comes before any analysis: a compiler that emits correct slow
+scalar code is the platform everything else is measured against. The domain module in step 3
+is the highest-risk item and should be built and tested standalone before wiring into a
+pass, because an unsound domain miscompiles silently. Stage 5 alone should reach milestone 2,
+so stages 6 and 7 defer until nbody works. Stage 10, vectorization, depends on 5, 7, 8 and 9
+all being correct, so it is last despite being the headline. The runtime is independent and
+parallelizable; a bump allocator that never collects is enough through milestone 5, since
+nbody allocates almost nothing.

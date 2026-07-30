@@ -37,52 +37,71 @@ The tractability objection also does not hold. SICP chapter 5 is a compiler, the
 framework exists and is maintained, and Chez itself is written in nanopass style by the
 people who invented it. This is a known-shape project, not a research gamble.
 
-## The strategy: emit C and inherit gcc's back end
+## The back end is native. Not C.
 
-The single most important design decision, and it is what makes "exceed CL" concrete
-rather than aspirational.
+Emitting C is disqualified, and not only because laundering gcc's optimizer would prove
+gcc is fast rather than that Lisp is fast. It structurally caps the compiler at a level
+below both reference implementations:
 
-Verified on this machine, gcc 15.2.0:
+**No precise GC roots.** C will not tell you which registers hold live references at a
+call site. That forces a shadow stack or conservative scanning. Chez and SBCL emit native
+code precisely so they can have accurate roots in registers, and `RESEARCH.md` section 3
+already showed what a conservative collector costs: Stalin loses 5x to 16x on
+allocation-heavy code because it falls through to Boehm.
 
-```
-void axpy(double * restrict a, const double * restrict b, double s, long n){
-  for (long i=0;i<n;i++) a[i] += s*b[i];
-}
-```
+**No calling convention control.** No multiple return values in registers, no custom
+register partitioning between Lisp and foreign code, no general tail calls.
+`[[gnu::musttail]]` is per-site and does not cover mutual recursion through an unknown
+callee.
 
-```
-optimized: loop vectorized using 64 byte vectors
-```
+**Continuations permanently blocked.** C owns the stack, so `call/cc` can never be more
+than escape-only. An earlier draft called that an acceptable compromise. It is not: it
+means the compiler can never grow up.
 
-gcc auto-vectorizes to AVX-512 given a loop with no bounds checks and `restrict` on the
-pointers. **SBCL cannot auto-vectorize at all.** `sb-simd` is manual intrinsics, which is
-why Bela Pecsek's fast entries are hand transliterations of Zig.
+**Representation control is the whole point.** SBCL's IR2 assigns values to specific
+storage classes and register files. Through C you describe intent and hope gcc infers it.
+The thing that makes Lisp fast is exactly the thing C takes away.
 
-So the path to exceeding CL is not to out-engineer SBCL's register allocator. It is:
+So: native x86-64, our own instruction selection, our own register allocator, our own
+assembler. Chez's back end is the scale reference at `cpnanopass.ss` (10912 lines) plus
+`x86_64.ss` (3504 lines), and it is readable nanopass rather than a wall of macros.
 
-1. Do the analysis SBCL does, reaching level 2 and then level 3 in the domain hierarchy,
-   so the bounds checks are gone.
-2. Prove non-aliasing so `restrict` can be emitted.
-3. Emit clean C and let gcc's vectorizer do what no Lisp compiler does.
+## The open field: nobody in the Lisp family auto-vectorizes
 
-This is Stalin's strategy and it is why Stalin beat hand-written C on some benchmarks.
-The difference is that Stalin got there by whole-program inference with a closed world,
-and we get there by declaration-anchored local inference, which keeps separate
-compilation.
+Verified by reading both back ends.
 
-Also verified: `[[gnu::musttail]]` compiles and works on gcc 15.2, so proper tail calls
-through C are viable without trampolining.
+**Chez emits only scalar SSE.** `s/x86_64.ss` contains `addsd`, `mulsd`, `subsd`,
+`divsd`, `sqrtsd`, `movsd`, `cvtsi2sd`. Every one is an `sd`, scalar double. There are no
+packed instruction encodings at all. The three `xmm` mentions in the file are comments
+about which registers the C calling convention preserves.
+
+**SBCL can encode vectors but never generates them.** `src/compiler/x86-64/`
+has `avx512-insts.lisp` and `avx2-insts.lisp`, so the assembler knows the encodings, and
+`contrib/sb-simd` exposes them as user-callable intrinsics. But
+`grep -rlin 'vectoriz' src/compiler/*.lisp` returns nothing. There is no
+auto-vectorization pass. Vector code exists in SBCL only where a human wrote an intrinsic,
+which is why Bela Pecsek's fast entries are hand transliterations of Zig.
+
+So no Lisp-family compiler turns an ordinary scalar loop into packed arithmetic. That is
+the concrete, verified way to exceed Common Lisp, and it is the reason to own the back end
+rather than borrow one.
+
+The mechanism is not exotic. Once the interval domain proves the trip count and the
+absence of bounds violations, and alias analysis proves the arrays are distinct, emitting
+`vfmadd231pd` on `zmm` registers for an f64 loop is mechanical code generation. The
+analysis is what makes it legal; the emission is bookkeeping.
 
 ## Scope discipline
 
 What we deliberately do not implement in the first version, with reasons. Each of these
 is a real R7RS feature and each one is expensive.
 
-**Full `call/cc`: escape-only at first.** Multi-shot first-class continuations are what
-make a C back end hard, because C owns the stack. Escaping continuations cover
-`dynamic-wind`-free non-local exit and are exactly what Common Lisp has, so this keeps
-the comparison fair while removing the hardest constraint. Full `call/cc` is a later
-milestone, and Chez's stack-segment approach is the reference design when we get there.
+**Full `call/cc` is a goal, not an exclusion.** Owning the back end means owning the
+stack, so the earlier compromise is gone. Ordering is still escape-only first because it is
+simpler and unblocks the benchmarks, but the design must not foreclose the general case.
+Chez's stack-segment approach is the reference, and `RESEARCH.md` section 4 already showed
+it makes ordinary calls cheap: Chez beats Racket by about 2.5x on `ctak` and `fibc`. That is
+an existence proof that full continuations need not tax the common path.
 
 **Numeric tower: fixnum and flonum only.** No bignum, ratnum, or complex initially. The
 benchmarks need neither, and the tower is where a naive implementation loses all its
@@ -105,7 +124,7 @@ Not aspiration. Four specific capabilities SBCL lacks or does manually.
 
 | capability | SBCL | us |
 |---|---|---|
-| auto-vectorization | none, `sb-simd` is manual intrinsics | free, via gcc, given bounds-free loops and `restrict` |
+| auto-vectorization | can encode AVX-512, has no vectorizer pass | **our own vectorizer, driven by our own interval domain** |
 | abstract domain | roughly Pentagon (intervals plus `< > <= >=`) | Pentagon, then Octagon where it pays |
 | stack allocation | manual `dynamic-extent` declaration | automatic escape analysis, as .NET 9/10 now does |
 | inference model | declaration-anchored, local | declaration-anchored local **plus** opportunistic global |
@@ -137,23 +156,32 @@ Pipeline, with the contribution concentrated in stages 4 through 7:
    dynamic lengths.
 6. **Loop recognition and induction variable analysis.** Wall 2 removed. Required before
    any check can be hoisted rather than proven locally.
-7. **Representation selection.** Unboxed f64 and raw fixnum, emitted as native C types.
-8. Alias analysis sufficient to emit `restrict`.
-9. C emission, then `gcc -O3 -march=native`.
+7. **Representation selection.** Storage classes, following SBCL's IR2: which values live
+   in general registers, which in `xmm`/`zmm`, which are unboxed f64, which stay tagged.
+8. **Alias analysis.** Enough to prove two flvectors are distinct, which is what makes
+   vectorization legal.
+9. **Vectorization.** Given a proven trip count, no bounds violations, and non-aliasing
+   arrays, rewrite the scalar f64 loop into packed operations with a scalar remainder
+   loop. This is the pass no Lisp compiler has.
+10. **Instruction selection, register allocation, assembly.** Native x86-64 with AVX-512.
+    SBCL's `avx512-insts.lisp` is the reference for encodings; Chez's `x86_64.ss` is the
+    reference for register allocation structure.
 
 ## Milestones
 
-1. Compiles and correctly runs nbody with no optimization. Establishes the pipeline.
-2. Stage 4 (intervals) removes nbody's bounds checks. Theory says this suffices because
-   nbody's arrays are length 5, statically known.
-3. Emits `restrict` and gcc vectorizes the inner loop. This is where we pass SBCL.
-4. Beats configuration 5 (tuned scalar SBCL) on nbody.
-5. Beats configuration 6 scalar C on nbody. Stalin did this; so should we.
-6. Stages 5 and 6 on fannkuchredux, which is integer and bounds-dominated with a dynamic
-   array length, so it needs Pentagon and loop analysis where nbody did not.
-
-Milestone 4 is the real answer to the original question. Milestone 5 is the interesting
-one.
+1. Compiles and correctly runs nbody, scalar native code, no optimization. Establishes the
+   whole pipeline through the assembler.
+2. The interval domain removes nbody's bounds checks. Verify in the disassembly, not by
+   timing. Theory says intervals suffice here because nbody's arrays are length 5 and the
+   length is a compile-time constant.
+3. Beats configuration 5, tuned scalar SBCL, on nbody. This is the answer to the original
+   question and it is reachable with scalar code alone.
+4. **Emits packed AVX-512 for nbody's inner loop.** The pass no Lisp compiler has. Verify
+   in the disassembly that `vfmadd231pd` or equivalent appears on `zmm` registers.
+5. Beats configuration 6 at `-O3 -march=native`, which is gcc with its vectorizer on. This
+   is the real target, and it is honest now because we vectorized it ourselves.
+6. Pentagon and loop analysis carry fannkuchredux, which is integer, bounds-dominated, and
+   has a dynamic array length, so it needs both where nbody needed neither.
 
 ## Risks
 
@@ -161,19 +189,26 @@ one.
 section, held firmly. This compiler exists to answer a question, and features that do not
 serve nbody, fannkuchredux or spectralnorm are out until it does.
 
-**The C back end constrains us later.** Escape-only continuations are a real limitation
-and full `call/cc` may eventually force a native back end. Accept the constraint now,
-because it buys gcc's vectorizer, which is the whole strategy.
+**The back end is the largest single piece of work.** Instruction selection, register
+allocation and an assembler are what `cpnanopass.ss` spends 10912 lines on. Mitigation is
+scope: we need enough x86-64 to compile three benchmark programs, not a general compiler.
+A working scalar back end for a fixnum-and-flonum subset is a fraction of that.
 
-**gcc refuses to vectorize what we emit.** The verified `axpy` case is the easy shape.
-Real emitted code may defeat the vectorizer through aliasing it cannot see through, or
-control flow. `-fopt-info-vec-missed` reports why, and this becomes an iteration loop
-rather than a wall.
+**Register allocation is where naive compilers lose.** Linear scan is the pragmatic choice
+and is well documented. Graph coloring is better and slower to write. Start with linear
+scan and measure before reaching for anything cleverer, because a bad allocator will hide
+every gain from the analysis passes.
 
-**We beat SBCL only because gcc is doing the work.** A fair objection and it should be
-stated in any writeup rather than hidden. The counter is that inheriting a good back end
-is a legitimate engineering choice, that Bigloo, Chicken, Gambit and Stalin all make it,
-and that the analysis making the C vectorizable is the actual contribution.
+**An unsound analysis produces wrong code silently.** This is the most dangerous failure
+mode in the project, worse than being slow. Every removed bounds check is a memory safety
+decision. The mitigation is differential testing: compile every program twice, once with all
+analysis disabled, and diff the outputs. Any divergence is a soundness bug.
+
+**Vectorization has correctness traps beyond legality.** Reassociating floating point
+changes results, and nbody's output is checked to nine decimal places against a fixture. A
+reduction cannot be vectorized without either accepting a different answer or using an
+ordered reduction. Decide this explicitly per loop rather than discovering it as a failing
+diff.
 
 ## Relationship to the other phases
 
