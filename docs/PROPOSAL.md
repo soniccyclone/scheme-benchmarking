@@ -371,11 +371,69 @@ and `[SkipLocalsInit]` are per-site policy attributes, which is the Ada model ra
 than the CL dial. And `unsafe` with `fixed` is the ECMA-334 standardized escape
 hatch, which puts C# in group 1 of `PLAN.md` section 2b's taxonomy.
 
-A caveat on the framing that prompted this section. .NET is generally not as fast as
-Rust. On compute-bound work it usually sits somewhere around 1.2x to 2x off, and the
-gap is smallest on code written with structs and spans. What is true is that it got
-dramatically closer than Java, and the reason is the type system decision in 4b
-rather than JIT cleverness.
+### 4f. How fast is C# really, measured rather than recalled
+
+An earlier draft of this section asserted that .NET runs 1.2x to 2x behind Rust on
+compute-bound work. That number came from recall and not from checking, which was a
+mistake. Here is what three corpora actually say. The short version is that the
+answer depends entirely on what you measure, and the two common impressions are both
+correct about different workloads.
+
+**Benchmarks Game, .NET SDK 9.0.100 against rustc 1.84.1**, both current. Extracted
+from `public/data/data.csv`, fastest entry per language, as a ratio to Rust where
+above 1 means slower than Rust:
+
+| program | csharpaot | csharpcore | note |
+|---|---|---|---|
+| fannkuchredux | **0.57** | 0.62 | C# beats Rust |
+| spectralnorm | **1.03** | 1.33 | parity |
+| pidigits | **1.05** | 1.18 | parity, both mostly GMP |
+| knucleotide | 1.21 | 1.27 | close |
+| nbody | 1.43 | 1.46 | |
+| fasta | 1.47 | 1.58 | |
+| regexredux | 1.74 | 1.82 | |
+| revcomp | 2.85 | 1.25 | |
+| mandelbrot | 3.10 | 3.38 | probably SIMD |
+| binarytrees | 5.84 | 6.01 | GC against arena allocation |
+
+Geometric mean 1.64, median 1.45. For scale, gcc sits at 0.97 gmean, Java at 2.48,
+Go at 2.97.
+
+The aggregate is misleading and the distribution is the finding. C# beats Rust
+outright on fannkuchredux and reaches parity on spectralnorm and pidigits. The
+geometric mean is dragged up almost entirely by binarytrees at 5.84 and mandelbrot
+at 3.10. binarytrees is a pure allocation and collection benchmark, so a tracing
+collector losing to Rust's ownership-based arena allocation is expected and says
+nothing about code generation quality. The same entry-quality caveat from section 1
+of `PLAN.md` applies here too: fastest-entry-per-language measures contributor effort
+alongside compiler quality.
+
+**hanabi1224/Programming-Language-Benchmarks, dotnet 9.0.303 against rustc 1.88.0**,
+is less favorable to C# than the Benchmarks Game. Rust wins most programs and some
+by large margins: edigits 121 ms against 4085 ms, json-serde 29 ms against 306 ms,
+regex-redux 438 ms against 1747 ms, nbody 163 ms against 360 ms.
+
+**TechEmpower Round 23 inverts the result completely, and this is probably the source
+of the "as fast as Rust" impression.** On the Fortunes test ASP.NET reaches 609,966
+requests per second against Rust Actix at 320,144. ASP.NET is the fastest framework
+in that test across every language, roughly 1.9x ahead of the best Rust entry.
+
+That divergence is not a contradiction, and understanding it matters for how we read
+any benchmark. TechEmpower measures HTTP throughput: request parsing, connection
+handling, database pooling, serialization at scale, kernel event interfaces, and
+thread scheduling. Kestrel has had years of full-time Microsoft engineering aimed at
+exactly that workload, using spans, pipelines and vectorized parsing. The Rust
+frameworks are community projects with far fewer person-years on that specific
+target. So TechEmpower largely measures how much engineering investment went into a
+particular server stack. The Benchmarks Game and PLB measure code generation on small
+compute kernels.
+
+For our purposes the compute numbers are the relevant ones, because we are asking
+about compiler code generation on numeric kernels. On that question the accurate
+statement is narrower than either impression: **on scalar compute C# reaches parity
+with Rust on some programs and trails by roughly 1.4x at the median, and it loses
+badly where a tracing collector or SIMD dominates.** It got much closer than Java,
+and the type system decision in 4b is why, not JIT cleverness.
 
 ---
 
