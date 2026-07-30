@@ -217,9 +217,9 @@ or use an ordered reduction. Never silently reassociate.
 ### Stages 11 through 13, native emission
 
 Instruction selection over the core language after representation assignment. Register
-allocation by linear scan, which is well documented and adequate; graph coloring is better
-and much slower to write, and a bad allocator would hide every gain from the analysis
-passes, so measure before reaching for it.
+allocation by linear scan as the documented baseline, with graph coloring as the better
+answer. Decide between them by counting spills in the emitted inner loop: if any unboxed f64
+spills across the loop body, the allocator is erasing the analysis and needs replacing.
 
 Two separate register files to allocate: general purpose for tagged values and untagged
 integers, and `xmm`/`zmm` for unboxed floats. Respect the platform ABI only at the foreign
@@ -283,9 +283,9 @@ numbers are directly comparable to the rest of the project.
 
 ## Task decomposition notes
 
-Steps 1 and 2 gate everything. The back end (stages 11 through 13) is the largest piece and
-gates milestone 1, so it comes before any analysis: a compiler that emits correct slow
-scalar code is the platform everything else is measured against. The domain module in step 3
+Steps 1 and 2 gate everything. The back end (stages 11 through 13) gates milestone 1, so it
+comes before any analysis: a compiler that emits correct scalar code is the platform every
+later measurement is taken against. The domain module in step 3
 is the highest-risk item and should be built and tested standalone before wiring into a
 pass, because an unsound domain miscompiles silently. Stage 5 alone should reach milestone 2,
 so stages 6 and 7 defer until nbody works. Stage 10, vectorization, depends on 5, 7, 8 and 9

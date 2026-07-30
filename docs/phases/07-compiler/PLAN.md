@@ -189,15 +189,14 @@ Pipeline, with the contribution concentrated in stages 4 through 7:
 section, held firmly. This compiler exists to answer a question, and features that do not
 serve nbody, fannkuchredux or spectralnorm are out until it does.
 
-**The back end is the largest single piece of work.** Instruction selection, register
-allocation and an assembler are what `cpnanopass.ss` spends 10912 lines on. Mitigation is
-scope: we need enough x86-64 to compile three benchmark programs, not a general compiler.
-A working scalar back end for a fixnum-and-flonum subset is a fraction of that.
+**The back end gates everything, so it comes first.** Nothing downstream can be measured
+until the compiler emits correct native code, so instruction selection, register allocation
+and the assembler precede every analysis pass. That is a dependency, not a cost.
 
-**Register allocation is where naive compilers lose.** Linear scan is the pragmatic choice
-and is well documented. Graph coloring is better and slower to write. Start with linear
-scan and measure before reaching for anything cleverer, because a bad allocator will hide
-every gain from the analysis passes.
+**A weak register allocator hides every gain from the analysis passes.** If values spill
+across the inner loop, no amount of interval reasoning shows up in the timing. Linear scan
+is the documented baseline and graph coloring is the better answer; the decision should be
+made by measuring spill counts in the emitted loop, not assumed either way.
 
 **An unsound analysis produces wrong code silently.** This is the most dangerous failure
 mode in the project, worse than being slow. Every removed bounds check is a memory safety

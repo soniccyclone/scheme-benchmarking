@@ -155,8 +155,6 @@ Three outcomes, all informative:
 
 ## Tier two: the expansion-time propagator
 
-The novel part, and the part most likely to consume a week. Timebox it.
-
 The goal is that the source above stops needing `suppress` and per-site operator choices
 at all, because the macro derives them. Given declared parameter types, walk the
 procedure body and propagate.

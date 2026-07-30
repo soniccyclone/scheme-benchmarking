@@ -346,10 +346,10 @@ support for debugging, and the closed-world assumption rules out separate
 compilation entirely. For our purposes none of that matters, because nbody is one
 small file and we only want the number.
 
-`stalin` 0.11-11build1 is packaged for Ubuntu 26.04. Getting a 2006 R4RS compiler
-to accept our nbody is real work, and it is the most likely configuration to be
-dropped for cost. Budget it as optional in phase 3 and do not let it block the
-rest.
+`stalin` 0.11-11build1 is packaged for Ubuntu 26.04. Porting nbody to its R4RS dialect is
+mechanical: no `import`, no `define-record-type`, no bytevectors, `exact->inexact` instead of
+`inexact`. The arithmetic expression order has to stay identical so the output still matches
+the fixture.
 
 ---
 

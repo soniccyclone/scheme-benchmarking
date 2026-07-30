@@ -15,8 +15,8 @@ see how high inference reaches. The phase ends with a verdict on the design deci
 
 ## Preconditions
 
-Phase 3 complete. These are reference points for a result that already exists, so
-running them before phase 3 risks wasted effort if phase 3 kills the project.
+Phase 3 complete. These are reference points read against a result, so the result has to
+exist first for them to mean anything.
 
 ## Part A: Ada, configuration 8
 
@@ -136,10 +136,11 @@ One thing to watch: ECL compiles through C, so its result partly reflects the C
 compiler. Note that when reporting, and do not read ECL as a pure measure of how well
 its own type inference works.
 
-## Part C: Stalin, configuration 7, optional
+## Part C: Stalin, configuration 7
 
-Highest effort, lowest marginal information, because `RESEARCH.md` section 3 already
-extracted Stalin's profile from the existing corpus. Runs last. Drop it if it fights.
+Runs last because it is the least dependent on the other two, not because it matters
+least. `RESEARCH.md` section 3 already extracted Stalin's profile from the existing corpus,
+so this confirms it on our program and our machine.
 
 ### Install
 
@@ -208,14 +209,12 @@ docs/phases/04-reference-points/RESULTS.md
 - Ada measured at all three check levels, with a written verdict on
   `../../PROPOSAL.md` section 2b.
 - ECL and CLISP measured, with a written verdict on the "Common Lisp or SBCL" question.
-- Stalin measured, or explicitly dropped with the reason recorded.
+- Stalin measured on the same program and machine as the rest.
 - All variants match the output fixture.
 
 ## Task decomposition notes
 
-Part A, part B, and part C are fully independent and can be worked in any order or in
-parallel. Part A is the critical path for the design decision and should be scheduled
-first regardless of effort. Part B is a few hours at most. Part C is open-ended and
-should be timeboxed, with dropping it treated as an acceptable outcome rather than a
-failure. The Ada three-build comparison is one unit: a single build in isolation
-answers nothing.
+Part A, part B, and part C are fully independent and parallelizable. Part A comes first
+because it is the one that can refute a design decision already made. The Ada three-build
+comparison is one indivisible unit: a single build in isolation answers nothing, since the
+result is the gap between check levels.

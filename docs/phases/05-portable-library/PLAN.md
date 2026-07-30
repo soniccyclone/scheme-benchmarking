@@ -64,9 +64,10 @@ implementations. If so, the honest result is that tier one reaches part of the w
 the remainder is exactly what the missing policy switch would buy. That is still a
 publishable number and it strengthens the SRFI argument rather than weakening it.
 
-**The propagator eats a week.** Tier one is a weekend. Tier two is open-ended. Timebox
-it and stop at tier one if the schedule matters, since tier one is sufficient to
-validate the proposal.
+**Tier two may find that expansion-time inference cannot recover much.** A macro sees
+only what is lexically present, so it cannot propagate across a procedure boundary without
+a declaration at the callee. That limit is real and is worth documenting as a result either
+way, since it is the boundary between what a library can do and what needs a compiler.
 
 **Scope creep in the predicate language.** `(f64vector-of flonum?)` invites a full
 contract language. Racket has one and it is large. Draw the line at the parameterized

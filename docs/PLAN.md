@@ -70,7 +70,7 @@ to sanity-check against.
 | 4 | implementation-specific max: Chez `optimize-level 3`, Racket unsafe ops | the folklore ceiling |
 | 5 | SBCL, `declare` + `(safety 0)`, scalar, no `sb-simd` | tuned conformant CL |
 | 6 | `gcc -O2 -fno-tree-vectorize`, and `-O3 -march=native` | scalar and vectorized C reference |
-| 7 | Stalin, whole-program inference | the Scheme ceiling, reached by the other route |
+| 7 | Stalin, whole-program inference | the Scheme ceiling, reached by inference instead of declaration |
 | 8 | GNAT Ada, `pragma Suppress`, per-check | the design we are copying, measured |
 | 9 | ECL and CLISP, same source as 5 | is it Common Lisp or is it SBCL? |
 
@@ -220,9 +220,10 @@ people could use. I lean writeup first, because the measurement tells us whether
 the library's ceiling is worth the effort, and because if Tangerine turns out to be
 unimplemented then phase 5's shape changes completely.
 
-**How much does the expansion-time propagator matter to you?** It is the novel part
-and it is also the part most likely to eat a week. The honest compatibility layer
-is a weekend.
+**How much does the expansion-time propagator matter to you?** It is the novel part of
+the library track. Note that `CHEZ-ANALYSIS.md` since found that Chez already narrows types
+from predicate tests, so a propagator over Chez has less to do than originally thought. In
+our own compiler it is stage 5 onward and is the main event.
 
 **Should R6RS implementations be in scope?** R6RS standardized the fx/fl operators
 in 2007 and R7RS-small dropped them, so R6RS Schemes (Larceny, Ypsilon, Mosh,

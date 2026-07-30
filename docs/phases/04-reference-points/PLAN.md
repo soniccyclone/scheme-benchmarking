@@ -44,20 +44,22 @@ fast" is really "SBCL is fast," and what the standard supplied was the portable
 notation rather than the performance. That sharpens `../../PLAN.md` section 1 instead
 of undermining it. Cheapest item in the matrix.
 
-### Last, and optional: configuration 7, Stalin
+### Last: configuration 7, Stalin
 
 Stalin is the Scheme ceiling reached by inference rather than declaration. If it beats
 every declaration-based configuration by a wide margin, the interesting problem is
 inference and this project is aimed at the wrong target.
 
-It is last because it is the highest-effort item here. Stalin 0.11 targets R4RS,
-predates R7RS by seven years, and failed 23 of 57 benchmarks in the existing corpus on
-language coverage grounds. Porting nbody to it is real work.
+Last because it is the least dependent on the other two, not because it matters least.
+Stalin 0.11 targets R4RS and predates R7RS by seven years, so the port is a rewrite into
+R4RS: no `import`, no `define-record-type`, no bytevectors, `exact->inexact` instead of
+`inexact`. Keep the arithmetic expression order identical so the output still matches the
+fixture.
 
-It is optional because `RESEARCH.md` section 3 already extracted most of what Stalin
-has to say from the `r7rs-benchmarks` data: bimodal, 2x to 4x faster than Chez on
-float and array code, 5x to 16x slower where lifetime analysis fails and everything
-falls through to the Boehm collector. Drop this configuration if it fights.
+`RESEARCH.md` section 3 already extracted Stalin's profile from the `r7rs-benchmarks` data:
+bimodal, 2x to 4x faster than Chez on float and array code, 5x to 16x slower where lifetime
+analysis fails and allocation falls through to Boehm. So this confirms rather than discovers.
+What it adds is Stalin on the same program and machine as everything else.
 
 ## Work items
 
@@ -71,7 +73,7 @@ falls through to the Boehm collector. Drop this configuration if it fights.
 - Ada measured at all three check levels, with a stated verdict on whether section 2b
   of `../../PROPOSAL.md` survives.
 - ECL and CLISP numbers, with a stated verdict on the "CL or SBCL" question.
-- Stalin either measured or explicitly dropped with the reason recorded.
+- Stalin measured on the same program and machine as the rest.
 
 ## Risks
 
@@ -83,8 +85,8 @@ toward something closer to the CL dial, or toward a different mechanism entirely
 `-O` level constant across the three Ada variants so the only variable is check
 suppression.
 
-**Stalin cannot compile nbody at all.** Acceptable. Drop it and cite the existing
-corpus data instead.
+**Stalin rejects R7RS-era constructs.** Expected, since it targets R4RS. The port is a
+rewrite into R4RS rather than a translation.
 
 ## Outputs
 
