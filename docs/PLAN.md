@@ -185,11 +185,30 @@ accident.
 | 2 | `phases/02-calibration/` | real dev-N timings and the machine noise floor | 3, 4 |
 | 3 | `phases/03-core-measurement/` | configurations 1 to 6. The number the project exists for | 5, 6 |
 | 4 | `phases/04-reference-points/` | configurations 7, 8, 9. Ada, the CL controls, Stalin | 6 |
-| 5 | `phases/05-portable-library/` | build the compatibility layer from `PROPOSAL.md` | 6 |
+| 5 | `phases/05-portable-library/` | the compatibility layer. **Optional now, see below** | 6 |
 | 6 | `phases/06-writeup/` | the standards timeline with measured deltas attached | nothing |
+| **7** | **`phases/07-compiler/`** | **an optimizing Scheme that reaches and beats CL-level optimization** | **nothing** |
 
 Phase 1 can invalidate the premise of phases 3 and 5. Phase 3 can invalidate the
-whole proposal. Both are deliberate: the cheap falsification steps come first.
+proposal. Both are deliberate: the cheap falsification steps come first.
+
+**Phase 7 is the point, and it does not wait on the measurement.** It needs only phase 1,
+and can run in parallel with everything else. The reason is that `CHEZ-ANALYSIS.md` already
+established, by reading source against the compiler literature, what Chez structurally
+cannot do: its lattice is level 1 in the abstract-domain hierarchy, it has no loop analysis
+at all, its `optimize-level` is global rather than lexical, and it offers no way to feed the
+lattice beyond predicates. Those are architectural, not configurable, so no amount of
+measurement on Chez tells us anything about the design's ceiling. Answering "can Scheme
+reach and beat CL" requires a compiler.
+
+**Phase 5 is demoted to optional.** It was designed as an instrument for discovering
+compiler requirements. Reading the Chez and SBCL source supplied those requirements
+directly and more precisely than a measurement would have. Build it only if an SRFI is
+still wanted for its own sake.
+
+Phases 1 through 4 stay because they are cheap and because they establish the baseline
+phase 7 has to beat: configuration 5 is milestone 4's target, configuration 6 is milestone
+5's.
 
 ---
 
