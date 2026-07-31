@@ -107,8 +107,12 @@ wiring it into a pass, because every later stage depends on it being right.
 Operations needed, standard lattice interface: `join`, `meet`, `widen`, `implies?`,
 `bottom?`. Transfer functions for the arithmetic primitives.
 
-Widening is required for termination on loops. Use the standard approach: widen to
-unbounded after a fixed iteration count, then optionally narrow. Cousot and Cousot 1977 is
+Widening is required for termination on loops. **Use widening with thresholds, not the
+plain jump to unbounded.** Astrée used a single untuned dense ramp of a few dozen values
+across every program it analysed, and every bound stabilised at the smallest threshold above
+the concrete bound. Cousot and Cousot anticipate the technique in §9 of the 1977 paper. It
+is nearly free and it is the difference between recovering `[1,101]` and recovering nothing
+on a loop whose bound is not syntactically obvious. Cousot and Cousot 1977 is
 the framework; any abstract interpretation text has the interval instance.
 
 The bounds check transfer function is the payoff:
@@ -137,6 +141,13 @@ Needed when the array length is not a compile-time constant, which is
 `fannkuchredux` and most real code. The check becomes provable when `i` is in the
 `strict-lt` set of the variable holding the length.
 
+**Cheap fallback if the reduced product proves fiddly.** Logozzo's own Figures 11 and 12
+report that an *unreduced* Cartesian product of intervals and strict upper bounds validates
+88.82% of accesses, against 88.89% for full Pentagons. The entire reduced-product machinery,
+the refined order and the cross-checking join, is worth 0.07 percentage points. Running the
+two domains side by side captures essentially all of the value, so build that first and add
+reduction only if measurement demands it.
+
 Pentagon rather than Octagon deliberately, and the Pentagons paper's own §8.1 is stronger
 evidence than its abstract: **closure made Pentagons less precise, not more**, on three of
 four .NET assemblies (82.77% against 83.19% on mscorlib) while tripling analysis time. Our
@@ -145,10 +156,16 @@ would miss them.
 
 **Three implementation warnings, all from reading the source papers rather than summaries:**
 
-1. **Figure 3 of the Pentagons paper prints an unsound interval widening.** Its form,
-   `a₁ ≤ a₂ ? a₂ : -∞`, tightens the lower bound. Use Cousot's widening instead. The same
-   figure's `sub` transfer function prints `b(inf(y))` where it means `inf(b(y))`. We would
-   have implemented both straight from the figure.
+1. **The Pentagons paper prints four transcription errors, and one is an unsound
+   widening in both halves.** Figure 3 reads
+   `[a₁ ≤ a₂ ? a₂ : -∞, b₁ ≥ b₂ ? b₂ : +∞]`; the intent is `a₁` and `b₁` in the true
+   branches, and as printed it tightens both bounds. **The bug is masked whenever the
+   iterate sequence is monotone increasing**, which is exactly what a naive test suite
+   produces, so it will pass tests and fail on real input. Figure 5's `Sub` widening carries
+   the identical one-operand substitution, and §6.2.2's `rem` transfer function assigns to
+   `x` where the statement's variable is `r`, with an unbalanced bracket. Figure 3's `sub`
+   also prints `b(inf(y))` for `inf(b(y))`. Treat every formula in that paper as
+   transcription-suspect and re-derive.
 2. **Never strongly-close the left argument of a widening.** Miné exhibits a four-line
    program that produces a strictly increasing infinite chain if you do. Pentagon's `Sub`
    has no closure operation at all, so the hazard simply does not arise. That is an

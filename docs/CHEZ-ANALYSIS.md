@@ -229,7 +229,14 @@ The domain is the first. The second is structural and I missed it initially:
 the entire compiler. SBCL has `src/compiler/loop.lisp` with `loop-analyze` and natural-loop
 detection.
 
-This matters because the classical bounds-check-elimination techniques are loop-based.
+This matters for *hoisting* a check out of a loop. It matters less for *proving* one
+inside a loop than an earlier draft of this section claimed. Clousot is the counterexample:
+it has no loop recognition pass and no induction-variable analysis, stores invariants only
+at loop headers, and still validates 88.9% of array accesses. A widened-and-narrowed
+fixpoint at the header already gives the index's range across all iterations. ABCD makes the
+same point from the other side, since its amplifying-cycle detection turns out to be
+induction-variable handling as a free side effect. So the loop pass buys hoisting, not
+provability, and it can be thinner or land later than the pipeline ordering assumes.
 Gupta's 1993 flow-analysis method and the ABCD algorithm (Bodík, Gupta and Sarkar, PLDI
 2000) both work by hoisting or coalescing checks across loop iterations using induction
 variable information. Without loop structure, even a Pentagon domain would only remove
