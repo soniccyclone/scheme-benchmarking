@@ -202,6 +202,26 @@ serve nbody, fannkuchredux or spectralnorm are out until it does.
 until the compiler emits correct native code, so instruction selection, register allocation
 and the assembler precede every analysis pass. That is a dependency, not a cost.
 
+**SELF measured static type analysis losing to a profile counter, and that is a direct
+challenge to this plan.** Hölzle and Ungar (PLDI 1994) report that SELF-91's iterative
+static type analysis performed no better than *no* type analysis at all: the same call
+counts, marginally better run time. A single profile counter delivered 1.7x. Our whole
+architecture bets that declaration-anchored static analysis reaches CL-level optimization
+without profile data.
+
+The counter-argument is that SELF's problem was open-world receiver dispatch, where the set
+of possible types at a call site is unbounded and genuinely needs observation, while ours is
+a closed finite set of numeric representations that declarations pin exactly. That is
+plausible and it is unproven. Treat it as the live risk it is rather than assuming the
+distinction holds, and note that if it does not hold, the answer is to add profile feedback
+rather than to abandon the analysis.
+
+A second result from the same paper is worth internalizing: call-overhead elimination is
+only about 13% median of the speedup from inlining. Roughly 45% is ordinary optimizations
+working better on larger procedure bodies. **Inlining is enabling, not terminal**, which
+argues for putting `cp0`-style inlining early in the pipeline rather than treating it as a
+peephole win.
+
 **A weak register allocator hides every gain from the analysis passes.** If values spill
 across the inner loop, no amount of interval reasoning shows up in the timing. Linear scan
 is the documented baseline and graph coloring is the better answer; the decision should be

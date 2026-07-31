@@ -277,6 +277,22 @@ Ingestion order suggestion is at the bottom. The grouping below is by role in ou
 pipeline (`../07-compiler/CUJ.md`), not by publication date, so an agent pulling these can
 map each work to the pass it informs.
 
+### Corpus quality: two files extract badly
+
+Recorded so nobody quotes numbers out of them by accident.
+
+`aiken-wimmers-lakshman-soft-typing-with-conditional-types` uses a font with unmapped digit
+glyphs, so **every numeral is silently dropped** on text extraction: section numbers,
+citation numbers, percentages, line counts. Any quantitative claim from that paper must be
+read from the rendered page, not from extracted text.
+
+`chambers-ungar-customization-optimizing-compiler-technolog` is an OCR'd scan with garbled
+code fragments (`iffrue:` for `ifTrue:`, `got0` for `goto`, `l` for `1`).
+
+Also: this machine has no `poppler-utils`, so the `Read` tool's PDF path fails outright.
+Working route is PyMuPDF. Installing `poppler-utils` would save every ingest agent from
+rebuilding a venv.
+
 ### Correction: several entries in this bibliography were wrong
 
 The largest was two SSA papers with their labels swapped. `ssa.pdf` from c9x.me is the
