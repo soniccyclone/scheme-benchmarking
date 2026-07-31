@@ -34,3 +34,23 @@ description: Index of techniques documents in this bundle.
 - [Proper tail calls](/techniques/tail-call-optimization.md)
 - [Type feedback and guarded devirtualization](/techniques/type-feedback.md)
 - [Type recovery from untyped code](/techniques/type-recovery.md)
+
+## Merged facets
+
+- alignment-analysis -> [slp-vectorization](/techniques/slp-vectorization.md)
+- assignment-conversion -> [closure-conversion](/techniques/closure-conversion.md)
+- customization -> [type-feedback](/techniques/type-feedback.md)
+- explicit-control-evaluator -> [continuation-passing-style](/techniques/continuation-passing-style.md)
+- guarded-devirtualization -> [type-feedback](/techniques/type-feedback.md)
+- lexical-addressing -> [closure-conversion](/techniques/closure-conversion.md)
+- live-interval-analysis -> [register-allocation](/techniques/register-allocation.md)
+- liveness-analysis -> [register-allocation](/techniques/register-allocation.md)
+- message-splitting -> [type-feedback](/techniques/type-feedback.md)
+- one-shot-continuations -> [stack-segment-continuations](/techniques/stack-segment-continuations.md)
+- phase-ordering -> [equality-saturation](/techniques/equality-saturation.md)
+- predicate-narrowing -> [type-recovery](/techniques/type-recovery.md)
+- soft-typing -> [type-recovery](/techniques/type-recovery.md)
+- stop-and-copy-gc -> [generational-gc](/techniques/generational-gc.md)
+- tagging -> [storage-class-assignment](/techniques/storage-class-assignment.md)
+- tree-pattern-matching -> [instruction-selection](/techniques/instruction-selection.md)
+- type-inclusion-constraints -> [type-recovery](/techniques/type-recovery.md)
