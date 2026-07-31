@@ -676,6 +676,14 @@ extracting first-page text: "Biglo o: ortable and optimizing compiler for strict
 languages / Man uel Serrano and Pierre eis / INRIA, B.P 105, Rocquencourt". The missing
 characters are dvips kerning artifacts in extraction, not damage.
 
+**A fifth surface, and its limit.** Playwright with real Chromium is installed and working
+(see `tools/browser/README.md`). It solves JS-rendered pages and User-Agent blocking. It does
+**not** get past `dl.acm.org`, which returns 403 with Cloudflare's "Just a moment..."
+interstitial to headless Chromium on both the PDF and landing-page URLs, even with
+automation flags disabled and `navigator.webdriver` patched. Going further would mean
+defeating an anti-bot control rather than automating normal access, so it was not attempted.
+The two ACM papers remain one manual click each.
+
 **Search surfaces, in the order that actually pays.** Four were used across this work and
 they are not interchangeable. (1) Per-paper web search, which is the step most easily
 skipped and which found the Chaitin mirror. (2) Wayback CDX enumeration of an author or
