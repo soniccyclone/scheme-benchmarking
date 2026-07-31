@@ -70,14 +70,13 @@ traditional interleaved loop is not order-independent when saturation is not rea
 domains would attach. An analysis is `(D, make, join, modify)` with `D` a join-semilattice.
 `make(n)` abstracts a new e-node from its children's data, `join` merges data when e-classes merge,
 `modify(c)` may write back into the e-graph and must be idempotent. The invariant is that each
-class's datum is the join of `make(n)` over its e-nodes, and `modify(c) = c`. Maintenance folds
-into `repair`: after parent deduplication, re-`make` each parent and join into its data, pushing it
-back on the worklist if the data changed. Constant folding falls out with `D = Option<Constant>`,
-`make` as the abstraction function and `modify` as the concretization that adds the folded constant
-e-node back into the class. Extraction with a local cost function is itself an analysis over
-`(best e-node, cost)`. Rewrites generalize from a right-hand pattern to an `apply` function that
-sees the analysis data, giving conditional rewrites (`x/x -> 1` when the class is provably nonzero)
-and dynamic rewrites.
+class's datum is the join of `make(n)` over its e-nodes. Maintenance folds into `repair`: after
+parent deduplication, re-`make` each parent and join into its data, pushing it back on the worklist
+if the data changed. Constant folding falls out with `D = Option<Constant>`, `make` as the
+abstraction function and `modify` as the concretization that adds the folded constant e-node back
+into the class. Extraction with a local cost function is itself an analysis over
+`(best e-node, cost)`. Rewrites generalize to an `apply` function that sees the analysis data,
+giving conditional rewrites (`x/x -> 1` when the class is provably nonzero) and dynamic rewrites.
 
 # Preconditions
 
@@ -102,16 +101,16 @@ not free.
 
 88x geometric mean on congruence maintenance and 21x on whole runs across 32 tests, with the
 speedup growing with problem size. Herbie's simplification went from 5022 minutes (98% of run time)
-to 1.4 minutes. Szalinski about 1000x. Verifying TASO's synthesized equalities: Z3 at 24.65s, egg
-at 1.56s and 0.52s batched. The library is roughly 5000 lines of Rust, generic over language,
-analysis and cost function.
+to 1.4 minutes. Verifying TASO's synthesized equalities: Z3 at 24.65s, egg at 1.56s and 0.52s
+batched. The library is roughly 5000 lines of Rust, generic over language, analysis and cost
+function.
 
 Read the attribution carefully. Figure 12 decomposes Herbie's 3000x: 5022 to 49.4 minutes from
 *batching*, 49.4 to 22.4 from deferred rebuilding, 22.4 to 1.4 from switching to Rust. Attributing
 the whole 3000x to rebuilding is wrong. The isolated rebuilding contribution is the 88x/21x on
 egg's own test suite, and that suite is two applications, a small CAS and a lambda partial
 evaluator, which is a thin basis for an asymptotic claim. No theoretical analysis of rebuilding in
-the online setting is offered; the authors say it is likely highly workload dependent.
+the online setting is offered.
 
 The cost the abstract does not mention is blowup. Expansive rules such as associativity and
 distributivity grow the e-graph exponentially, which is why egg ships a backoff scheduler that

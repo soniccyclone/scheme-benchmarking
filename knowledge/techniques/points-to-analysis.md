@@ -141,12 +141,11 @@ Our precision problem in a numeric kernel will be about context, not inclusion, 
 Andersen first.
 
 **Field sensitivity does not rescue you on real code.** LLVM goes the other way with Data Structure
-Analysis, flow-insensitive but field-sensitive and context-sensitive, using declared types
-speculatively and checking conservatively. Lattner and Adve report type information checkable for
-68% of static memory accesses across SPEC CPU2000 C, dropping to 43.7% on 176.gcc, 30.3% on
-253.perlbmk and 12.5% on 177.mesa. The named causes are custom allocators, the same object being
-described by different struct types in different places, and imprecision in DSA itself. So the more
-expensive analysis also fails on half the accesses in real programs; it fails on different ones.
+Analysis, flow-insensitive but field-sensitive and context-sensitive. Lattner and Adve report type
+information checkable for 68% of static memory accesses across SPEC CPU2000 C, dropping to 43.7% on
+176.gcc and 12.5% on 177.mesa, with custom allocators and the same object described by different
+struct types in different places as the named causes. The more expensive analysis also fails on half
+the accesses in real programs; it fails on different ones.
 
 **A third position: do not build an alias analysis, encode aliasing into the dataflow problem.**
 Wegman and Zadeck insert `if IsAliased(a,b) then b := a` after each assignment to a maybe-aliased
@@ -156,20 +155,19 @@ their own recommended fallback is to assign bottom to heavily-aliased variables.
 having because it makes stage 09's results visible to the numeric domains with no separate merge
 machinery.
 
-**A title collision that will retrieve the wrong algorithm.** Reference [Ste95a] in this paper's
-own bibliography is "Bjarne Steensgaard, *Points-to analysis in almost linear time*, Technical
-Report MSR-TR-95-08, Microsoft Research, March 1995." Identical title, different document,
-different algorithm. Section 7 says the POPL paper "is an extension of another almost linear
-points-to analysis algorithm [Ste95a]" using "stricter typing rules, implying that the results are
-more conservative than they need be," and the equality-versus-inequality improvement is precisely
-the difference. A title-based lookup can retrieve the weaker tech report. Our copy is the stronger
-one, confirmed by the presence of the `<=` typing rules and the `a = 4; x = a; y = a` example.
-Separately, the copy in `sources/` has a 1995 ACM copyright line and no conference header, so its
-page numbers are unverified against the POPL 1996 proceedings.
+**A title collision that will retrieve the wrong algorithm.** Reference [Ste95a] in this paper's own
+bibliography is "Bjarne Steensgaard, *Points-to analysis in almost linear time*, Technical Report
+MSR-TR-95-08, Microsoft Research, March 1995." Identical title, different document, different
+algorithm. Section 7 says the POPL paper "is an extension of another almost linear points-to
+analysis algorithm [Ste95a]" using "stricter typing rules, implying that the results are more
+conservative than they need be," and the equality-versus-inequality improvement is precisely the
+difference. Our copy is the stronger one, confirmed by the `<=` typing rules and the
+`a = 4; x = a; y = a` example. Separately, the copy in `sources/` has a 1995 ACM copyright line and
+no conference header, so its page numbers are unverified against the POPL 1996 proceedings.
 
-**One thin spot the paper leaves.** It claims treating all primitive operations identically is
-acceptable, but the implementation already deviates for boolean-returning operations, which
-suggests the uniform rule was costing real precision.
+**One thin spot.** The paper claims treating all primitive operations identically is acceptable, but
+the implementation already deviates for boolean-returning operations, which suggests the uniform
+rule was costing real precision.
 
 # For us
 

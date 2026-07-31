@@ -68,10 +68,11 @@ every union discriminative), introduce one polymorphic constructor `R` with a fl
 type constructor and a pattern slot per argument, and map each type to `R+(t)` (its
 supertypes) and `R-(t)` (its subtypes), mutually recursive because `->` is antimonotonic in
 its first argument. Union disappears into flag instantiation, which plain unification already
-does. Circular unification handles recursion. Check insertion runs in two phases: propagate
-positive information with every `-` flag replaced by a fresh variable, so unification cannot
-fail; then per primitive occurrence unify against the original encoded type and insert a
-narrower where that fails.
+does; circular unification handles recursion. The transferable part is the check-insertion
+split: propagate positive information first, with every `-` flag replaced by a fresh variable
+so unification cannot fail, then per primitive occurrence unify against the original encoded
+type and place a narrower only where the two clash. That is the right shape for our
+guard-placement pass.
 
 **Type recovery over a control-flow analysis.** Shivers, chapter 9, is quantity-based: types
 attach to qnames, variables bind to qnames, and the answer is a type cache
@@ -92,39 +93,36 @@ and type-check elimination pass.
 
 # Preconditions
 
-Constructor sets must be finite and disjoint for the unification encoding, since `R`'s arity
-is computed from them; a real Scheme's constructor set makes those terms large. Tidiness rules
-out `fix x.x` and `cons(x) + cons(y)`. Narrowing is *syntactic* on `case` patterns in Aiken et
-al., so Scheme needs a front-end translation from `(if (fixnum? x) A B)` into a case-like
+Constructor sets must be finite and disjoint for the unification encoding, since `R`'s arity is
+computed from them; a real Scheme's constructor set makes those terms large. Tidiness rules out
+`fix x.x` and `cons(x) + cons(y)`. Narrowing is *syntactic* on `case` patterns in Aiken et al.,
+so Scheme needs a front-end translation from `(if (fixnum? x) A B)` into a case-like
 discrimination before any of it applies, and the paper does not supply that translation.
 Neither soft-typing paper covers mutation or `call/cc`; the retrospective credits Wright and
 Cartwright (LFP 1994) with that.
 
-Two harder preconditions. First, narrowing is unsound across merged analysis contexts. Shivers
-proves the rule: an analysis is safe under contour merging only if it moves monotonically
-toward approximation, and narrowing does not, which is why type recovery needs reflow where
-plain CFA does not. If we inline one procedure into two call sites and analyze the merged
-body, we inherit that bug. Second, integer does not mean fixnum. Shivers is explicit that
-bignums defeat fixnum recovery entirely, because two's complement fixnums are not closed under
-addition, subtraction, multiplication, negation or division. Type recovery can prove every
-operation in `fact` is integer arithmetic and still not license an `add`. Only range analysis
-closes that gap, which is why stage 05 and not this technique is load-bearing for our numeric
-benchmarks.
+Two harder ones. Narrowing is unsound across merged analysis contexts: Shivers proves that an
+analysis is safe under contour merging only if it moves monotonically toward approximation, and
+narrowing does not, which is why type recovery needs reflow where plain CFA does not. If we
+inline one procedure into two call sites and analyze the merged body, we inherit that bug. And
+integer does not mean fixnum. Bignums defeat fixnum recovery entirely, because two's complement
+fixnums are not closed under addition, subtraction, multiplication, negation or division. Type
+recovery can prove every operation in `fact` is integer arithmetic and still not license an
+`add`. Only range analysis closes that gap, which is why stage 05 and not this technique is
+load-bearing for our numeric benchmarks.
 
 # Cost
 
-Predicate narrowing is one pass over the term with a finite lattice; Chez ships it at the safe
-optimize level and it does not appear in any compile-time complaint. Unification-based soft
-typing inherits ML's profile: linear in practice, exponential in nested `let` in the worst
-case, which the authors report never observing. Set-based analysis, the successor, is O(n^3)
-without polyvariance and exponential with it. Aiken's solver is exponential in the worst case
-and mild in practice, with the notable detail that a *minority* of run time is in the
-constraint solver and the majority goes to simplifying type expressions and deciding where to
-insert checks, a part that was never tuned. Shivers' type recovery over 1CFA cost 5.1 to 7.8
-seconds on programs under twenty lines, roughly an order of magnitude more than the underlying
-1CFA, because reflow re-runs the abstract interpretation once per call context.
-
-Precision given up is stated most clearly by the failure to have principal types, below.
+Predicate narrowing is one pass with a finite lattice; Chez ships it at the safe optimize level
+and it does not appear in any compile-time complaint. Unification-based soft typing inherits
+ML's profile: linear in practice, exponential in nested `let` in the worst case, which the
+authors report never observing. Set-based analysis, the successor, is O(n^3) without
+polyvariance and exponential with it. Aiken's solver is exponential in the worst case and mild
+in practice, with the notable detail that a *minority* of run time is in the constraint solver
+and the majority goes to simplifying type expressions and deciding where to insert checks, a
+part that was never tuned. Shivers' type recovery over 1CFA cost 5.1 to 7.8 seconds on programs
+under twenty lines, roughly an order of magnitude more than the underlying 1CFA, because reflow
+re-runs the abstract interpretation once per call context.
 
 # Disagreements
 

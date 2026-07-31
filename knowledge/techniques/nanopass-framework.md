@@ -158,39 +158,32 @@ phenomenon rather than necessarily a bug in our passes.
 **The comparison is not apples-to-apples and they say so.** They lacked the resources to build a
 second nanopass compiler matching the old one's function, so the 1.75x bundles nanopass overhead
 with a deliberately slower graph-coloring allocator. The nanopass tax alone is unmeasured, and the
-0.96-1.03x front-end figure is the closest available proxy.
-
-**The speedup is not attributable to nanopass.** "Produces faster code than the original, averaging
-15-27%" is true, and the paper attributes it to the graph-coloring register allocator with move
-biasing, improved closure optimization and cross-library optimization. Nanopass made the rewrite
-*feasible*; it did not make the code fast. The similix and softscheme benchmarks got 1.22 to 1.54x
-*slower* because they invoke the compiler at run time, reported honestly and cutting the other way.
+0.96-1.03x front-end figure is the closest available proxy. Relatedly, the 15-27% speedup is
+attributed by the paper to the graph-coloring allocator, improved closure optimization and
+cross-library optimization, not to nanopass structure. Nanopass made the rewrite *feasible*; it did
+not make the code fast. The similix and softscheme benchmarks got 1.22 to 1.54x *slower* because
+they invoke the compiler at run time, reported honestly and cutting the other way.
 
 **Compile time was the objection and fusion was the proposed answer; the answer was never needed.**
 The ICFP 2004 committee accepted the original paper only after it was repositioned as education,
 because they did not believe many-small-passes could survive commercial compile-time budgets. The
-2004 remedy proposed was a pass combiner using deforestation to fuse passes on demand. As far as the
-record shows it was never built. Keep and Dybvig answered empirically instead. Read together, the
-objection was reasonable and wrong: compile time really is the risk, it really did cost 1.7x, and
-that was affordable.
-
-**Two mechanisms were removed between generations, which is information.** The prototype's automatic
-*combining procedures* for extra return values were dropped, because a commercial compiler threads
-values through and mutates fields on variable records rather than merging lists. And the `void` and
-`datum` output languages became "passes with no output language." Both were measured or exercised
-before being cut.
+2004 remedy proposed was a pass combiner using deforestation to fuse passes on demand, and as far as
+the record shows it was never built. The objection was reasonable and wrong: compile time really is
+the risk, it really did cost 1.7x, and that was affordable. Two mechanisms were also *removed*
+between generations, which is information: the prototype's automatic combining procedures for extra
+return values, because a commercial compiler threads values and mutates fields on variable records
+rather than merging lists, and the `void`/`datum` output languages.
 
 **One class of optimization does not fit.** Click's GVN deliberately produces an *illegal* program,
 instructions placed nowhere, repaired by a following code-motion pass. A pass whose output is
-provably incorrect until a later pass repairs it cannot be typed honestly in this framework; the
-output language would have to admit unplaced instructions, which is the sea of nodes, not a Scheme
-core language. If we want that architecture the honest encoding is a distinct intermediate language
-where placement is genuinely optional, not a fudge in `Lcore`.
+provably incorrect until a later pass repairs it cannot be typed honestly here; the output language
+would have to admit unplaced instructions, which is the sea of nodes, not a Scheme core language. If
+we want that architecture the honest encoding is a distinct intermediate language where placement is
+genuinely optional, not a fudge in `Lcore`.
 
-**Syntax drift across the three documents is significant.** The 2004 surface syntax
-(`(define-language L over (x in var) where ...)`, `(define-pass p L1 -> L2 ...)`, `void`/`datum`
-output languages) is not what `nanopass-framework-scheme` ships. Read 2004 for the methodology and
-2012/2013 plus the library source for the syntax.
+**Syntax drift across the three documents is significant.** The 2004 surface syntax is not what
+`nanopass-framework-scheme` ships. Read 2004 for the methodology and 2012/2013 plus the library
+source for the syntax.
 
 # For us
 
@@ -203,20 +196,16 @@ them fails at expansion time. That is the mechanism by which "the policy lives i
 threaded through the passes, not in a global parameter" gets enforced rather than merely intended.
 
 Interval and pentagon facts ride as *extra return values*, not as annotations in the grammar. If we
-find ourselves adding an `absval` field to a production, we have chosen wrong. Be ready for the
+find ourselves adding an `absval` field to a production, we have chosen wrong. Expect the
 flow-insensitivity of autogenerated clauses to force hand-written transformers in stages 05 and 06;
 Keep hit exactly this and named it.
 
 Add verification passes, which our CUJ currently lacks. `L -> L`, disableable, seven of them in the
 2004 course compiler. After stage 04, verify every `declare` premise names a bound variable; after
 stage 06, verify no check survives that the domain claimed to prove; after stage 09, verify every
-claimed non-aliasing pair traces to distinct allocation sites. And use `=>` translates-to from stage
-03 onward if the shipping library still supports it, so every pass's output can be run under Chez
-and diffed against the reference.
+claimed non-aliasing pair traces to distinct allocation sites.
 
-Budget with Keep's numbers rather than intuition. Our new stages 05 through 10 all sit *before*
+Budget with Keep's numbers rather than intuition. Our stages 05 through 10 all sit *before*
 instruction selection, in the 0.2 to 0.6% region, so nine more passes is a few percent, not a
 doubling. The 68.5% traversal overhead says the lever on pass cost is not doing less work per node,
-it is not running a full traversal at all. And the 2004 course compiler's decomposition is a closer
-model for our phase 7 than the Chez back end is, because someone has actually taught it: eleven
-passes for closure conversion, four for lazy saves. That is the granularity target.
+it is not running a full traversal at all.

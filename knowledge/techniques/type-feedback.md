@@ -85,12 +85,11 @@ invocation counter in its prologue, decaying exponentially so the system measure
 *rates*. On overflow the recompiler does not recompile the method whose counter tripped: it
 walks *up* the call chain and recompiles a caller that makes many calls to unoptimized or small
 methods, or creates closures, because a hot method returning a constant should be inlined into
-its caller. Replacement is on-stack, with one new optimized frame replacing several unoptimized
-ones. There is an effectiveness check: if the old and new compiled methods have exactly the same
-set of non-inlined calls, the method is flagged and never reconsidered. Inlining size estimates
-come from *previously compiled optimized code*, not from source, because compiled size accounts
-for transitive inlining. The authors state directly that the trigger ("when") mattered far less
-than the selection ("what").
+its caller. Replacement is on-stack. There is an effectiveness check: if the old and new
+compiled methods have exactly the same set of non-inlined calls, the method is flagged and never
+reconsidered. Inlining size estimates come from *previously compiled optimized code*, not from
+source, because compiled size accounts for transitive inlining. The authors state directly that
+the trigger ("when") mattered far less than the selection ("what").
 
 # Preconditions
 
@@ -161,12 +160,9 @@ asserted type inference held little promise and built customization and predicti
 Hölzle and Ungar in 1994 measured SELF-91's iterative static type analysis performing no better
 than no analysis at all. The 1994 measurement is the load-bearing one and belongs in
 `type-recovery.md`'s disagreements, where it is the counter-evidence to our architecture. It is
-recorded here as the reason this technique exists.
-
-**The back end caveat the authors volunteer.** SELF-93's back end was deliberately weak (no full
-dataflow analysis, no coloring register allocator, no delay slot filling) and the authors state
-this costs at least 10% on the measured programs, so the reported speedups are conservative.
-That qualifier is genuine, not modesty.
+recorded here as the reason this technique exists. Note also the caveat the authors volunteer:
+SELF-93's back end was deliberately weak, which they say costs at least 10% on the measured
+programs, so the reported speedups are conservative.
 
 # For us
 

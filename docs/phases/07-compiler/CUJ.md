@@ -133,6 +133,13 @@ numbering. Those references are stale in numbering only, not in meaning.
 
 ## Step 3: the abstract domain
 
+**A-normalize before stage 05. It is a precondition, not an ordering preference.**
+Flanagan et al.'s A1 rule is what brings a fact established inside a `let` body into scope
+for the enclosing continuation, and A2 is what gives a conditional's two branches separate
+abstract states. Run the interval domain over un-normalized code and it sees strictly less,
+for reasons that have nothing to do with the domain's precision. Re-run normalization after
+`04b-inline`, since inlining reintroduces nesting.
+
 This is the contribution. Implement it as its own module with a tested interface before
 wiring it into a pass, because every later stage depends on it being right.
 
@@ -322,6 +329,13 @@ the back end.
 For encodings, `sbcl/src/compiler/x86-64/avx512-insts.lisp` and `avx2-insts.lisp` are the
 reference. For register allocation structure, Chez's `s/x86_64.ss` and `s/np-register.ss`
 (168 lines, small and readable) are the reference.
+
+**One modern caveat on the 1990 design.** Hieb, Dybvig and Bruggeman's stack walking reads
+the frame size out of the code stream adjacent to each return address. That assumes the code
+stream is readable and co-located, which W^X and pointer-authenticated or signed return
+addresses both break. It is the one part of the design that does not transfer unchanged, and
+our precise-GC-roots argument leans on it, so budget a side table mapping return addresses
+to frame descriptors rather than assuming the original trick works.
 
 **Precise GC roots are why this is worth the work.** At every call site the allocator knows
 which registers and stack slots hold live references, so emit a stack map. That is what a
