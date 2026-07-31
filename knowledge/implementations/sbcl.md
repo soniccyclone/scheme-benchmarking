@@ -46,9 +46,16 @@ as user-callable intrinsics. But `grep -rlin 'vectoriz' src/compiler/*.lisp` ret
 nothing. Vector code exists only where a human wrote an intrinsic, which is why the fast
 Benchmarks Game entries are hand transliterations of Zig.
 
-**Full `call/cc`.** CL offers escaping continuations only. Note this row is inference from
-the language standard rather than from reading SBCL source, and should be verified before
-being relied on.
+**Full `call/cc`. Verified from source, not inferred.** `src/cold/exports.lisp`, which its
+own header describes as "All the stuff necessary to export various symbols from various
+packages", is 139,234 bytes and contains **zero** occurrences of `continuation` and zero of
+`call-with-current-continuation` or `call/cc`. SBCL exports no continuation API from any
+`SB-*` package, and ANSI CL defines no such operator, so what is available is escaping
+continuations only: `block`/`return-from`, `catch`/`throw`, and `unwind-protect`.
+
+This is why CL pays nothing for continuations on the normal call path, and why
+[stack-segment-continuations](/techniques/stack-segment-continuations.md) is a capability
+Chez has and SBCL does not.
 
 # The standards connection
 

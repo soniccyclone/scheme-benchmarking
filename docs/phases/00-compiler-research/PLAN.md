@@ -610,8 +610,13 @@ complete. Most exist behind `dl.acm.org`, which is bot-blocked but valid in a br
   course-reserve page; it is not authorized and is deliberately not used here.
 
 - Serrano & Weis, *Bigloo: a portable and optimizing compiler for strict functional
-  languages* (SAS 1995). The URL recorded for it turned out to serve a different Serrano
-  paper entirely. Still needed.
+  languages* (SAS 1995), LNCS 983, doi `10.1007/3-540-60360-3_50`. **Searched again and not
+  found open.** Springer serves it at
+  `link.springer.com/content/pdf/10.1007/3-540-60360-3_50.pdf` but returns non-PDF to a
+  scripted fetch. Serrano's INRIA page is reachable at
+  `www-sop.inria.fr/members/Manuel.Serrano/` and its publication index carries no PDF for
+  this paper; the `publi/` path that served his SAC 1995 CFA paper has no SAS 1995
+  counterpart. Likely needs institutional access or a manual browser download.
 
 Wider-field gaps, found while assembling Part II and still unresolved:
 
