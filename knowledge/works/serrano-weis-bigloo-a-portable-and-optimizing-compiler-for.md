@@ -78,8 +78,8 @@ computed call must check applicability and arity.
 - `X`: no closure *structure*, though an environment may remain. With zero or one free
   variable the `(function f)` form is replaced by the free variable itself; with several, by
   a bare list of free variables. Call sites become direct calls after lambda lifting.
-- `T`: closure structure shrinks to a single entry-point slot — no tag, no arity field, no
-  variable-arity entry — because the family is known statically, so type and arity
+- `T`: closure structure shrinks to a single entry-point slot, with no tag, no arity field,
+  and no variable-arity entry, because the family is known statically, so type and arity
   correctness are checked at compile time. Variable-arity functions are excluded from `T` to
   keep it to one entry point. Call sites compile to an "easy" computed application with no
   type or arity check.
@@ -111,7 +111,7 @@ by the paper, and probably wrong for anything doing type-directed unboxing.
 This is the closest published thing to what stage 8 does, one level up. Stage 8 assigns
 storage classes to values by asking "does it escape"; Serrano assigns representations to
 *procedures* by the same shape of question, and shows the answer is not binary. If we do
-closure conversion at all — and we must — the three-way split is the right structure, and
+closure conversion at all, and we must, the three-way split is the right structure, and
 the `S` case alone (never passed, never returned, therefore a direct branch with lifted free
 variables) covers most functions in most programs and is nearly free once we have a call
 graph.
@@ -155,7 +155,7 @@ different papers with different content, and the plan appears to want the SAS on
 Two things the paper gets wrong or oversells. First, the subsumption claim against Kranz and
 Séniak is stated but not proved, and rests on reading their algorithms as computing exactly
 `S`; that is asserted, not demonstrated. Second, the dismissal of 1CFA ("what can be done
-with this information in a compiler? We have found no answers") aged badly — polyvariant
+with this information in a compiler? We have found no answers") aged badly. Polyvariant
 CFA is how you get type specialization, which is precisely what a compiler wants for
 unboxing. It was a defensible engineering call in 1995 given the O(n^3) cost of 0CFA alone.
 

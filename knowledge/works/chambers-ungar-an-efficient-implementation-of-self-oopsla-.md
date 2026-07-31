@@ -128,7 +128,7 @@ arguments and assignable slots.
 # Relevance
 
 This is the tradition our project sits in and it is worth being precise about why. Chez gets
-its speed from *representation* decisions — flat closures, inline allocation, no
+its speed from *representation* decisions: flat closures, inline allocation, no
 `procedure?` check on known calls, segmented stacks. SELF gets its speed from *manufacturing
 type information that the program never stated*. Those are orthogonal, and our plan needs
 both. Stages 5 through 8 are the SELF half: prove a value is a fixnum in range, prove a
@@ -157,8 +157,8 @@ fast-path scheme by a clear margin on the benchmark kernels, they are not paying
 themselves and we should know that early. This is a useful control experiment, not a
 competitor.
 
-Two smaller things. The segregation trick — byte arrays at one end, references at the other,
-sentinel instead of a bound check — is directly applicable to an flvector-heavy heap and
+Two smaller things. The segregation trick (byte arrays at one end, references at the other,
+sentinel instead of a bound check) is directly applicable to an flvector-heavy heap and
 costs nothing. And the scope-description plus PC-map machinery is the honest answer to "how
 do we debug after aggressive inlining"; we will need it, and it is cheaper to design in than
 to retrofit.
@@ -185,7 +185,7 @@ to retrofit.
    will not match.
 
 **Do not confuse this with the companion paper.** Reference 6 is Chambers and Ungar,
-"Customization: Optimizing Compiler Technology for SELF", PLDI '89 — which is a different
+"Customization: Optimizing Compiler Technology for SELF", PLDI '89. That is a different
 work already in this bundle as
 `chambers-ungar-customization-optimizing-compiler-technolog`. Section 5 here is explicitly a
 *summary* of that paper ("originally published in [6]"). The unique content of *this* paper is
@@ -193,7 +193,7 @@ maps, segregation, object formats, the bytecode set, dependency-based invalidati
 debugging information. If both documents exist in `works/`, the split should follow that line.
 
 **Where it is dated or oversold.** The MiMS metric (millions of messages per second) proposed
-in section 7 went nowhere, and deservedly — it is unnormalized across languages with
+in section 7 went nowhere, and deservedly. It is unnormalized across languages with
 different message granularity, and the paper's own definition has to carve out an exception
 for local slot access. Type prediction as implemented is a hard-coded table; the authors
 themselves note that "a more dynamic implementation that used dynamic profile information

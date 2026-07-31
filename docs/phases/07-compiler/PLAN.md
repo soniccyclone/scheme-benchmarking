@@ -202,6 +202,15 @@ serve nbody, fannkuchredux or spectralnorm are out until it does.
 until the compiler emits correct native code, so instruction selection, register allocation
 and the assembler precede every analysis pass. That is a dependency, not a cost.
 
+**RABBIT's optimizer bought only 1.2x, and the closure analysis bought the rest.** Steele
+reports 25x for compiled over interpreted, but the optimizer itself accounts for just 1.2x
+over unoptimized compiled code, because the closure analysis had already eliminated most
+consing before the optimizer ran. That is a caution about where to spend effort: the
+representation decisions in stage 8 are likely worth more than any single analysis pass, and
+this project's stated route to exceeding SBCL runs through representation and vectorization
+rather than through cleverer dataflow. It also means an early milestone that only proves the
+analysis works, without representation selection behind it, may measure almost nothing.
+
 **SELF measured static type analysis losing to a profile counter, and that is a direct
 challenge to this plan.** Hölzle and Ungar (PLDI 1994) report that SELF-91's iterative
 static type analysis performed no better than *no* type analysis at all: the same call

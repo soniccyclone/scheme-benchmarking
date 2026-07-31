@@ -76,6 +76,14 @@ Keep it small. Everything after stage 3 operates on this.
     (policy (c* ...) body)))        ; lexical check policy
 ```
 
+**Resist over-refining these types.** Steele's own post-mortem on RABBIT (p. 174) argues
+against having split `CLAMBDA`/`CONTINUATION` and `CCOMBINATION`/`RETURN` into distinct IR
+node types, because it forced the second pass to be written twice over near-identical
+shapes. That is an argument against fine-grained IR types from the person who invented this
+style of compiler, and nanopass makes adding a type cheap enough that the temptation is
+real. Prefer one node with a discriminating field over two nodes whose passes diverge only
+in a line or two.
+
 The last two forms are the point. `declare` binds a predicate to a variable for a scope.
 `policy` carries per-check suppression lexically, which is wall 3 from `PLAN.md` removed
 by construction: the policy lives in the environment threaded through the passes, not in

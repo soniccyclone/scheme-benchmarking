@@ -145,8 +145,8 @@ This is a retrospective, so nothing here is a recipe with stated preconditions. 
 transferable content is the decision structure, and it has two strong preconditions of its
 own. First, **bootstrapping**: the payback rule only works if the compiler is written in the
 language it compiles and is representative of the workload. Second, **interactive incremental
-compilation as a hard requirement** — no interpreter in Versions 1 through 5, so compile time
-is user-visible latency. Remove either and the whole optimization budget changes.
+compilation as a hard requirement**. There was no interpreter in Versions 1 through 5, so
+compile time is user-visible latency. Remove either and the whole optimization budget changes.
 
 The paper gives essentially no numbers. There is one 50% figure for the Version 4 overhaul,
 one 30% compiler-speed figure, a 15-50% range for local calls, and a 25x for gensym creation.
@@ -159,9 +159,9 @@ Direct, in three ways.
 **It tells us where Chez's headroom is.** The payback rule systematically excludes any
 analysis whose cost is not repaid by compiling the compiler faster. A Scheme compiler is not
 a numeric kernel: it allocates, it calls, it pattern-matches, it does not run tight float
-loops. So the entire class of optimization that helps float loops and nothing else —
-interval and relational domains, induction-variable analysis, bounds-check elimination,
-vectorization, our stages 5 through 10 — is exactly the class the rule discards. That is our
+loops. So the entire class of optimization that helps float loops and nothing else (interval
+and relational domains, induction-variable analysis, bounds-check elimination, vectorization,
+our stages 5 through 10) is exactly the class the rule discards. That is our
 opening, and it is structural rather than accidental. Chez is not slow at these things
 because Dybvig missed them; it does not do them because they fail his acceptance test.
 
@@ -179,8 +179,8 @@ lazy save (defer register saves until a call is inevitable) and call-site shuffl
 argument values directly in outgoing locations). Both target call-heavy code, which is where
 the Fortran-derived allocation literature is weakest and where Scheme lives.
 
-Two smaller things to steal outright. The unforwarded-flonum trick — never leave a forwarding
-address in a flonum, allow duplication, justify it by `eq?`'s licence on numbers — halves
+Two smaller things to steal outright. The unforwarded-flonum trick (never leave a forwarding
+address in a flonum, allow duplication, justify it by `eq?`'s licence on numbers) halves
 flonum size and enables adjacent-double representations, which matters if we box at all. And
 the c-record decision, immutable records with statically checked shapes for the IR, is the
 same argument the nanopass framework makes at greater length.
@@ -197,7 +197,7 @@ first half is exactly right and is the payback rule quoted above. The second hal
 supported by the text: the Version 2 highlights list "optimizing letrec expressions and
 loops" as an implemented feature, and Section 5 says the same in prose. Chez has *some* loop
 handling. What the paper does not describe anywhere is a classical loop optimizer in the
-Fortran sense — no induction-variable analysis, no strength reduction, no unrolling, no
+Fortran sense: no induction-variable analysis, no strength reduction, no unrolling, no
 bounds-check elimination, no vectorization, and no mention of any of these being attempted
 and rejected. So the correct claim is weaker and still useful to us: the payback rule is a
 general filter that such passes would not survive, and the paper is silent on them rather
