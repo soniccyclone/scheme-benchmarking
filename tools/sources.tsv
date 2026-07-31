@@ -29,7 +29,7 @@ chambers-ungar-an-efficient-implementation-of-self-oopsla-	14	https://bibliograp
 h-lzle-ungar-optimizing-dynamically-dispatched-calls-with-	14	https://bibliography.selflanguage.org/_static/type-feedback.pdf
 chambers-ungar-customization-optimizing-compiler-technolog	14	https://people.cs.umass.edu/~emery/classes/cmpsci710-spring2003/p146-chambers.pdf
 cytron-ferrante-rosen-wegman-zadeck-efficiently-computing-	15	https://c9x.me/compile/bib/ssa.pdf
-same-mirror	15	https://www.cs.utexas.edu/~pingali/CS380C/2010/papers/ssaCytron.pdf
+cytron-et-al-efficiently-computing-ssa-toplas-1991	15	https://www.cs.utexas.edu/~pingali/CS380C/2010/papers/ssaCytron.pdf
 braun-et-al-simple-and-efficient-construction-of-static-si	15	https://c9x.me/compile/bib/braun13cc.pdf
 cooper-harvey-kennedy-a-simple-fast-dominance-algorithm	15	https://c9x.me/compile/bib/quickdom.pdf
 rastello-et-al-ssa-based-compiler-design-the-ssa-book	15	https://pfalcon.github.io/ssabook/latest/book-full.pdf

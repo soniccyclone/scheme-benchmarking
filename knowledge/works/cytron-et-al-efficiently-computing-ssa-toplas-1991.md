@@ -2,7 +2,7 @@
 type: paper
 title: "Efficiently Computing Static Single Assignment Form and the Control Dependence Graph"
 description: Shows that phi-function placement is exactly the iterated dominance frontier and that control dependence is the dominance frontier of the reversed CFG, making both structures cheap enough to use in a real compiler.
-resource: knowledge/sources/same-mirror.pdf
+resource: knowledge/sources/cytron-et-al-efficiently-computing-ssa-toplas-1991.pdf
 tags: [ssa-form, dominance-frontier, control-dependence, dead-code-elimination, compiler-ir]
 authors: [Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck]
 year: 1991

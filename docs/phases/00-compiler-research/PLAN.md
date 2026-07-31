@@ -279,6 +279,15 @@ map each work to the pass it informs.
 
 ### Correction: several entries in this bibliography were wrong
 
+The largest was two SSA papers with their labels swapped. `ssa.pdf` from c9x.me is the
+11-page **POPL 1989** conference paper; the UT Austin file, listed as "same, mirror", is the
+40-page **TOPLAS 1991** journal article. They are different documents, not two scans of one:
+different sha256, and the journal version alone carries arrays and aliasing, translation out
+of SSA, the correctness proofs, and the measurements. Worse, an earlier draft of this
+document claimed the c9x.me row's "title confirmed by text extraction" — the extraction had
+in fact returned the POPL title, *An Efficient Method of...*, and it was misread as
+confirming the TOPLAS one. Two agents reached this independently from opposite files.
+
 Beyond the reachability problem below, running the recovery found that some entries here
 were simply incorrect, and all four errors were mine:
 
@@ -444,8 +453,8 @@ Stage 8. Where the actual speed comes from.
 
 | work | why | link |
 |---|---|---|
-| Appel, *Simple Generational Garbage Collection and Fast Allocation* (1989) | the collector design in `../07-compiler/CUJ.md` step 5 | https://www.cs.princeton.edu/~appel/papers/143.pdf |
-| Dybvig et al., *BIBOP* | Chez's object layout and allocation | https://www.cs.indiana.edu/~dyb/pubs/bibop.pdf |
+| Appel, *Simple Generational Garbage Collection and Fast Allocation* (**Princeton CS-TR-143-88, 1988**) | the collector design in `../07-compiler/CUJ.md` step 5. We hold the tech report; 1989 is the *Software—Practice and Experience* 19(2) journal version | https://www.cs.princeton.edu/~appel/papers/143.pdf |
+| Dybvig, **Eby & Bruggeman**, *Don't Stop the BIBOP: Flexible and Efficient Storage Management for Dynamically Typed Languages* (Indiana CS TR #400, **1994**) | Chez's object layout and allocation. Never published beyond the tech report | see `tools/sources.tsv` |
 
 ## 13. Books
 
@@ -484,8 +493,8 @@ Relevant because ABCD (section 8) is formulated on SSA, and stage 7 of
 
 | work | why | link |
 |---|---|---|
-| Cytron, Ferrante, Rosen, Wegman & Zadeck, *Efficiently Computing Static Single Assignment Form* (TOPLAS 1991) | **the** SSA paper. Title confirmed by text extraction | https://c9x.me/compile/bib/ssa.pdf |
-| Same, mirror | alternate host | https://www.cs.utexas.edu/~pingali/CS380C/2010/papers/ssaCytron.pdf |
+| Cytron, Ferrante, Rosen, Wegman & Zadeck, *An Efficient Method of Computing Static Single Assignment Form* (**POPL 1989**) | the 11-page conference paper | https://c9x.me/compile/bib/ssa.pdf |
+| Cytron, Ferrante, Rosen, Wegman & Zadeck, *Efficiently Computing Static Single Assignment Form and the Control Dependence Graph* (**TOPLAS 13(4), 1991**) | **the** SSA paper, 40 pages. Adds arrays and aliasing (§3.1), translation *out* of SSA (§7), the correctness proofs, and the FORTRAN measurements. None of that is in the POPL version | https://www.cs.utexas.edu/~pingali/CS380C/2010/papers/ssaCytron.pdf |
 | Braun et al., *Simple and Efficient Construction of Static Single Assignment Form* (CC 2013) | the construction you would actually implement | https://c9x.me/compile/bib/braun13cc.pdf |
 | Cooper, Harvey & Kennedy, *A Simple, Fast Dominance Algorithm* | prerequisite for SSA construction. Title confirmed | https://c9x.me/compile/bib/quickdom.pdf |
 | Rastello et al., *SSA-based Compiler Design* (the SSA Book) | book-length treatment of everything downstream of SSA. **This file is a 2018 unfinished draft, not the 2022 Springer edition**: its title page reads "Lots of authors / Static Single Assignment Book", the dedication is Lorem ipsum, the preface is "TODO: Roadmap", two figures in ch.10's induction-variable walkthrough fail to render, and several cross-references print as "Chapter ??". Section and page numbers will not match the published book | https://pfalcon.github.io/ssabook/latest/book-full.pdf |
