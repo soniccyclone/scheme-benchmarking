@@ -592,7 +592,12 @@ complete. Most exist behind `dl.acm.org`, which is bot-blocked but valid in a br
   retrospective, 10 pages, which at that length very likely carries the 4-page 1982 original
   appended as the Cartwright and Fagan retrospective does. Briggs, Cooper & Torczon (1994)
   is still outstanding.
-- Cheney, *A Nonrecursive List Compacting Algorithm* (1970).
+- Cheney, *A Nonrecursive List Compacting Algorithm* (CACM 13(11), 1970, pp. 677-678, doi
+  `10.1145/362790.362798`). **Free, but browser-only**, same situation as Morel & Renvoise.
+  Checked archive.org's scanned periodicals as well: it holds CACM *index* volumes for 1970
+  and 1979 (`sim_association-for-computing-machinery-communications_1970_13_index`,
+  unrestricted, PDFs present) but not the issue contents, so that route does not reach the
+  paper.
 - Tofte & Talpin, *Region-Based Memory Management* (1997). Relevant if region inference is
   revisited as a Stalin-style alternative to generational collection.
 - ~~Allen & Kennedy, *Automatic Translation of FORTRAN Programs to Vector Form*~~
@@ -626,8 +631,11 @@ Wider-field gaps, found while assembling Part II and still unresolved:
   Wayback snapshot of `courses.cs.washington.edu/courses/cse501/15sp/papers/kildall.pdf`.
   Note the live URL 404s; only the archived copy serves it.
 - Morel & Renvoise, *Global Optimization by Suppression of Partial Redundancies* (CACM
-  1979), and Knoop, Rüthing & Steffen, *Lazy Code Motion* (PLDI 1992). Partial redundancy
-  elimination.
+  22(2), 1979, pp. 96-103, doi `10.1145/359060.359069`). **Free, but browser-only.**
+  OpenAlex reports `best_oa_location` as `dl.acm.org/doi/pdf/10.1145/359060.359069`, since
+  ACM opened its first fifty years in 2022. Cloudflare rejects every scripted fetch,
+  including with full browser headers. One manual download closes this. Knoop, Rüthing &
+  Steffen, *Lazy Code Motion* (PLDI 1992) is separately outstanding.
 - ~~Blanchet, *Escape Analysis*~~ **RECOVERED, all three papers**, as PostScript from
   `bblanche.gitlabpages.inria.fr/publications/`: POPL 1998 (ML), OOPSLA 1999 (Java), and the
   TOPLAS 2003 journal version. This closes the one gap that threatened a design claim, since
@@ -640,8 +648,10 @@ Wider-field gaps, found while assembling Part II and still unresolved:
   vectorization; polyhedral is the loop-nest answer and is the stronger technique where it
   applies.
 - Wolf & Lam, *A Data Locality Optimizing Algorithm* (PLDI 1991). Cache blocking.
-- Deutsch & Schiffman, *Efficient Implementation of the Smalltalk-80 System* (POPL 1984).
-  Inline caches, the technique section 14's type feedback builds on.
+- Deutsch & Schiffman, *Efficient Implementation of the Smalltalk-80 System* (POPL 1984,
+  doi `10.1145/800017.800542`). Inline caches, the ancestor of section 14's type feedback.
+  **Genuinely closed**: unlike the two CACM papers above, OpenAlex reports no open-access
+  location at all for this one.
 - Andersen's 1994 dissertation on points-to analysis, the inclusion-based counterpart to
   Steensgaard.
 
@@ -665,6 +675,16 @@ the dvips era. Fetched from the 2005 snapshot (82,469 bytes gzipped, 202,207 dec
 extracting first-page text: "Biglo o: ortable and optimizing compiler for strict functional
 languages / Man uel Serrano and Pierre eis / INRIA, B.P 105, Rocquencourt". The missing
 characters are dvips kerning artifacts in extraction, not damage.
+
+**Search surfaces, in the order that actually pays.** Four were used across this work and
+they are not interchangeable. (1) Per-paper web search, which is the step most easily
+skipped and which found the Chaitin mirror. (2) Wayback CDX enumeration of an author or
+course *directory*, which found Bigloo, Allen & Kennedy, Kildall and Blanchet, and which
+succeeds precisely where filename guessing fails. (3) OpenAlex by DOI, which reports
+`best_oa_location` and is the only way to learn that a paywalled-looking ACM paper is in
+fact open access. (4) archive.org's scanned periodicals, a different collection from
+Wayback, useful for pre-web journals though it holds only CACM index volumes for the years
+we needed. Guessing filenames is not a search surface and failed every time it was tried.
 
 **The method, applied a second time, worked again.** The same CDX sweep over Kennedy's Rice
 course directory turned up ten PostScript chapters of the Allen & Kennedy book, which had
