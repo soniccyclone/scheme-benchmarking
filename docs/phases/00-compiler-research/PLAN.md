@@ -587,8 +587,11 @@ complete. Most exist behind `dl.acm.org`, which is bot-blocked but valid in a br
   Yale dissertation.
 - Gupta, *Optimizing Array Bound Checks Using Flow Analysis* (1993). The predecessor to
   ABCD.
-- Chaitin, *Register Allocation and Spilling via Graph Coloring* (1982), and Briggs, Cooper
-  & Torczon, *Improvements to Graph Coloring Register Allocation* (1994).
+- ~~Chaitin, *Register Allocation and Spilling via Graph Coloring* (1982)~~ **RECOVERED**
+  from `cs.utexas.edu/~pingali/CS380C/2007fa/papers/p66-chaitin.pdf`. This is the SIGPLAN
+  retrospective, 10 pages, which at that length very likely carries the 4-page 1982 original
+  appended as the Cartwright and Fagan retrospective does. Briggs, Cooper & Torczon (1994)
+  is still outstanding.
 - Cheney, *A Nonrecursive List Compacting Algorithm* (1970).
 - Tofte & Talpin, *Region-Based Memory Management* (1997). Relevant if region inference is
   revisited as a Stalin-style alternative to generational collection.
@@ -619,8 +622,9 @@ complete. Most exist behind `dl.acm.org`, which is bot-blocked but valid in a br
 
 Wider-field gaps, found while assembling Part II and still unresolved:
 
-- Kildall, *A Unified Approach to Global Program Optimization* (POPL 1973). The dataflow
-  framework everything in section 16 sits inside.
+- ~~Kildall, *A Unified Approach to Global Program Optimization*~~ **RECOVERED**, via a
+  Wayback snapshot of `courses.cs.washington.edu/courses/cse501/15sp/papers/kildall.pdf`.
+  Note the live URL 404s; only the archived copy serves it.
 - Morel & Renvoise, *Global Optimization by Suppression of Partial Redundancies* (CACM
   1979), and Knoop, Rüthing & Steffen, *Lazy Code Motion* (PLDI 1992). Partial redundancy
   elimination.
