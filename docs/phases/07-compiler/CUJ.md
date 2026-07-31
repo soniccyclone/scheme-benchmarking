@@ -72,10 +72,26 @@ Keep it small. Everything after stage 3 operates on this.
     (letrec ([x* e*] ...) body)
     (lambda (x* ...) body)
     (call e0 e* ...)
-    (primcall pr e* ...)
+    (primcall pr c e* ...)          ; c is a control input, see below
     (declare (x* p*) ... body)      ; premises
     (policy (c* ...) body)))        ; lexical check policy
 ```
+
+**Faulting primitives need a control input, and stage 10 depends on it.** `primcall` above
+carries `c` for exactly this. Click's discipline is that loads, stores, division, calls and
+anything else that can trap take an explicit control input, so code motion on them is only
+ever downward and a trapping operation can never be hoisted above the test that guards it.
+Without it, nothing in the IR distinguishes a `flvector-ref` that may fault from a pure
+arithmetic node, and the vectorizer at stage 10 is free to move it somewhere it must not go.
+This belongs in the language definition rather than in a later pass, because retrofitting it
+means revisiting every pass that constructs a `primcall`. Chow's `tau` variables are the
+same idea pointed the other way, for speculation.
+
+**If we move to SSA for ABCD, go to e-SSA directly.** ABCD does not run on vanilla SSA. It
+needs sigma-assignments on both arms of every conditional over the variables in the test,
+plus a fresh name after every checked access, or a check trivially proves itself redundant.
+The SSA Book ch. 13 tabulates the splitting strategy per client, and ABCD's row is
+`Defs↓ ∪ Out(Conds)↓`. Budget the `clean` pass alongside it.
 
 **Resist over-refining these types.** Steele's own post-mortem on RABBIT (p. 174) argues
 against having split `CLAMBDA`/`CONTINUATION` and `CCOMBINATION`/`RETURN` into distinct IR
@@ -335,6 +351,13 @@ dangerous failure mode in this project.
    the case where unit tests earn their keep. Test `join`, `meet`, `widen` for
    monotonicity and for termination. An unsound `implies?` removes a check that was
    needed and corrupts memory.
+
+   **Lattice laws are not the soundness obligation, though.** Monotonicity and termination
+   say the analysis converges; they say nothing about whether it converges to something
+   true. The property that actually guarantees we never delete a needed check is Cousot's
+   local consistency condition from §6 of the 1977 paper: for each transfer function,
+   `γ(Int(a, x)) ⊇ Int(a, γ(x))`. That is a per-instruction obligation and it is directly
+   testable, so test it per primitive rather than trusting the lattice laws to imply it.
 2. **Pass tests.** Each pass on fixtures, asserting the output core language.
 3. **End-to-end differential testing.** Compile each benchmark, diff output against the
    Benchmarks Game fixture. Compile the same program with all optimization disabled and
