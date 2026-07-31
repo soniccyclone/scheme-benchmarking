@@ -85,16 +85,15 @@ Abort is a non-local exit to where the counter was set. Flag sets are bit vector
 
 **Recursive procedures**, two admission rules. Either no recursive call survives in the
 residual — bind `f` to a fresh `f′` with *no operand*, forcing recursive calls to
-residualize, then check whether `f′` ended up referenced; `(f 0)` folds outright and `(f 5)`
-first yields `(* 5 (f′ 4))`, after which modest effort and unfold counters complete it to
-120 — or the body specialises to the call site, which needs the *invariant* formals
-(unassigned, and passed as themselves at every recursive call), computable in linear time and
-cached in the operand.
+residualize, then check whether `f′` ended up referenced; `(f 5)` first yields `(* 5 (f′ 4))`
+and modest unfold counters complete it to 120 — or the body specialises to the call site,
+which needs the *invariant* formals (unassigned, passed as themselves at every recursive
+call), computable in linear time and cached in the operand.
 
 **Estimating size differently.** Hölzle and Ungar take the size estimate from *previously
 compiled optimized code* rather than from source, because nearly every SELF source token is a
-message send of wildly variable cost, and compiled code for a method already includes its own
-inlinees, so compiled size is both more accurate and accounts for transitive inlining.
+message send of wildly variable cost, and compiled code already includes its own inlinees, so
+compiled size is both more accurate and accounts for transitive inlining.
 
 **Guarded inlining, when the callee is not statically known.** Hölzle and Ungar rewrite
 `x = p->get_x()` as a type test plus the inlined body, with the general dispatch on the
@@ -119,9 +118,8 @@ elimination.
 **Across compilation units.** Keep ch. 4: the expander leaves a breadcrumb node per export
 and the source optimizer fills a mutable field on the library global when the result is a
 copyable constant (not a pair, vector or record, since those must stay `eq?` to themselves)
-or an inlinable procedure with no free variables and no library-global references, under a
-score limit measured **before** inlining since the call site is unknown. 24% on a symbolic
-math program with many small cross-library calls, negligible on matrix multiply.
+or a free-variable-free procedure under a score limit measured **before** inlining, since the
+call site is unknown. 24% on a symbolic math program with many small cross-library calls.
 
 # Preconditions
 

@@ -172,7 +172,9 @@ so: the durable claim is "comparable results, far simpler implementation, one pa
 redundancy to be rare among computations that yield the same value, and concludes full
 redundancy elimination over value numbers is probably sufficient. VanDrunen and Hosking's
 GVN-PRE is claimed to subsume both PRE and GVN. The book reports the claim without
-endorsing it.
+endorsing it. Note that our copy of that book is the unfinished draft dated 8 June 2018, not
+the 2022 Springer edition, so the chapter and section numbers cited here will not match the
+published text.
 
 **Whether to prune the SSA that GVN runs on.** Cytron's Figure 16 argues explicitly for
 keeping dead phi-functions rather than pruning, on the grounds that they expose

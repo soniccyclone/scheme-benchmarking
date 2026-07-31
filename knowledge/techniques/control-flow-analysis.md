@@ -78,9 +78,8 @@ crudest useful store abstraction, all addresses merged into one, under which the
 set and the abstract store are literally the same set. External procedures and calls, `xproc` and
 `xcall`, with three rules: anything passed to `xproc` escapes, anything escaped can be called from
 `xcall`, anything called from `xcall` can receive any escaped procedure. And the
-user-procedure/continuation partition, where the CPS converter knows which lambdas it introduced
-and a call site calls only one kind, which is a large precision win for free and which arrives
-free in ANF where a tail call and a let-bound call are syntactically distinct.
+user-procedure/continuation partition, which is a large precision win for free and arrives free in
+ANF where a tail call and a let-bound call are syntactically distinct.
 
 **Serrano's direct-style version is the one that shipped.** Bigloo's IR has no `lambda`:
 `(lambda (x) e)` is `(labels ((id (x) e)) (function id))`, syntactically separating code from
@@ -96,19 +95,19 @@ can invoke `f`, and three nested predicates fall out with `S implies X implies T
 - `X(f)`: not escaping, and at every site in `USE(f)` the approximation is exactly `{f}`.
 - `S(f)`: not escaping, and `USE(f)` is empty. `f` never reaches a computed call at all.
 
-`S` gives no closure and no environment: direct branch, free variables lambda-lifted into the
-parameter list. Proposition 2 is the practically useful one, that any function never passed as an
-argument and never returned satisfies `S`. `X` gives no closure structure, though an environment
-may remain. `T` shrinks the closure to a single entry-point slot with no tag, no arity field and
-no variable-arity entry, because the family is known statically, so type and arity correctness are
-checked at compile time and the call site becomes a computed application with no checks.
+Baseline procedure representation is at least four words: tag, arity, and two entry points, because
+every computed call must check applicability and arity. `S` gives no closure and no environment:
+direct branch, free variables lambda-lifted into the parameter list. Proposition 2 is the
+practically useful one, that any function never passed as an argument and never returned satisfies
+`S`. `X` gives no closure structure, though an environment may remain. `T` shrinks the closure to a
+single entry-point slot with no tag, no arity field and no variable-arity entry, because the family
+is known statically, so the call site becomes a computed application with no checks.
 
-**The cheap answers.** Two of them, and both are usually enough. Keep, Hearn and Dybvig compute
-*well-knownness* during closure conversion in a single linear pass: fresh label per letrec lambda,
-optimistically mark well-known, demote on any reference outside call-operator position. A
-well-known procedure's code pointer is dead. That is Serrano's `X` computed without a fixpoint.
-Steele's RABBIT is cheaper still: a `KNOWN-FUNCTION` property set on a variable during binding
-analysis when it is provably bound to a known lambda, consumed at code generation as an
+**The cheap answers, and both are usually enough.** Keep, Hearn and Dybvig compute *well-knownness*
+during closure conversion in a single linear pass: fresh label per letrec lambda, optimistically
+mark well-known, demote on any reference outside call-operator position. A well-known procedure's
+code pointer is dead. That is Serrano's `X` without a fixpoint. Steele's RABBIT is cheaper still, a
+`KNOWN-FUNCTION` property set during binding analysis and consumed at code generation as an
 environment adjustment followed by a `GO`. And Steensgaard's points-to analysis produces
 0CFA-strength call-target information as a side effect in almost linear time, because his `lam`
 types make "which closures can this call site invoke" and "what does this variable point to" the
@@ -119,21 +118,21 @@ same question.
 Shivers requires CPS with assignment conversion already done, alphatised and closed programs, and
 primitives that are not first class with statically checked arity. Serrano requires none of that
 and argues the direct-style choice is why 0CFA suffices for him: with CPS, control is artificially
-dynamic and CFA is mandatory just to recover what direct style never lost. Our IR should not
-create work for our analyses.
+dynamic and CFA is mandatory just to recover what direct style never lost. Our IR should not create
+work for our analyses.
 
-Whole-program, or the escape machinery, which yields very weak information. Shivers says as much
-and notes that known primitives like `print` and `length` deserve hand-written summaries rather
-than worst-case treatment, which is a cheap and large win. In Bigloo anything exported, imported,
-or foreign poisons its arguments and body immediately, and global variables read as unknown
-unconditionally, so separate compilation directly costs precision.
+Whole-program, or the escape machinery, which yields very weak information. Shivers notes that
+known primitives like `print` and `length` deserve hand-written summaries rather than worst-case
+treatment, which is a cheap and large win. In Bigloo anything exported, imported or foreign poisons
+its arguments and body immediately, and global variables read as unknown unconditionally, so
+separate compilation directly costs precision.
 
 Any analysis built on top that *narrows* is unsound on merged contours. That is the environment
-problem, and Shivers states the rule precisely: contour merging is safe only for analyses that
-move monotonically toward approximation. Control-flow analysis and useless-variable elimination
-do. Type recovery does not, because a conditional test narrows a type. Reflow analysis recovers
-it by restarting the interpretation from a given call context with one *special* contour that will
-never be identified with any other binding, once per call context in the domain of the call cache.
+problem, and the rule is precise: contour merging is safe only for analyses that move monotonically
+toward approximation. Control-flow analysis and useless-variable elimination do. Type recovery does
+not, because a conditional test narrows a type. Reflow analysis recovers it by restarting the
+interpretation from a given call context with one *special* contour that is never identified with
+any other binding, once per call context in the domain of the call cache.
 
 # Cost
 
@@ -143,20 +142,19 @@ scalability is "I have no reason to believe the analyses will not scale reasonab
 fallback that optimization can be switched off during development. Subsequent work settled it
 against him: 0CFA is cubic and k >= 1 is exponential in the worst case, results not known in 1991.
 
-Measured numbers, such as they are. 1CFA in interpreted T on a DECstation 3100: iterative
-factorial 0.58s, the puzzle 0.67s, `delq` 1.8s. Type recovery on the same three: 7.8s, 5.1s, 5.3s.
-The implementation is 450 lines over a 2100-line modified ORBIT front end, was applied "to at most
-a few hundred lines of code," and was never connected to a code generator, so no optimized program
-was ever timed. Bigloo's 0CFA on `conform` is 60.5s against 6.4s without, an 845% increase in
+Measured numbers, such as they are. 1CFA in interpreted T on a DECstation 3100: iterative factorial
+0.58s, the puzzle 0.67s, `delq` 1.8s. Type recovery on the same three: 7.8s, 5.1s, 5.3s. The
+implementation is 450 lines over a 2100-line modified ORBIT front end, was applied "to at most a few
+hundred lines of code," and was never connected to a code generator, so no optimized program was
+ever timed. Bigloo's 0CFA on `conform` is 60.5s against 6.4s without, an 845% increase in
 Scheme-side compile time, repaid only because Bigloo emits C and the C compiler is the bottleneck;
-Bigloo's own 30,000-line bootstrap goes from 45 to 55 minutes. Serrano reports 87 to 95% of closure
-allocations removed and roughly 70% run-time improvement, against a baseline with no closure
+its own 30,000-line bootstrap goes from 45 to 55 minutes. Serrano reports 87 to 95% of closure
+allocations removed and roughly 70% run-time improvement against a baseline with no closure
 optimization at all, so that number does not transfer to a Chez-class baseline.
 
 Precision limits the authors identify themselves: the single-address store abstraction means one
 procedure stored anywhere can be fetched from anywhere, and `if` branches both ways
-unconditionally, so no control-flow arc is ever pruned by a type or value fact. Appendix B shows
-exactly such a prunable arc surviving in the puzzle's call cache.
+unconditionally, so no control-flow arc is ever pruned by a type or value fact.
 
 # Disagreements
 

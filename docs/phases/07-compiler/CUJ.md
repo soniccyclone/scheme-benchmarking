@@ -23,6 +23,7 @@ compiler/
     02-expand.ss          syntax-rules expander
     03-parse.ss           surface to core
     04-declare.ss         declaration forms into the environment
+    04b-inline.ss         procedure inlining. See the ordering note below
     05-intervals.ss       level 2 domain
     06-pentagon.ss        level 3 domain
     07-loops.ss           loop recognition, induction variables
@@ -88,6 +89,31 @@ The last two forms are the point. `declare` binds a predicate to a variable for 
 `policy` carries per-check suppression lexically, which is wall 3 from `PLAN.md` removed
 by construction: the policy lives in the environment threaded through the passes, not in
 a global parameter.
+
+## Two ordering corrections, found in wave 2
+
+The pass list above is numbered for readability, not as a dependency order. Two of its
+implied orderings are wrong, and both were caught by synthesis agents reading the sources
+against the plan.
+
+**Stage 08 depends on stage 09, not the reverse.** Storage class assignment keys its table
+on "proven flonum, does not escape", and escape analysis is the pass that proves it. Either
+alias and escape analysis runs before representation selection, or representation runs twice,
+or the escape-conditioned rows of that table are dead on arrival. Two independent
+sources reached this: the escape-analysis synthesis and the Steensgaard work document.
+
+**There was no inlining pass at all, and four stages depend on one.** `01-read` through
+`13-assemble` contained no inliner, no closure conversion and no assignment conversion, while
+stages 05, 06, 08 and 10 all assume inlining has run. Three sources demand inline-first, for
+different reasons: Leroy, because storage class assignment before inlining leaves coercion
+redexes that never cancel; Hölzle and Ungar, because narrowing is much cheaper after inlining
+and running the domain first invites declaring victory early; and Waddell and Dybvig via
+Ashley, because inlining invalidates the flow information that justified it, so the order
+matters in both directions. `04b-inline.ss` is added above, between declaration processing
+and the first domain pass, and A-normalization should be re-run after it per Flanagan et al.
+
+Note that documents already in `knowledge/` carry `pipeline_stage` values keyed to the old
+numbering. Those references are stale in numbering only, not in meaning.
 
 ## Step 3: the abstract domain
 
@@ -319,6 +345,13 @@ dangerous failure mode in this project.
    disassembler output and both should be tests rather than observations.
 
 ## Milestone checkpoints
+
+**A caveat on every milestone below.** `nbody` is the single benchmark on which Chez's
+`cp0` inliner does *not* help: Waddell and Dybvig report 0.92 to 1.05 on the R4400, and
+attribute it to cache effects from three-level nested array indexing without measuring that
+attribution. It is the one place their "no benchmark regresses" claim is doing real work, and
+it is the program all six milestones below are written against. If our own inlining pass
+shows nothing on nbody, that is the expected result rather than evidence of a broken pass.
 
 | milestone | check |
 |---|---|
