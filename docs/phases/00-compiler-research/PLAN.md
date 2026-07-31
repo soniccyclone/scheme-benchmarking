@@ -456,7 +456,7 @@ Stage 8. Where the actual speed comes from.
 | work | why | link |
 |---|---|---|
 | Leroy, *Unboxed Objects and Polymorphic Typing* (POPL 1992) | the canonical treatment of when you may unbox | https://xavierleroy.org/publi/unboxed-polymorphism.pdf |
-| Serrano & Weis, *Bigloo: a portable and optimizing compiler for strict functional languages* (SAS 1995) | the other Scheme that took types seriously | https://www-sop.inria.fr/members/Manuel.Serrano/publi/serrano-sac95.pdf |
+| **Serrano** (alone), *Control Flow Analysis: a Functional Languages Compilation Paradigm* (SAC 1995) | 0CFA-driven closure representation, the direct ancestor of the Keep closure work. **This is not the paper the row originally claimed**: the URL `serrano-sac95.pdf` was recorded against a citation for Serrano & Weis, *Bigloo*, SAS 1995, which is a different paper and is **still missing from the bundle** | https://www-sop.inria.fr/members/Manuel.Serrano/publi/serrano-sac95.pdf |
 
 ## 11. Register allocation
 
@@ -604,6 +604,10 @@ complete. Most exist behind `dl.acm.org`, which is bot-blocked but valid in a br
   did not do so for these, and the advertised sample chapters at `modern/*/extract.pdf`
   now 404. A full scan of *Compiling with Continuations* circulates on a third party's
   course-reserve page; it is not authorized and is deliberately not used here.
+
+- Serrano & Weis, *Bigloo: a portable and optimizing compiler for strict functional
+  languages* (SAS 1995). The URL recorded for it turned out to serve a different Serrano
+  paper entirely. Still needed.
 
 Wider-field gaps, found while assembling Part II and still unresolved:
 

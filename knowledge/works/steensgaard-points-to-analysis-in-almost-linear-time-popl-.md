@@ -169,28 +169,18 @@ The composite-object imprecision is, unusually, *free* for us. Steensgaard's ser
 all fields of a struct share one type — is irrelevant when the question is flvector identity
 rather than flvector contents. We do not care what is inside; we care that two pointers differ.
 
-**Practical read.** Take the algorithm, but recognize that the CUJ's actual precondition —
-"two values from distinct `make-flvector` calls that do not escape are distinct, which is
-decidable locally" — is *escape analysis*, not points-to analysis. Steensgaard's storage shape
-graph gives escape as a by-product (a location escapes if its ECR is reachable from a global,
-a parameter, or a returned value), so one pass answers both. That is the right framing for
-stage 09: build the shape graph, read off both non-aliasing and non-escaping, feed
-non-escaping to stage 08's unboxing decisions and non-aliasing to stage 10.
+**Practical read.** The CUJ's actual precondition — "two values from distinct `make-flvector`
+calls that do not escape are distinct" — is *escape* analysis as much as points-to analysis,
+and the storage shape graph answers both: a location escapes if its ECR is reachable from a
+global, a parameter, or a returned value. The paper says as much about Table 3 — variables
+whose type variable describes nothing else "are candidates for global optimizations such as
+being represented by a register rather than a memory location," which is stage 08 storage
+class assignment. So one pass feeds non-escaping to stage 08's unboxing decisions and
+non-aliasing to stage 10, and stage 09 may want to land before stage 08 is finished.
 
-If measurement later shows unification too coarse for the kernels we care about, the escape
-hatch the paper itself names is polymorphic (context-sensitive) inference. Do not reach for
-Andersen's O(A²) inclusion-based analysis first; the numeric kernels are small enough that
-the precision question is about *context*, not about inclusion vs unification.
-
-# Relevance to escape analysis specifically
-
-Worth stating separately because the CUJ does not currently have an escape-analysis stage.
-Table 3's framing — "many of the program variables described by a type variable representing
-no other program variables are candidates for global optimizations such as being represented
-by a register rather than a memory location" — is stage 08 storage class assignment. The
-storage shape graph is the same artifact that answers "does this flonum escape," and that
-question gates the single largest representation win we have (unboxed f64 in xmm versus boxed
-and tagged). Building stage 09 before finishing stage 08 may be the right ordering.
+If unification proves too coarse for our kernels, the escape hatch the paper names is
+polymorphic (context-sensitive) inference. Do not reach for Andersen's O(A²) inclusion-based
+analysis first; our precision problem will be about *context*, not inclusion vs unification.
 
 # Notes
 

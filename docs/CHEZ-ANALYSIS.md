@@ -224,7 +224,7 @@ Pentagon. `equality-constraints.lisp` adds another 1366 lines.
 
 The domain is the first. The second is structural and I missed it initially:
 
-**Chez has no loop analysis whatsoever.** Grepping `s/*.ss` for `induction`,
+**Chez has no *classical* loop optimizer.** (Grep evidence bounds this claim: Chez ships some loop handling per its own Version 2 highlights, but the classical passes are absent.) Grepping `s/*.ss` for `induction`,
 `loop-invariant`, `licm` and `hoist` returns nothing. There is no loop recognition pass in
 the entire compiler. SBCL has `src/compiler/loop.lisp` with `loop-analyze` and natural-loop
 detection.

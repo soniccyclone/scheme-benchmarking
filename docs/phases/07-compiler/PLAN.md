@@ -21,9 +21,13 @@ outside the implementation:
    categories. `index`, `length` and `sub-index` collapse to `fixnum-pred`. It cannot
    represent `i ∈ [0,5)`, so bounds check elimination is unrepresentable, not merely
    unimplemented.
-2. **There is no loop analysis at all.** No induction variables, no LICM, no loop
-   recognition anywhere in `s/*.ss`. Every classical bounds-check-elimination technique
-   is loop-based.
+2. **There is no *classical* loop optimizer.** Grepping `s/*.ss` for `induction`,
+   `licm` and `hoist` returns nothing, and the ICFP 2006 paper never mentions induction
+   variables, strength reduction, unrolling, bounds-check elimination or vectorization.
+   Note the limit of that evidence: Chez's own Version 2 highlights list "optimizing
+   letrec expressions and loops", so it has *some* loop handling. The defensible claim
+   is that the classical passes are absent, not that no loop analysis exists. Every
+   classical bounds-check-elimination technique is loop-based, so the gap still stands.
 3. **`optimize-level` is a global compile-time parameter, not a lexical form.** Scoped
    check suppression has no faithful target.
 4. **There is no user-facing way to feed the lattice** beyond predicate tests, and
