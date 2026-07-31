@@ -172,48 +172,43 @@ buys much less on real code than the example suggests. Serrano tried 1CFA and re
 aged badly, since polyvariant CFA is how you get type specialization and therefore unboxing, which
 is exactly our use, but it was defensible in 1995 given that 0CFA alone was already cubic.
 
-**Whether a compiler should do this at all.** Chez's answer is no, and it has evidence. Jagannathan
-and Wright's flow-directed inlining ran as a prepass and got results too good to ignore at
-impractical analysis cost; Ashley reimplemented it faster, still impractical, and exhausted 128 MB
-of core plus 100 MB of swap on `interpret`. Waddell and Dybvig's online inliner optimizes whole
-programs in under a second and beats both. Ashley's own finding is the sharper argument: inlining
-invalidates the flow information that justified it, so the analysis has to be re-run afterward.
-Dybvig's compile-time payback rule (an optimization must make the compiler compiling itself faster
-by more than it costs) excludes CFA structurally, not accidentally.
+**Whether a compiler should do this at all.** Chez's answer is no, with evidence. Jagannathan and
+Wright's flow-directed inlining ran as a prepass and got results too good to ignore at impractical
+analysis cost; Ashley reimplemented it faster, still impractical, and exhausted 128 MB of core plus
+100 MB of swap on `interpret`. Waddell and Dybvig's online inliner optimizes whole programs in under
+a second and beats both. Ashley's own finding is the sharper argument: inlining invalidates the flow
+information that justified it, so the analysis has to be re-run afterward. Dybvig's compile-time
+payback rule excludes CFA structurally, not accidentally.
 
-**The framing claim is unmeasured.** Shivers' abstract asserts that Scheme and ML compilers are
-slower than C and Fortran compilers chiefly because they lack the optimizations that need a flow
-graph. Nothing in the dissertation measures the speedup from any of the six optimizations it
-develops. His own citation of Steenkiste bounds one piece of the payoff at 25%, that being the
-total cost of full run-time type checking in a PSL Lisp on MIPS-X and therefore an *upper* bound
-on what type recovery can recover.
+**The framing claim is unmeasured.** Shivers asserts that Scheme and ML compilers are slower than C
+and Fortran chiefly because they lack the optimizations that need a flow graph. Nothing in the
+dissertation measures the speedup from any of its six optimizations. His own citation of Steenkiste
+bounds one piece of the payoff at 25%, that being the total cost of full run-time type checking in a
+PSL Lisp on MIPS-X and therefore an *upper* bound on what type recovery can recover.
 
-**Precision is not the axis on which this loses.** On precision, context-sensitive CFA with a good
-store abstraction wins and will keep winning as k rises. It loses on *predictability*: the cost is
-a function of the closure structure of the program, no part of which is visible to the person
-writing it, and two source files that look equally straightforward can differ by orders of
+**Precision is not the axis on which this loses.** Context-sensitive CFA with a good store
+abstraction wins on precision and will keep winning as k rises. It loses on *predictability*: the
+cost is a function of the closure structure of the program, no part of which is visible to the
+person writing it, and two source files that look equally straightforward can differ by orders of
 magnitude because one passes a closure through a data structure. Section 11.1's answer, compile
 without optimization during development, concedes the point.
 
 # For us
 
 We have no CFA stage and should not add one. The call-target information we need arrives from two
-cheaper places: Steensgaard's unification-based analysis at stage 09, which gives 0CFA-strength
-results in almost linear time with no precomputed call graph, and well-knownness computed during
-closure conversion, which is Serrano's `X` for free.
+cheaper places: Steensgaard's unification-based analysis at stage 09, and well-knownness computed
+during closure conversion, which is Serrano's `X` for free.
 
-What to lift concretely. Serrano's `S` predicate covers most functions in most programs and is
-nearly free once a call graph exists; the `T`-family case is the one with the numeric payoff, since
-dropping the arity and tag words and the applicability check at the call is exactly what stands
-between us and a tight inner loop. Shivers' `xproc`/`xcall`/escaped-set construction is the right
-skeleton for separate compilation and for stage 09, and hand-written summaries for known library
-procedures are a cheap large win. Section 11.3.4's basic-block collapsing, treating a chain of
-lambdas where each is a non-conditional primitive's continuation as one analysis node, maps
-directly onto ANF straight-line code and is the highest-leverage speedup he proposes.
+Serrano's `S` predicate covers most functions in most programs and is nearly free once a call graph
+exists; the `T`-family case is the one with the numeric payoff, since dropping the arity and tag
+words and the applicability check at the call is exactly what stands between us and a tight inner
+loop. Shivers' `xproc`/`xcall`/escaped-set construction is the right skeleton for separate
+compilation and for stage 09. Section 11.3.4's basic-block collapsing, treating a chain of lambdas
+where each is a non-conditional primitive's continuation as one analysis node, maps directly onto
+ANF straight-line code and is the highest-leverage speedup he proposes.
 
-The environment problem is the deepest thing here and it is a live hazard for us. Our numeric
-domains narrow constantly: stage 05 learns `x < n` from a branch and stage 06 learns `x < y`. Types
-in our design are pinned at binding sites by declarations rather than narrowed across merged
-environments, which is the mitigation, but the interval and pentagon facts are not pinned. If we
-ever merge contexts, for instance by inlining one procedure into two call sites and analyzing the
-merged body, that is where to look for unsoundness.
+The environment problem is a live hazard for us. Our numeric domains narrow constantly: stage 05
+learns `x < n` from a branch and stage 06 learns `x < y`. Types are pinned at binding sites by
+declarations rather than narrowed across merged environments, which is the mitigation, but the
+interval and pentagon facts are not pinned. If we ever merge contexts, for instance by inlining one
+procedure into two call sites and analyzing the merged body, that is where to look for unsoundness.

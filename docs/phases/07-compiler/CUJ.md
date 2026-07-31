@@ -356,11 +356,25 @@ shows nothing on nbody, that is the expected result rather than evidence of a br
 | milestone | check |
 |---|---|
 | 1 | nbody compiles to native code, runs, matches the fixture |
-| 2 | no bounds-check branch in the inner loop, verified in disassembly |
+| 2 | no bounds-check branch in the inner loop, verified in disassembly. **Not independently valuable**, see below |
 | 3 | beats phase 3 configuration 5, tuned scalar SBCL |
 | 4 | packed AVX-512 in the inner loop, verified in disassembly |
 | 5 | beats phase 3 configuration 6 at `-O3 -march=native` |
 | 6 | Pentagon and loop analysis carry fannkuchredux |
+
+**Milestone 2 is a means, not an end, and ABCD says so with a number.** Bodík, Gupta and
+Sarkar removed 45% of bounds checks and got about 10% speedup, because Jalapeño had no
+global code motion and the freed scheduling went unused. Removing a check is only worth
+something if a later pass consumes the freedom it creates. For us that consumer is stage 10
+(vectorization, which the check made illegal) and stage 11. Treat milestone 2 as a gate on
+milestone 4 rather than as a result to celebrate on its own.
+
+Two related notes on stage dependencies. Stage 07 also gates stage 10's unroll factor, not
+just check hoisting: Larsen's `applu` case goes from 22.56% vectorizable at 256 bits to
+0.01% at 1024 bits, which is what happens when a vectorizer guesses a trip count. And if
+ABCD is built for stage 06, its amplifying-cycle detection supplies induction-variable
+discrimination for free, so stage 07 shrinks but does not disappear, because ABCD does not
+supply a trip count.
 
 Measure with the phase 2 harness, same pinning and the same reporting convention, so the
 numbers are directly comparable to the rest of the project.

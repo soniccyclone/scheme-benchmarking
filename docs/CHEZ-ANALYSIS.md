@@ -282,6 +282,26 @@ and phase 3 tests it rather than discovering it.
 
 ---
 
+## 4b. The back end: neither Chez nor SBCL auto-vectorizes
+
+Read from both back ends. This section lives here rather than only in
+`phases/07-compiler/PLAN.md` because it is a fact about what these implementations do, which
+is what this document is for.
+
+**Chez emits only scalar SSE.** `s/x86_64.ss` contains `addsd`, `mulsd`, `subsd`, `divsd`,
+`sqrtsd`, `movsd` and `cvtsi2sd`. Every one is an `sd`, scalar double. There are no packed
+instruction encodings anywhere in the file. Its three `xmm` mentions are comments about
+which registers the C calling convention preserves.
+
+**SBCL can encode vectors but never generates them.** `src/compiler/x86-64/` carries
+`avx512-insts.lisp` and `avx2-insts.lisp`, so the assembler knows the encodings, and
+`contrib/sb-simd` exposes them as user-callable intrinsics. But
+`grep -rlin 'vectoriz' src/compiler/*.lisp` returns nothing. There is no auto-vectorization
+pass. Vector code exists in SBCL only where a human wrote an intrinsic.
+
+So no Lisp-family compiler turns an ordinary scalar loop into packed arithmetic. That is the
+gap pipeline stage 10 exists to fill.
+
 ## 5. Consequences for the plan
 
 **Phase 3 gains a configuration.** Between configuration 2a (R6RS operators, safe) and
