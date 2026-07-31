@@ -286,6 +286,10 @@ glyphs, so **every numeral is silently dropped** on text extraction: section num
 citation numbers, percentages, line counts. Any quantitative claim from that paper must be
 read from the rendered page, not from extracted text.
 
+`bod-k-gupta-sarkar-abcd-eliminating-array-bounds-checks-on` loses most math symbols on
+extraction: `≤`, `φ` and `σ` render blank, so Table 1 and Definition 2 must be re-derived
+from the rendered page rather than copied.
+
 `chambers-ungar-customization-optimizing-compiler-technolog` is an OCR'd scan with garbled
 code fragments (`iffrue:` for `ifTrue:`, `got0` for `goto`, `l` for `1`).
 
@@ -374,13 +378,13 @@ core-language design in `../07-compiler/CUJ.md` step 2 comes from.
 | Steele, *RABBIT: A Compiler for SCHEME* (1978) | the first optimizing Scheme compiler | https://dspace.mit.edu/handle/1721.1/6913 |
 | Dybvig, *Three Implementation Models for Scheme* (1987) | heap, stack and string models. The stack model is why Chez is fast | https://www.cs.indiana.edu/~dyb/pubs/3imp.pdf |
 | Dybvig et al., *The Development of Chez Scheme* (ICFP 2006) | retrospective on the implementation we are measuring against | https://www.cs.indiana.edu/~dyb/pubs/hocs.pdf |
-| Ghuloum, *An Incremental Approach to Compiler Construction* (2006) | the practical bootstrap path, Scheme to x86 in stages | http://scheme2006.cs.uchicago.edu/11-ghuloum.pdf |
+| Ghuloum, *An Incremental Approach to Compiler Construction* (2006) | the practical bootstrap path, Scheme to x86 in stages. Our file is the 11-page workshop paper (Chicago TR-2006-06, pp. 27-37), not the longer extended tutorial it points at via a dead IU URL | http://scheme2006.cs.uchicago.edu/11-ghuloum.pdf |
 
 ## 2. Nanopass, the framework we build in
 
 | work | why | link |
 |---|---|---|
-| Sarkar, Waddell & Dybvig, *A Nanopass Infrastructure for Compiler Education* | the original formulation | https://www.cs.indiana.edu/~dyb/pubs/nano-jfp.pdf |
+| Sarkar, Waddell & Dybvig, *A Nanopass **Framework** for Compiler Education* (JFP, marked EDUCATIONAL PEARL) | the original formulation. **Our file is the JFP version, not the ICFP 2004 paper** whose title is *Infrastructure*, pp. 201-212. Citing the ICFP pagination against this document is wrong | https://www.cs.indiana.edu/~dyb/pubs/nano-jfp.pdf |
 | Keep & Dybvig, *A Nanopass Framework for Commercial Compiler Development* (ICFP 2013) | the version Chez itself is written in | https://www.cs.indiana.edu/~dyb/pubs/nano-icfp.pdf |
 | Keep, *A Nanopass Framework for Commercial Compiler Development* (dissertation) | full treatment | https://andykeep.com/pubs/dissertation.pdf |
 | Keep & Dybvig, nanopass preprint | | https://andykeep.com/pubs/np-preprint.pdf |
@@ -520,7 +524,7 @@ Relevant because ABCD (section 8) is formulated on SSA, and stage 7 of
 | work | why | link |
 |---|---|---|
 | Wegman & Zadeck, *Constant Propagation with Conditional Branches* (SCCP) | the algorithm our interval domain generalizes | https://c9x.me/compile/bib/constpropssa.pdf |
-| Click, global value numbering and code motion | redundancy elimination on SSA | https://c9x.me/compile/bib/click-gvn.pdf |
+| Click, *Global Code Motion **Global Value Numbering*** (SIGPLAN '95, pp. 246-257) | redundancy elimination on SSA. Title word order is code motion first with no conjunction, and the order is the paper's argument | https://c9x.me/compile/bib/click-gvn.pdf |
 
 ### 17. Instruction selection
 
