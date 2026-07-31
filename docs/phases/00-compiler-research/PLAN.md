@@ -592,8 +592,9 @@ complete. Most exist behind `dl.acm.org`, which is bot-blocked but valid in a br
   retrospective, 10 pages, which at that length very likely carries the 4-page 1982 original
   appended as the Cartwright and Fagan retrospective does. Briggs, Cooper & Torczon (1994)
   is still outstanding.
-- Cheney, *A Nonrecursive List Compacting Algorithm* (CACM 13(11), 1970, pp. 677-678, doi
-  `10.1145/362790.362798`). **Free, but browser-only**, same situation as Morel & Renvoise.
+- ~~Cheney, *A Nonrecursive List Compacting Algorithm*~~ **RECOVERED** by manual browser
+  download. (CACM 13(11), 1970, pp. 677-678, doi `10.1145/362790.362798`.) **Free, but
+  browser-only**, same situation as Morel & Renvoise.
   Checked archive.org's scanned periodicals as well: it holds CACM *index* volumes for 1970
   and 1979 (`sim_association-for-computing-machinery-communications_1970_13_index`,
   unrestricted, PDFs present) but not the issue contents, so that route does not reach the
@@ -630,8 +631,9 @@ Wider-field gaps, found while assembling Part II and still unresolved:
 - ~~Kildall, *A Unified Approach to Global Program Optimization*~~ **RECOVERED**, via a
   Wayback snapshot of `courses.cs.washington.edu/courses/cse501/15sp/papers/kildall.pdf`.
   Note the live URL 404s; only the archived copy serves it.
-- Morel & Renvoise, *Global Optimization by Suppression of Partial Redundancies* (CACM
-  22(2), 1979, pp. 96-103, doi `10.1145/359060.359069`). **Free, but browser-only.**
+- ~~Morel & Renvoise, *Global Optimization by Suppression of Partial Redundancies*~~
+  **RECOVERED** by manual browser download, confirming the diagnosis below. (CACM
+  22(2), 1979, pp. 96-103, doi `10.1145/359060.359069`.) **Free, but browser-only.**
   OpenAlex reports `best_oa_location` as `dl.acm.org/doi/pdf/10.1145/359060.359069`, since
   ACM opened its first fifty years in 2022. Cloudflare rejects every scripted fetch,
   including with full browser headers. One manual download closes this. Knoop, Rüthing &

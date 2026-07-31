@@ -59,3 +59,7 @@ chaitin-register-allocation-graph-coloring-1982	18	https://www.cs.utexas.edu/~pi
 kildall-unified-approach-global-optimization-1973	16	https://web.archive.org/web/2018id_/http://courses.cs.washington.edu/courses/cse501/15sp/papers/kildall.pdf
 # blanchet escape analysis x3	19	NOT auto-fetchable: PostScript sources, converted with ps2pdf.
 #   https://bblanche.gitlabpages.inria.fr/publications/{BlanchetPOPL98,BlanchetOOPSLA99,BlanchetToplas}.ps.gz
+# cheney-nonrecursive-list-compacting-1970	12	manual browser download (ACM Cloudflare blocks scripted fetch)
+#   https://dl.acm.org/doi/pdf/10.1145/362790.362798   CACM 13(11) 1970 pp.677-678
+# morel-renvoise-partial-redundancy-elimination-1979	16	manual browser download (same reason)
+#   https://dl.acm.org/doi/pdf/10.1145/359060.359069   CACM 22(2) 1979 pp.96-103
