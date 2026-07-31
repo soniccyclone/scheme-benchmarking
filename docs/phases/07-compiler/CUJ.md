@@ -264,6 +264,19 @@ margin here.
 
 ### Stage 9, alias analysis
 
+**Steensgaard's precision limit is our common case, not a corner case.** Unification is
+symmetric and permanent, so a single `(let ([v (if p a b)]) ...)` merges `a` and `b`
+program-wide and forever. In a numeric kernel where several arrays flow through one shared
+helper, that is the ordinary shape rather than a pathological one. Budget for it: either
+accept the merge and lose `restrict` on those arrays, or use an inclusion-based analysis for
+the arrays specifically. Do not assume almost-linear time comes for free at our precision
+requirement.
+
+Note also that the same pass pays for itself twice. Steensgaard's `lam` component yields
+0CFA-strength call-target information, which feeds direct-call selection at stage 11 and
+closure representation at stage 08. That is a second reason this stage should land before
+stage 08 finishes rather than after it.
+
 Only needs to answer one question: are these two flvectors provably distinct? Two values
 from distinct `make-flvector` calls that do not escape are distinct, which is decidable
 locally and covers the numeric kernel shapes. Anything unproven is assumed to alias.
@@ -340,6 +353,19 @@ to frame descriptors rather than assuming the original trick works.
 **Precise GC roots are why this is worth the work.** At every call site the allocator knows
 which registers and stack slots hold live references, so emit a stack map. That is what a
 precise generational collector needs and what a C back end cannot provide.
+
+## A measured pass budget
+
+Keep's dissertation makes the cost of adding passes concrete, which the nanopass style
+otherwise invites hand-waving about. Marginal per-pass cost is 0.20 to 0.26% of back-end
+time before primitive expansion, against 2.18 to 2.20% after instruction selection, with a
+68.5 to 69.0% traversal overhead overall. Stages 05 through 10 all sit in the cheap region,
+so the analysis passes this document adds cost a few percent of compile time, not a
+multiple.
+
+One caution from the same source: per-benchmark compile-time ratios ranged from 1.00x to
+4.73x with no correlation to program size, and the authors could not explain the spread. Do
+not treat a single benchmark's compile time as representative.
 
 ## Step 5: the runtime
 
