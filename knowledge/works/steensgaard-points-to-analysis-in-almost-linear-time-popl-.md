@@ -72,12 +72,10 @@ and the rule becomes: `A ⊢ x : ref(α₁), A ⊢ y : ref(α₂), α₂ ≤ α�
 component of `α₂` must be `⊥` or equal to the corresponding component of `α₁`. Non-pointers
 cost nothing.
 
-**Primitive operations.** `x = op(y₁…yₙ)` requires `αᵢ ≤ α` for every operand. The reasoning
-is worth noting: pointer subtraction yields a non-pointer, but either operand pointer can be
-*reconstituted* from the result given the other, so the result must carry the same type.
-Comparisons cannot reconstitute, so they need not — but the paper treats all primitives
-identically for simplicity, and only the implementation weakens the rule for boolean-returning
-operations.
+**Primitive operations.** `x = op(y₁…yₙ)` requires `αᵢ ≤ α` for every operand, because pointer
+subtraction yields a non-pointer from which either operand can be *reconstituted* given the
+other. Comparisons cannot reconstitute and need not, but the paper treats all primitives
+identically for simplicity.
 
 **Inference.** Every variable starts with its own equivalence class representative (ECR),
 typed `ref(⊥ × ⊥)`. Process each statement *exactly once*, joining ECRs as needed. Joining
@@ -102,38 +100,33 @@ pairwise.
 Because joins only happen when required for well-typedness, the fixpoint is the *minimal*
 solution.
 
-**Complexity argument.** ECR count is proportional to program size (constant per statement,
-or proportional to variable count for a call). Joins are bounded by ECR count. Everything
-else is find operations, N of which cost O(N α(N,N)). Pending sets as binary trees make cjoin
-constant-time.
+ECR count is proportional to program size; joins are bounded by ECR count; everything else is
+find operations, N of which cost O(N α(N,N)). Pending sets as binary trees keep cjoin constant.
 
 **Functions are just another pointer.** `x = fun(f₁…fₙ)→(r₁…rₘ) S*` sets `x`'s function
-component to a `lam` type whose argument types are the formals' types and whose result types
-are the return parameters' types. A call `x₁…xₘ = p(y₁…yₙ)` looks up `p`'s `lam` type
-(creating one if `⊥`) and cjoins actuals into formals and results out into targets. Indirect
-calls, recursion, and function pointers all fall out with no call graph and no special case.
+component to a `lam` type built from the formals' and return parameters' types. A call
+`x₁…xₘ = p(y₁…yₙ)` looks up `p`'s `lam` type (creating one if `⊥`) and cjoins actuals into
+formals, results out into targets. Indirect calls, recursion, and function pointers all fall
+out with no call graph and no special case.
 
 # Applicability
 
 Preconditions: programs "as well-behaved as (mostly) portable C." Constructing pointers from
-scratch, bitwise duplication, or relying on compiler-specific variable layout breaks it.
-XOR on pointers is fine, because there is a real flow of values.
+scratch, bitwise duplication, or relying on compiler-specific variable layout breaks it. XOR
+on pointers is fine — there is a real flow of values.
 
-Flow-insensitive, context-insensitive, monomorphic. The paper is explicit that context
-sensitivity would follow from polymorphic type inference, and flags it as future work.
+Flow-insensitive, context-insensitive, monomorphic; the paper says context sensitivity would
+follow from polymorphic inference and flags it as future work.
 
-The measured precision, from Tables 1-3: a substantial number of type variables describe
-exactly one program variable, most describe a small number, and there are a few catastrophic
-outliers describing hundreds. The paper examines the worst one — in LambdaMOO, the type
-variable covering 624 locations is *all global constant strings passed to user-defined logging
-and tracing procedures*. Any context-insensitive analysis merges those. That is a precise
-and honest diagnosis of where the technique breaks, and it points directly at polymorphism as
-the fix.
+Precision, from Tables 1-3: many type variables describe exactly one program variable, most
+describe a small number, and a few catastrophic outliers describe hundreds. The paper examines
+the worst — in LambdaMOO the type variable covering 624 locations is *all global constant
+strings passed to user-defined logging and tracing procedures*. Any context-insensitive
+analysis merges those, which is a precise diagnosis pointing straight at polymorphism.
 
 The stated serious weakness: "many programs use data structures such as trees and lists as
 central data structures. For these programs the inability to distinguish between structure
-elements is a serious loss." The type system extends to per-field types, but the extension
-loses the almost-linear bound.
+elements is a serious loss." Per-field types are possible but lose the almost-linear bound.
 
 # Relevance
 
@@ -141,33 +134,29 @@ Stage 09 currently has no literature behind it, and the CUJ scopes it to one que
 these two flvectors provably distinct? That is a much easier question than what this paper
 answers, and the mismatch cuts both ways.
 
-**What transfers.** The union-find core is exactly right for our scale and our IR. Every
-`make-flvector` call site gets a fresh ECR; assignment, argument passing, and return join ECRs;
-two flvector values are provably distinct iff their ECRs differ *and* neither has been unified
-with anything unknown. The conditional-join machinery (`pending` sets) is what makes a
-single pass suffice — no fixpoint iteration, no worklist. In a nanopass stage that is maybe
-150 lines.
+**What transfers.** The union-find core is right for our scale and our IR. Every
+`make-flvector` site gets a fresh ECR; assignment, argument passing, and return join ECRs; two
+flvectors are provably distinct iff their ECRs differ and neither has been unified with
+anything unknown. The `pending`-set conditional join is what makes one pass suffice — no
+fixpoint, no worklist. Maybe 150 lines as a nanopass stage.
 
-The `lam` types matter more than they first appear. The abstract says the results are
-equivalent to a flow-insensitive alias analysis *and control flow analysis*. For Scheme those
-are the same problem: "which closures can this call site invoke" is "what does this variable
-point to." Steensgaard therefore gives us a 0CFA-strength control flow analysis in almost
-linear time, unified with the alias analysis, with no call graph precomputed. Shivers' CFA is
-the usual reference for Scheme and is far more expensive. If stage 09 produces a call-target
-map as a side effect, that feeds `optimize-known-call`-style direct calls at stage 11 for free.
+The `lam` types matter more than they look. The abstract says the results equal a
+flow-insensitive alias analysis *and control flow analysis*, and for Scheme those are the same
+problem: "which closures can this call site invoke" is "what does this variable point to." So
+this gives 0CFA-strength control flow analysis in almost linear time, unified with the alias
+analysis, no call graph precomputed — where Shivers' CFA, the usual Scheme reference, is far
+more expensive. A call-target map falling out of stage 09 feeds `optimize-known-call`-style
+direct calls at stage 11 for free.
 
-**What does not transfer, and is the reason to be careful.** Steensgaard's imprecision is
-*unification*: one assignment `x = y` merges the two points-to sets permanently and
-symmetrically, forever, everywhere. Our CUJ says "getting this wrong makes vectorization
-miscompile, so default to aliasing and only claim distinctness when proven." Unification is
-safe in that direction — merging can only lose distinctness claims, never invent them. Good.
-But it degrades fast: one `(let ([v (if p a b)]) ...)` merges `a` and `b`'s ECRs for the whole
-program, and every later access through either is then "may alias." In a numeric kernel where
-the arrays flow through a shared helper procedure, that is the common case, not the rare one.
+**What does not transfer.** The imprecision is *unification*: one `x = y` merges two points-to
+sets permanently, symmetrically, everywhere. That is safe in our required direction — merging
+loses distinctness claims, never invents them — but it degrades fast. One
+`(let ([v (if p a b)]) ...)` merges `a` and `b` for the whole program, and every later access
+through either is "may alias." In a numeric kernel where arrays flow through a shared helper,
+that is the common case, not the rare one.
 
-The composite-object imprecision is, unusually, *free* for us. Steensgaard's serious loss —
-all fields of a struct share one type — is irrelevant when the question is flvector identity
-rather than flvector contents. We do not care what is inside; we care that two pointers differ.
+The composite-object imprecision is, unusually, free for us: all fields sharing one type is
+irrelevant when the question is flvector *identity* rather than contents.
 
 **Practical read.** The CUJ's actual precondition — "two values from distinct `make-flvector`
 calls that do not escape are distinct" — is *escape* analysis as much as points-to analysis,

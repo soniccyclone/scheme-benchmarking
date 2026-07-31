@@ -104,30 +104,28 @@ coalescing typically converges in one pass. Spilling forces a full rebuild.
 
 # Relevance
 
-Our stage 12 is specified as *linear scan* (Poletto-Sarkar), not graph coloring, so this
-paper is not the allocator we build. It is still worth having for two reasons.
+Our stage 12 is specified as *linear scan*, not graph coloring, so this is not the allocator
+we build. It matters for two other reasons.
 
-First, the register-pressure profile the paper describes is ours. Section 4 lists exactly
-the optimizations that make allocation hard: known-call-site procedures with custom
-parameter temporaries, free variables of nested functions passed in registers, representation
-analysis spreading an n-tuple into n registers, callee-save closure analysis spreading
-context across registers. That is the SML/NJ closure-conversion pipeline, and it is close to
-what stage 08 (storage class assignment) plus closure conversion will do to us. The concrete
-finding is worth internalizing: SML/NJ *regressed* when going from three to six callee-save
-registers until the allocator got good enough at copy propagation, then it improved. If our
+First, the register-pressure profile is ours. Section 4 lists exactly the optimizations that
+make allocation hard: known-call-site procedures with custom parameter temporaries, free
+variables of nested functions passed in registers, representation analysis spreading an n-tuple
+into n registers, callee-save closure analysis spreading context across registers. That is the
+SML/NJ closure-conversion pipeline, close to what stage 08 plus closure conversion will do to
+us. The finding to internalize: SML/NJ *regressed* going from three to six callee-save
+registers until the allocator got good enough at copy propagation, then improved. If our
 closure representation gets aggressive and performance goes the wrong way, coalescing quality
 is the first thing to check, not the closure design.
 
-Second, it defines the yardstick. If our linear-scan allocator leaves more than ~16% of
-moves in the output on closure-heavy code, we are losing something a 1996 algorithm knew how
-to get, and the question becomes whether to bolt coalescing onto linear scan (Wimmer-Franz
-covers the SSA-form variant) or to accept it. Burger-Waddell-Dybvig — what Chez actually
-does — deliberately does *not* build an interference graph at all, so the comparison between
-these two papers is the live design question for stage 12.
+Second, it sets the yardstick. If our allocator leaves more than ~16% of moves on closure-heavy
+code, we are losing what a 1996 algorithm knew how to get, and the question becomes whether to
+bolt coalescing onto linear scan (Wimmer-Franz covers the SSA variant) or accept it.
+Burger-Waddell-Dybvig — what Chez actually does — builds no interference graph at all, so the
+comparison between these two papers is the live design question for stage 12.
 
-The `OK`/`Conservative` split also transfers directly to linear scan with fixed
-register constraints: the underlying question, "does merging these two live ranges push any
-neighbor over the K threshold," is the same regardless of the allocator's shape.
+The `OK`/`Conservative` split transfers to linear scan with fixed register constraints too:
+"does merging these two live ranges push any neighbor over K" is the same question regardless
+of allocator shape.
 
 # Notes
 
@@ -137,20 +135,19 @@ Innovations) and Andrew W. Appel (Princeton), ACM copyright `0164-0925/96/0500-0
 Vol. 18 No. 3, May 1996, pages 300-324, received October 1995 / accepted February 1996. The
 slug is correct in every particular. No correction needed.
 
-The comparison in Section 8 is weaker than the headline suggests, and the authors say so.
-They do not compare against Chaitin or against Briggs as published, because both would
-produce uncolorable graphs on their input. They compare against the *safe subset* of
-Briggs — one-round conservative coalescing plus biased selection, with reckless same-tag
-coalescing removed. So "84% vs 62% of moves removed" is iterated coalescing against a
-hobbled Briggs, on one compiler, on ML. Fair, and disclosed, but not a clean head-to-head.
+The Section 8 comparison is weaker than the headline, and the authors say so. They do not
+compare against Chaitin or published Briggs, because both produce uncolorable graphs on their
+input. They compare against the *safe subset* of Briggs — one-round conservative coalescing
+plus biased selection, reckless same-tag coalescing removed. So "84% vs 62%" is iterated
+coalescing against a hobbled Briggs, on one compiler, on ML. Disclosed, but not a clean
+head-to-head.
 
-The `nucleic` benchmark is the outlier that tells you where the technique strains: 701
-spilled nodes against 0-24 for everything else, average machine-register degree 46. Heavy
-floating-point code with long simultaneous live ranges is the case coalescing cannot rescue,
-and it is close in shape to the numeric kernels we care about (nbody, spectralnorm). Worth
-remembering when reading the 4.4% speedup: `nucleic` and `ray` got 11% and 10%, and the
-symbolic benchmarks got 2-3%.
+`nucleic` is the outlier showing where the technique strains: 701 spilled nodes against 0-24
+for everything else, average machine-register degree 46. Heavy floating point with long
+simultaneous live ranges is what coalescing cannot rescue, and it is close in shape to nbody
+and spectralnorm. Note the speedup split too: `nucleic` and `ray` got 11% and 10%, the symbolic
+benchmarks 2-3%.
 
-Small honest gap: they never measured compile time against Briggs, because they did not have
-his implementation. They argue each round is linear like his, and that his algorithm needs
-an extra round to coalesce with machine registers while theirs does not. Plausible, unmeasured.
+Honest gap: they never measured compile time against Briggs, lacking his implementation. They
+argue each round is linear like his and that his needs an extra round to coalesce with machine
+registers. Plausible, unmeasured.

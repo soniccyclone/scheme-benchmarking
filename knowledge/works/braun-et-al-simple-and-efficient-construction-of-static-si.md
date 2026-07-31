@@ -136,11 +136,10 @@ it says the SSA and functional views are the same construction, not two represen
 bridge. If ABCD (stage 06/07) wants an SSA inequality graph, we can build one over
 `letrec`-parameter phis without ever leaving the functional IR.
 
-The on-the-fly optimization story also fits nanopass badly and well at once. Badly, because
-nanopass wants each pass to be one small semantic step; well, because the peephole set
-(arith simplification, CSE by value number, constant folding, copy propagation) is exactly
-what an IR-node constructor can do for free, and it is the reason our later interval and
-pentagon domains would see a smaller graph.
+The on-the-fly optimization story fits nanopass badly and well at once: badly because nanopass
+wants each pass to be one semantic step, well because the peephole set (arith simplification,
+CSE by value number, constant folding, copy propagation) is what an IR-node constructor can do
+for free, and it is why our interval and pentagon domains would see a smaller graph.
 
 # Notes
 
@@ -149,21 +148,18 @@ body — irreducible — where the algorithm produces `v1: φ(v0,v2)` and `v2: �
 `v0` alone would do. It does not hide this behind "in practice"; it builds the SCC pass and
 proves the containment lemma. That is worth more than the headline result.
 
-The stricter-than-Cytron redundancy definition is a real (if small) contribution that gets
-lost in summaries: 3 of 11 non-trivial phi SCCs in the SPEC measurements did *not* come from
-irreducible control flow, meaning Cytron's algorithm leaves them behind too. So Algorithm 5
-is useful as a cleanup pass regardless of which constructor you use.
+The stricter-than-Cytron redundancy definition is a small contribution that gets lost in
+summaries: 3 of 11 non-trivial phi SCCs in the SPEC measurements did *not* come from
+irreducible control flow, meaning Cytron's algorithm leaves them behind too. Algorithm 5 is
+useful as a cleanup pass regardless of which constructor you use.
 
-**On the metadata.** The extracted PDF carries no conference header, page numbers, or
-copyright line — it is an author preprint, not the publisher's copy. The venue is CC 2013
-(22nd International Conference on Compiler Construction, LNCS 7791, pp. 102-122) from
-external knowledge, not from this file. Everything else in the frontmatter (title, six
-authors, affiliations at KIT and Saarland) is read directly off the title page. The
-bibliography's "CC 2013" claim is consistent with the document but not confirmable *from*
-the document.
+**On the metadata.** This PDF carries no conference header, page numbers, or copyright line —
+an author preprint, not the publisher's copy. The venue is CC 2013 (22nd International
+Conference on Compiler Construction, LNCS 7791, pp. 102-122) from external knowledge, not from
+this file. Title, six authors, and the KIT/Saarland affiliations are read off the title page.
+The bibliography's "CC 2013" is consistent with the document but not confirmable *from* it.
 
-One thing the paper asserts without much support: "the runtime of our algorithm is on par
-with Cytron et al.'s." The 0.28% instruction-count edge is inside the noise of two different
-implementations in two different codebases, and they compare their *unoptimized*
-implementation against LLVM's tuned one, which cuts the other way. The honest claim is that
-the simple algorithm is not slower in any way that matters, which is enough.
+One claim is thin: "the runtime of our algorithm is on par with Cytron et al.'s." The 0.28%
+instruction-count edge is inside the noise between two implementations in two codebases, and
+they compare their *unoptimized* implementation against LLVM's tuned one, which cuts the other
+way. The honest claim is that the simple algorithm is not slower in any way that matters.

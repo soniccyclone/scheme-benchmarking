@@ -116,14 +116,17 @@ check out of the loop, and if so what guard must I replicate."
 
 **Bibliography correction, flagged.** The bibliography calls this "the canonical SSA paper,
 TOPLAS 1991," and the slug reads `efficiently-computing-`. The PDF is neither. Title page
-reads *"An Efficient Method of Computing Static Single Assignment Form"*, ACM copyright
-line `0-89791-294-2/89/0001/0025`, pages 25-35 — the POPL 1989 conference paper. The
-TOPLAS 1991 article is a different, longer document ("Efficiently Computing Static Single
-Assignment Form and the Control Dependence Graph," TOPLAS 13(4):451-490) with expanded
-complexity analysis and the `A_φ`/`work`/`hasAlready` pseudocode everyone quotes. The
-conference version is a legitimate ancestor and covers the same two theorems, but if a
-downstream document cites a page number or the TOPLAS complexity discussion it will not
-find it here. Slug and bibliography entry both want fixing, or a second fetch.
+reads *"An Efficient Method of Computing Static Single Assignment Form"*, ACM copyright line
+`0-89791-294-2/89/0001/0025`, pages 25-35 — the POPL 1989 conference paper, 11 pages.
+
+The TOPLAS 1991 article is a different, longer document ("Efficiently Computing Static Single
+Assignment Form and the Control Dependence Graph," TOPLAS 13(4):451-490, 40 pages) with
+expanded complexity analysis and the `A_φ`/`work`/`hasAlready` pseudocode everyone quotes. It
+is now present in this bundle under the separate slug
+`cytron-et-al-efficiently-computing-ssa-toplas-1991`, so no fetch is needed — but the two
+slugs must not be merged, and any citation of "the canonical SSA paper" should point at the
+TOPLAS slug, not this one. The conference version covers the same two theorems and is a
+legitimate ancestor; it simply is not the document the bibliography describes.
 
 The paper is honest about its own weak point in a way that later summaries are not: Section
 6 concedes the dominance frontier mapping can be quadratic while the phi count stays

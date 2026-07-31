@@ -112,9 +112,14 @@ is a real R7RS feature and each one is expensive.
 **Full `call/cc` is a goal, not an exclusion.** Owning the back end means owning the
 stack, so the earlier compromise is gone. Ordering is still escape-only first because it is
 simpler and unblocks the benchmarks, but the design must not foreclose the general case.
-Chez's stack-segment approach is the reference, and `RESEARCH.md` section 4 already showed
-it makes ordinary calls cheap: Chez beats Racket by about 2.5x on `ctak` and `fibc`. That is
-an existence proof that full continuations need not tax the common path.
+Chez's stack-segment approach is the reference. Note the evidence carefully: the
+Hieb, Dybvig and Bruggeman paper itself contains **no measurements at all**. Its abstract
+makes three performance claims and its twelve pages carry no table, benchmark or figure
+supporting any of them. The mechanism is specified precisely; the performance is asserted.
+The actual evidence that full continuations need not tax the common path is our own, from
+`RESEARCH.md` section 4: Chez beats Racket by about 2.5x on `ctak` and `fibc`, which are the
+continuation benchmarks. That is an implementation outperforming another implementation, not
+a controlled measurement of what continuations cost, so it bounds the claim loosely.
 
 **Numeric tower: fixnum and flonum only.** No bignum, ratnum, or complex initially. The
 benchmarks need neither, and the tower is where a naive implementation loses all its

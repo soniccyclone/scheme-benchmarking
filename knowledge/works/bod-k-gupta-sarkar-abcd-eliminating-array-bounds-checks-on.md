@@ -113,18 +113,16 @@ question, rather than computing a topological order (which would require travers
 graph, defeating demand-driven analysis).
 
 **Partial redundancy.** Insertion edges are collected during backtracking: a check goes into a
-φ-node's in-edge exactly when *some* arguments proved True and others False; the False ones
-are the insertion set. The compensating check's index expression is free — it is always
-`v_i + d` where `v_i` is the φ-argument being inserted into and `d` is the propagated `c` at
-that point. In the running example, `check A[j₂]` compensates with `check A[limit₀ + 2]`. At
-a min vertex, pick the insertion set with lower execution frequency; at a max vertex, merge.
-Profitability is decided by profile counts (speculative insertion), not by the classical
-anticipability dataflow problem.
+φ-node's in-edge exactly when *some* arguments proved True and others False, and the False ones
+are the insertion set. The compensating check's index expression is free — always `v_i + d`
+where `v_i` is the φ-argument inserted into and `d` is the propagated `c` there. In the running
+example `check A[j₂]` compensates with `check A[limit₀ + 2]`. At a min vertex take the
+insertion set with lower execution frequency; at a max vertex merge. Profitability is decided
+by profile counts (speculative insertion), not by classical anticipability.
 
-**Two extras worth knowing.** ABCD does *implicit subsumption*: the upper-bound check for
-`A[i-1]` is redundant given the one for `A[i]`, and dually for lower bounds. And on
-zero-based arrays both checks merge into one *unsigned* comparison, since a negative index
-becomes a huge positive one.
+Two extras: ABCD does *implicit subsumption* (the upper-bound check for `A[i-1]` is redundant
+given `A[i]`, dually for lower bounds), and on zero-based arrays both checks merge into one
+*unsigned* comparison, since a negative index becomes a huge positive one.
 
 # Applicability
 
@@ -139,18 +137,17 @@ redundant. Speedup measured at ~10% on the Symantec microbenchmarks, which the a
 lower than expected and attribute to Jalapeño lacking the downstream optimizations (global
 code motion in particular) that bounds-check removal is supposed to unblock.
 
-The transformation half is the weak part and is disclosed as such. Each check is split into a
-*compare* (sets a flag) and a *trap* (raises on the flag). ABCD optimizes only the compares.
-Traps for partially redundant checks stay put, which means code still cannot move freely
-across array accesses — the original motivation. Fully redundant traps do get deleted, and
-those are the majority. The proposed fix is dual-version loops with on-demand generation of
-the unoptimized loop when a hoisted compare fails, including recovery from *spurious*
-failures of speculatively hoisted checks.
+The transformation half is the weak part, disclosed as such. Each check splits into a *compare*
+(sets a flag) and a *trap* (raises on it), and ABCD optimizes only the compares. Traps for
+partially redundant checks stay put, so code still cannot move freely across array accesses —
+the original motivation. Fully redundant traps do get deleted, and those are the majority. The
+proposed fix is dual-version loops generated on demand when a hoisted compare fails, including
+recovery from *spurious* failures of speculatively hoisted checks.
 
-Aliasing: safe in Java because locals cannot be aliased and array length is immutable. `x.f[2]`
-after `y = x; y.f = new int[1]` correctly fails, because `x.f` is a memory load returning an
-unknown array with no def-use edge. In a language with mutable aliased array *references*
-this reasoning does not carry over unchanged.
+Aliasing is safe in Java because locals cannot be aliased and array length is immutable:
+`x.f[2]` after `y = x; y.f = new int[1]` correctly fails, since `x.f` is a memory load
+returning an unknown array with no def-use edge. In a language with mutable aliased array
+*references* this reasoning does not carry over.
 
 # Relevance
 

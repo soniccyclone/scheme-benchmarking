@@ -134,18 +134,17 @@ annotations in the grammar. If we find ourselves adding an `absval` field to a p
 have chosen wrong.
 
 Third, and most usefully, this paper contradicts the CUJ's stage 12 plan with evidence. The
-CUJ specifies linear scan. Chez's *original* compiler used linear scan with lazy saves; the
-*new* one moved to graph coloring with move biasing, and that change is named as "the biggest
-contributing factor, and the one that is consistent in all of the benchmarks" for a 15-27%
-speedup. The 32-bit x86 case (eight registers) benefited most, which is the register-pressure
-regime our AVX-512 loop bodies will not be in, but our general-purpose integer code will. The
-honest read: linear scan is the right *first* implementation because it is simple and fits the
-tree, but the ceiling is measurably higher with coloring, and Chez paid for it in compile time
-deliberately. Worth planning stage 12 with a swappable allocator interface from the start.
+CUJ specifies linear scan; Chez's *original* compiler used linear scan with lazy saves, and the
+*new* one moved to graph coloring with move biasing, named as "the biggest contributing factor,
+and the one that is consistent in all of the benchmarks" for the 15-27% speedup. The 32-bit x86
+case (eight registers) benefited most. Honest read: linear scan is the right *first*
+implementation because it is simple and fits the tree, but the ceiling is measurably higher
+with coloring, and Chez paid compile time for it deliberately. Plan stage 12 with a swappable
+allocator interface.
 
-Also note what the new compiler had to give up to get coloring: near-assembly form much
-earlier, and a full variable-liveness pass. That is an argument for keeping stages 11 and 13
-close together and for not assuming register allocation can stay an AST-shaped pass forever.
+Note also what the switch cost: near-assembly form much earlier, and a full variable-liveness
+pass. That argues for keeping stages 11 and 13 close together and for not assuming register
+allocation stays an AST-shaped pass forever.
 
 # Notes
 
@@ -163,16 +162,15 @@ file shares the exact title but is Keep's 170-page Indiana University PhD disser
 December 2012, cited here as reference [14]. Two distinct works. Anyone deduplicating by
 title will merge them wrongly.
 
-The most interesting thing in the paper is the thing it does not resolve. Compile-time
-overhead ranges from 1.00x to 4.73x across benchmarks with no correlation to program size,
-and the authors say an understanding of why "might lead to overall improvements." That is a
-real open question about nanopass compilers and it is worth watching for in our own build:
-if some of our benchmarks compile 4x slower than others of similar size, this paper says that
-is a known, unexplained phenomenon rather than a bug in our passes.
+The most interesting thing in the paper is what it does not resolve: compile-time overhead
+ranges from 1.00x to 4.73x across benchmarks with no correlation to program size, and the
+authors say understanding why "might lead to overall improvements." Worth remembering during
+our own build — if some benchmarks compile 4x slower than others of similar size, this paper
+says that is a known, unexplained phenomenon rather than a bug in our passes.
 
 Mild overselling in the abstract: "produces faster code than the original, averaging 15-27%"
-is true, but the paper attributes it to the register allocator and closure optimization, not
-to nanopass structure. Nanopass made the rewrite *feasible*; it did not make the code fast.
-The two similix/softscheme benchmarks actually got 1.22-1.54x *slower* because they invoke the
-compiler at run time, and the authors flag this as dragging the average down — which cuts the
-other way and is honestly reported.
+is true, but the paper attributes it to the register allocator and closure optimization, not to
+nanopass structure. Nanopass made the rewrite *feasible*; it did not make the code fast. The
+similix and softscheme benchmarks got 1.22-1.54x *slower* because they invoke the compiler at
+run time, which the authors flag as dragging the average down — honestly reported and cutting
+the other way.
