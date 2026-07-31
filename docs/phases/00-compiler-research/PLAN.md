@@ -609,14 +609,7 @@ complete. Most exist behind `dl.acm.org`, which is bot-blocked but valid in a br
   now 404. A full scan of *Compiling with Continuations* circulates on a third party's
   course-reserve page; it is not authorized and is deliberately not used here.
 
-- Serrano & Weis, *Bigloo: a portable and optimizing compiler for strict functional
-  languages* (SAS 1995), LNCS 983, doi `10.1007/3-540-60360-3_50`. **Searched again and not
-  found open.** Springer serves it at
-  `link.springer.com/content/pdf/10.1007/3-540-60360-3_50.pdf` but returns non-PDF to a
-  scripted fetch. Serrano's INRIA page is reachable at
-  `www-sop.inria.fr/members/Manuel.Serrano/` and its publication index carries no PDF for
-  this paper; the `publi/` path that served his SAC 1995 CFA paper has no SAS 1995
-  counterpart. Likely needs institutional access or a manual browser download.
+- ~~Serrano & Weis, *Bigloo*~~ **RECOVERED.** See the note below the gap list.
 
 Wider-field gaps, found while assembling Part II and still unresolved:
 
@@ -637,6 +630,36 @@ Wider-field gaps, found while assembling Part II and still unresolved:
   Inline caches, the technique section 14's type feedback builds on.
 - Andersen's 1994 dissertation on points-to analysis, the inclusion-based counterpart to
   Steensgaard.
+
+### Recovering Bigloo: why every PDF search failed
+
+Worth recording as a method note. Serrano & Weis, *Bigloo: a portable and optimizing
+compiler for strict functional languages*, SAS 1995, LNCS 983, was recorded as unfindable
+after checking Springer (paywalled, non-PDF to scripted fetch), several guessed filenames
+under `www-sop.inria.fr/members/Manuel.Serrano/publi/`, and his current publication index.
+
+Every one of those searched for a `.pdf`. **The paper was never published as one.** Querying
+the Wayback CDX index for everything that ever existed under that directory:
+
+```
+http://web.archive.org/cdx/search/cdx?url=www-sop.inria.fr/members/Manuel.Serrano/publi/*&fl=original&collapse=urlkey
+```
+
+returned `sw-sas95.ps.gz` — "sw" for Serrano and Weis — a **gzipped PostScript** file from
+the dvips era. Fetched from the 2005 snapshot (82,469 bytes gzipped, 202,207 decompressed,
+`%!PS-Adobe-2.0`, originally named `sas95.ps`), converted with `ps2pdf`, and verified by
+extracting first-page text: "Biglo o: ortable and optimizing compiler for strict functional
+languages / Man uel Serrano and Pierre eis / INRIA, B.P 105, Rocquencourt". The missing
+characters are dvips kerning artifacts in extraction, not damage.
+
+The lesson generalizes to the remaining gaps: **anything published before roughly 2000 may
+exist only as `.ps` or `.ps.gz`**, and a search that assumes PDF will report it missing when
+it is sitting there. Query the CDX index for the whole directory rather than guessing
+filenames, and check for PostScript before concluding a paper is unavailable.
+
+This entry is not in the auto-fetch list, because the source URL serves `.ps.gz` and
+`tools/fetch-sources.sh` correctly rejects non-PDF payloads. Provenance is recorded as a
+comment in `tools/sources.tsv`.
 
 ## Suggested ingestion order
 
