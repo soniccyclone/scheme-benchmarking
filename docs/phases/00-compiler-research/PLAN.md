@@ -592,8 +592,14 @@ complete. Most exist behind `dl.acm.org`, which is bot-blocked but valid in a br
 - Cheney, *A Nonrecursive List Compacting Algorithm* (1970).
 - Tofte & Talpin, *Region-Based Memory Management* (1997). Relevant if region inference is
   revisited as a Stalin-style alternative to generational collection.
-- Allen & Kennedy, *Automatic Translation of FORTRAN Programs to Vector Form* (TOPLAS
-  1987). The loop-based vectorization tradition, complementary to SLP.
+- ~~Allen & Kennedy, *Automatic Translation of FORTRAN Programs to Vector Form*~~
+  **SUPERSEDED AND RECOVERED.** The 1987 TOPLAS paper is still not open, but all ten draft
+  chapters of Allen & Kennedy's *Optimizing Compilers for Modern Architectures* were
+  recovered as PostScript from Kennedy's Rice `comp515` course directory via the CDX method,
+  and converted. Chapter 2 is *Dependence, Parallelization and Vectorization*, dated
+  1996-01-28. This is a better source than the paper: it is the whole loop-based
+  vectorization tradition, and it complements SLP's basic-block approach at pipeline
+  stage 10.
 - Serrano & Feeley, *Storage Use Analysis and its Applications* (ICFP 1996).
 - Siskind, *Flow-Directed Lightweight Closure Conversion* (1999). Stalin's core technique;
   `engineering.purdue.edu/~qobi/papers/pldi99.pdf` is dead.
@@ -651,6 +657,13 @@ the dvips era. Fetched from the 2005 snapshot (82,469 bytes gzipped, 202,207 dec
 extracting first-page text: "Biglo o: ortable and optimizing compiler for strict functional
 languages / Man uel Serrano and Pierre eis / INRIA, B.P 105, Rocquencourt". The missing
 characters are dvips kerning artifacts in extraction, not damage.
+
+**The method, applied a second time, worked again.** The same CDX sweep over Kennedy's Rice
+course directory turned up ten PostScript chapters of the Allen & Kennedy book, which had
+also been written off. The four remaining pre-2000 gaps (Kildall 1973, Morel & Renvoise
+1979, Chaitin 1982, Cheney 1970, Deutsch & Schiffman 1984) have not yet yielded to it, but
+they were checked against author-directory sweeps rather than filename guesses, and the
+Tufts `cs257/archive` classics collection (858 files enumerated) contains none of them.
 
 The lesson generalizes to the remaining gaps: **anything published before roughly 2000 may
 exist only as `.ps` or `.ps.gz`**, and a search that assumes PDF will report it missing when
