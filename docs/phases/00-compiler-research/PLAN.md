@@ -451,7 +451,9 @@ Stage 8. Where the actual speed comes from.
 
 | work | link |
 |---|---|
-| Abelson & Sussman, *SICP* | https://web.mit.edu/6.001/6.037/sicp.pdf |
+| Abelson, Sussman & **Julie Sussman**, *Structure and Interpretation of Computer Programs*, 2nd ed. 1996 | https://web.mit.edu/6.001/6.037/sicp.pdf |
+
+**Caveat on the SICP file.** That URL serves the Unofficial Texinfo Format re-typeset (CC BY-SA 4.0), not the MIT Press original. Text and section numbering are faithful to the 2nd edition but pagination is not: 883 PDF pages against 657 printed, so any page citation must state which numbering it means. Text extraction from this file also silently drops the `Th` and `tt` ligatures, turning "The" into "e" and "after" into "aer", which will corrupt any automated quotation pipeline built on it.
 
 ---
 

@@ -33,9 +33,18 @@ Each of these is a design decision inside Chez, made deliberately for compile sp
 None can be macro'd around. So experimenting on Chez measures Chez's ceiling, not the
 design's.
 
-The tractability objection also does not hold. SICP chapter 5 is a compiler, the nanopass
-framework exists and is maintained, and Chez itself is written in nanopass style by the
-people who invented it. This is a known-shape project, not a research gamble.
+The tractability objection also does not hold. The nanopass framework exists and is
+maintained, and Chez itself is written in nanopass style by the people who invented it.
+This is a known-shape project, not a research gamble.
+
+One hedge on a claim an earlier draft made here. SICP chapter 5 is often cited as evidence
+that writing a Scheme compiler is undergraduate work, and that is true of a *correct*
+compiler but not of an *optimizing native* one. Section 5.5's entire optimizer is a single
+rule, `preserving`, a local save-and-restore elision with no liveness dataflow. It has no
+intermediate representation, and it targets an abstract machine whose primitives include
+`extend-environment` and `apply-primitive-procedure`. It also offers no answer to the
+precise-GC-root problem that this section uses to rule out a C back end. It is evidence
+about shape, not about difficulty.
 
 ## The back end is native. Not C.
 
