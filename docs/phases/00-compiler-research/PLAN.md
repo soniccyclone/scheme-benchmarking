@@ -419,7 +419,7 @@ The anchor for declaration-anchored local inference (`../../PROPOSAL.md` section
 | work | why | link |
 |---|---|---|
 | Shivers, *Control-Flow Analysis of Higher-Order Languages* (1991) | k-CFA. The foundation of higher-order flow analysis | https://www.ccs.neu.edu/home/shivers/papers/diss.pdf |
-| Cartwright & Fagan, *Soft Typing* retrospective | why inference-first lost on usability, which is our argument for declarations | https://www.cs.rice.edu/~javaplt/papers/sigplan39-4.pdf |
+| Cartwright & Fagan, *Soft Typing* retrospective **plus a facsimile of the full PLDI 1991 paper** | The 2-page retrospective (pp. 1-2) does **not** discuss adoption or standardization, so it is not the source for the declarations-beat-inference argument. Pages 3-17 are a scan of the complete original, and that is where the argument lives: adding the `SUB` rule destroys principal types (Example 4), and Example 9 shows an inferred type silently breaking a distant, well-defined call site | https://www.cs.rice.edu/~javaplt/papers/sigplan39-4.pdf |
 | Aiken, Wimmers & Lakshman, *Soft Typing with Conditional Types* (POPL 1994) | conditional types, closest to what predicate narrowing needs | https://theory.stanford.edu/~aiken/publications/papers/popl94.pdf |
 
 ## 7. Abstract domains

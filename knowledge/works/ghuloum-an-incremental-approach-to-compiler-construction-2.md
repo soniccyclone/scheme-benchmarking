@@ -133,23 +133,21 @@ to an object file that runs, with the stack-index code generator and no register
 and only then start on the abstract domain. Otherwise stages 05 and 06 are being written
 against an emitter that has never emitted anything.
 
-Two specific decisions to inherit and one to reject. Inherit the tagging discipline — 3-bit
-pointer tags with 8-byte alignment, and tag choices selected so conversions are shifts. Our
-stage 08 storage-class table already assumes "proven fixnum, bounds fit 61-bit tag," which is
-this scheme widened to 64-bit, so the interaction between tag width and the untagged-loop-index
-case is exactly Ghuloum's `integer->char` problem in another costume. Inherit the
-`constant-ref`/`primitive-ref` global-label approach, since it is what makes separate
-compilation and a real library possible without the closure bloat.
+Two decisions to inherit, one to reject. Inherit the tagging discipline — 3-bit pointer tags
+with 8-byte alignment, tags chosen so conversions are shifts. Our stage 08 table already
+assumes "proven fixnum, bounds fit 61-bit tag," which is this scheme at 64-bit, so the
+interaction between tag width and the untagged-loop-index case is Ghuloum's `integer->char`
+problem in another costume. Inherit `constant-ref`/`primitive-ref` global labels, which is what
+makes separate compilation and a real library possible without closure bloat.
 
-Reject the stack-index code generator as anything but a bootstrap. Ghuloum himself flags it:
-`(+ e 4)` becomes `(let ((t0 e)) (+ t0 4))` with a pointless store and reload. That is the
-exact opposite of what stage 08 and stage 12 are for. Useful as the thing to beat, and as the
-fallback path when a value has no register home.
+Reject the stack-index code generator as anything but a bootstrap. Ghuloum flags it himself:
+`(+ e 4)` becomes `(let ((t0 e)) (+ t0 4))` with a pointless store and reload — the exact
+opposite of what stages 08 and 12 exist for. Useful as the thing to beat and as the fallback
+when a value has no register home.
 
-The paper also confirms two of our dependencies from the inside. It cites Burger-Waddell-Dybvig
-greedy shuffling as the fix for its own tail-call copying, and Waddell-Sarkar-Dybvig letrec as
-the highest-payoff single pass to add. Both are in this bundle, which is a good sign the
-bibliography is coherent.
+The paper also confirms two dependencies from the inside: it cites Burger-Waddell-Dybvig greedy
+shuffling as the fix for its own tail-call copying, and Waddell-Sarkar-Dybvig letrec as the
+highest-payoff pass to add. Both are in this bundle.
 
 # Notes
 
@@ -164,19 +162,15 @@ through. The trailing `-2` in the slug is unexplained and may indicate a second 
 same document. Anyone expecting the tutorial from this slug will be disappointed — the paper
 points at the author's IU website for it, a URL that has been dead for well over a decade.
 
-The paper is a period piece in one respect that matters: it is 32-bit x86 throughout, written
-in 2006, and the register allocation advice cites Traub-Holloway-Smith linear scan. Nothing is
-wrong, but every constant needs doubling and the ABI section needs rewriting for x86-64 (six
-integer argument registers, different callee-saved set, red zone). Do not copy the stack
-layout diagrams verbatim.
+It is 32-bit x86 throughout. Every constant needs doubling and the ABI section needs rewriting
+for x86-64 (six integer argument registers, different callee-saved set, red zone). Do not copy
+the stack layout diagrams verbatim.
 
 One genuine flaw in the exposition: step 3.16 presents open-coded primitive checks *and* the
-safe-primitive-call alternative, then recommends the latter, but steps 17 onward assume the
-open-coded fast paths exist when discussing performance. The two strategies are not reconciled,
-and a reader following the tutorial will hit the seam.
+safe-primitive-call alternative and recommends the latter, but steps 17 onward assume the
+open-coded fast paths exist when discussing performance. The two are never reconciled.
 
-The framing in the introduction is polemical and mostly earned. Quoting Wirth on postulating a
-fictitious architecture, and Muchnick on restricting the book to languages "well suited for
-compilation," to argue that the textbooks route around exactly the problems a Scheme
-implementor has, is a fair hit. It is also the paper's whole novelty claim — there is no new
-technique here, and Ghuloum does not pretend otherwise.
+The polemical introduction — quoting Wirth on postulating a fictitious architecture, and
+Muchnick on restricting his book to languages "well suited for compilation" — is a fair hit,
+and it is also the paper's whole novelty claim. There is no new technique here, and Ghuloum
+does not pretend otherwise.

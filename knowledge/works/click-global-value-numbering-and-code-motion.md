@@ -119,33 +119,30 @@ because it folds constants and finds congruences in the same pass.
 
 # Relevance
 
-Two distinct things here, and only one of them is for us.
+Two distinct things here, and only one is for us.
 
-**GCM's placement heuristic is directly applicable to stage 07.** Our CUJ specifies hoisting
-a bounds check out of a loop once the derived range proves it for every iteration. That is
+**GCM's placement heuristic applies directly to stage 07.** The CUJ specifies hoisting a
+bounds check out of a loop once the derived range proves it for every iteration; that is
 exactly "schedule late, then walk up the dominator tree to the shallowest loop nest." More
-usefully, GCM says the same machinery also *sinks* — moving a computation from the loop
-header down into the branch that actually uses it. For a check we cannot hoist, sinking it
-onto the cold path is the next-best outcome, and it falls out of the same walk.
+usefully, the same machinery *sinks* — moving a computation from the loop header down into the
+branch that uses it. For a check we cannot hoist, sinking it onto the cold path is the
+next-best outcome and falls out of the same walk.
 
 The pinning discipline is the part to copy verbatim. Our checked accesses, allocations, and
-anything that can raise are faulting instructions, and they need an explicit control input so
-that motion can only ever be downward. Get that wrong and stage 10 vectorization will happily
-hoist a trap above its guard. This is a concrete safety rule for the IR, not just an
-optimization technique.
+anything that can raise are faulting instructions and need an explicit control input so motion
+can only ever be downward. Get that wrong and stage 10 will happily hoist a trap above its
+guard. That is an IR safety rule, not an optimization.
 
-**The "GVN produces an incorrect program" trick fits nanopass badly.** Nanopass wants each
-pass to produce a well-formed term in a declared output language. A pass whose output is
-provably incorrect until a later pass fixes it cannot be typed that way honestly — the output
-language would have to admit unplaced instructions, which is precisely the sea-of-nodes
-representation and not a Scheme core language. If we ever want this, the honest encoding is a
-distinct intermediate language where placement is genuinely optional, not a fudge in `Lcore`.
+**The "GVN produces an incorrect program" trick fits nanopass badly.** Nanopass wants each pass
+to produce a well-formed term in a declared output language, and a pass whose output is
+provably incorrect until a later pass repairs it cannot be typed that way honestly — the output
+language would have to admit unplaced instructions, which is the sea of nodes, not a Scheme
+core language. If we want it, the honest encoding is a distinct intermediate language where
+placement is genuinely optional, not a fudge in `Lcore`.
 
-The ⊤-phi observation is worth carrying regardless of representation: an apparently redundant
-merge can be the only thing certifying that a value is available on all paths, and an
-optimizer that "simplifies" it destroys information. In our `letrec`-as-loop encoding the
-analogue is a loop parameter that appears to be passed unchanged; deleting it as trivially
-copyable can break a later hoisting argument.
+The ⊤-phi observation carries regardless of representation: an apparently redundant merge can
+be the only thing certifying a value is available on all paths, and "simplifying" it destroys
+information. Our analogue is a `letrec` loop parameter that appears to be passed unchanged.
 
 # Notes
 
@@ -159,22 +156,19 @@ University's CS department under ARPA/ONR grant N00014-91-J-1989. SIGPLAN '95, L
 ACM 0-89791-697-2/95/0006, pages 246-257 — so PLDI 1995. Everything except the title word
 order is correct.
 
-The experimental setup is the weak point and Click defends it explicitly rather than hiding
-it. ILOC's simulated machine has *infinite registers* and *one-cycle latency for everything
-including loads, stores, and jumps*. That model erases the single largest cost of GCM: early
-scheduling creates enormous live ranges, and aggressive hoisting increases register pressure.
-On a real machine with 8 or 16 registers, some of that 4.3% would be given back in spills.
-Click's argument is that including memory hierarchy and functional-unit limits would obscure
-the machine-independent effect he is measuring, which is fair for the paper's purpose and
-useless for predicting real speedup. Treat 4.3% as an upper bound.
+The experimental setup is the weak point, and Click defends it rather than hiding it. ILOC's
+simulated machine has *infinite registers* and *one-cycle latency for everything, including
+loads, stores, and jumps*. That erases GCM's largest cost: early scheduling creates enormous
+live ranges and aggressive hoisting raises register pressure, so on a machine with 8 or 16
+registers some of the 4.3% comes back as spills. His argument — that memory hierarchy and
+functional-unit limits would obscure the machine-independent effect — is fair for the paper's
+purpose and useless for predicting real speedup. Treat 4.3% as an upper bound.
 
-Look at the per-procedure table rather than the average. The distribution is wide and
-two-sided: `doduc/parol` gets 23.3%, but eight procedures are *negative*, one at −5.7% and
-`cplex/xielem` at −24.4% under the reassociate variant. The mean is carried by a handful of
-big wins on loop-heavy Fortran. That is a normal shape for a code-motion heuristic, and the
-paper does not smooth it over.
+Read the per-procedure table, not the average. `doduc/parol` gets 23.3%, but eight procedures
+are negative, `cplex/xielem` at −24.4% under the reassociate variant. The mean is carried by a
+handful of big wins on loop-heavy Fortran.
 
-Also note what the GVN comparison actually shows. GVN-GCM beats one round of GCF+PRE+CCP by
-4.3%; it beats *two* rounds by 2.4%. So most of the win is a phase-ordering artifact of the
-competition, not a strictly stronger analysis. Click says this plainly in Section 4.3. The
-durable claim is "comparable results, far simpler implementation, one pass" — not "finds more."
+And note what the comparison shows: GVN-GCM beats *one* round of GCF+PRE+CCP by 4.3% and *two*
+rounds by 2.4%. Most of the win is a phase-ordering artifact of the competition, not a stronger
+analysis — Click says so in Section 4.3. The durable claim is "comparable results, far simpler
+implementation, one pass," not "finds more."

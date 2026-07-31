@@ -75,13 +75,13 @@ values, so analysis results flow without being encoded into the language term.
 pass. Dispatch moved from record dispatch to an integer tag. Clause order is now respected,
 so hot patterns can go first. Less code is generated, so the compiler-compiler is faster.
 
-**What actually changed in Chez's back end.** The original: `cp1` (starts closure conversion,
-recognizes loops and direct lambda application, multiple-value returns, foreign entry,
-primitive-to-inline), `cpr0` (starts register allocation, real free variables after closure
-optimization, assignment conversion, flags tail calls and loops), `cpr1` (initial register
-homes), `cpr2` (saves/restores around non-tail calls, redundant binding removal), `cp2`
-(inline primitives to instruction inlines). The original uses linear-scan allocation with the
-Burger-Waddell-Dybvig lazy-save strategy, destination-driven code generation, and reserves two
+**What actually changed in Chez's back end.** The original five: `cp1` (starts closure
+conversion, recognizes loops and direct lambda application, multiple-value returns, foreign
+entry, primitive-to-inline), `cpr0` (starts register allocation, real free variables after
+closure optimization, assignment conversion, flags tail calls and loops), `cpr1` (initial
+register homes), `cpr2` (saves/restores around non-tail calls, redundant binding removal),
+`cp2` (inline primitives to instruction inlines). It used linear-scan allocation with the
+Burger-Waddell-Dybvig lazy-save strategy, destination-driven code generation, and reserved two
 or more registers for the assembler because primitive expansion is delayed to code generation.
 
 The new compiler switched to **graph coloring with move biasing**, and that one decision
