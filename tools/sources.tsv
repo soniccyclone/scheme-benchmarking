@@ -57,3 +57,5 @@ dybvig-et-al-bibop	12	https://web.archive.org/web/20050208204441id_/http://www.c
 #   https://web.archive.org/web/2005id_/http://www.cs.rice.edu/~ken/comp515/Chapter{1..10}.ps
 chaitin-register-allocation-graph-coloring-1982	18	https://www.cs.utexas.edu/~pingali/CS380C/2007fa/papers/p66-chaitin.pdf
 kildall-unified-approach-global-optimization-1973	16	https://web.archive.org/web/2018id_/http://courses.cs.washington.edu/courses/cse501/15sp/papers/kildall.pdf
+# blanchet escape analysis x3	19	NOT auto-fetchable: PostScript sources, converted with ps2pdf.
+#   https://bblanche.gitlabpages.inria.fr/publications/{BlanchetPOPL98,BlanchetOOPSLA99,BlanchetToplas}.ps.gz

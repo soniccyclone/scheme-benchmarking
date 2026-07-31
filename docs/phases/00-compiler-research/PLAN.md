@@ -628,9 +628,13 @@ Wider-field gaps, found while assembling Part II and still unresolved:
 - Morel & Renvoise, *Global Optimization by Suppression of Partial Redundancies* (CACM
   1979), and Knoop, Rüthing & Steffen, *Lazy Code Motion* (PLDI 1992). Partial redundancy
   elimination.
-- Choi et al., *Escape Analysis for Java* (OOPSLA 1999), and Blanchet, *Escape Analysis for
-  Object-Oriented Languages* (OOPSLA 1999). Directly relevant, since automatic stack
-  allocation is one of the four ways `../07-compiler/PLAN.md` claims we exceed SBCL.
+- ~~Blanchet, *Escape Analysis*~~ **RECOVERED, all three papers**, as PostScript from
+  `bblanche.gitlabpages.inria.fr/publications/`: POPL 1998 (ML), OOPSLA 1999 (Java), and the
+  TOPLAS 2003 journal version. This closes the one gap that threatened a design claim, since
+  automatic stack allocation is one of four ways `../07-compiler/PLAN.md` says we exceed
+  SBCL, and `techniques/escape-analysis.md` was `status: draft` with its data half
+  extrapolated from Steensgaard. Choi et al. (OOPSLA 1999, connection graphs) is still
+  outstanding but is now a second opinion rather than the only source.
 - Feautrier's affine scheduling work and Bondhugula et al., *Pluto* (PLDI 2008). The
   polyhedral tradition. Section 9 currently has only SLP, which is basic-block
   vectorization; polyhedral is the loop-nest answer and is the stronger technique where it
