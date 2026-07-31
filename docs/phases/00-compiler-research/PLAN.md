@@ -488,7 +488,7 @@ Relevant because ABCD (section 8) is formulated on SSA, and stage 7 of
 | Same, mirror | alternate host | https://www.cs.utexas.edu/~pingali/CS380C/2010/papers/ssaCytron.pdf |
 | Braun et al., *Simple and Efficient Construction of Static Single Assignment Form* (CC 2013) | the construction you would actually implement | https://c9x.me/compile/bib/braun13cc.pdf |
 | Cooper, Harvey & Kennedy, *A Simple, Fast Dominance Algorithm* | prerequisite for SSA construction. Title confirmed | https://c9x.me/compile/bib/quickdom.pdf |
-| Rastello et al., *SSA-based Compiler Design* (the SSA Book) | book-length treatment of everything downstream of SSA | https://pfalcon.github.io/ssabook/latest/book-full.pdf |
+| Rastello et al., *SSA-based Compiler Design* (the SSA Book) | book-length treatment of everything downstream of SSA. **This file is a 2018 unfinished draft, not the 2022 Springer edition**: its title page reads "Lots of authors / Static Single Assignment Book", the dedication is Lorem ipsum, the preface is "TODO: Roadmap", two figures in ch.10's induction-variable walkthrough fail to render, and several cross-references print as "Chapter ??". Section and page numbers will not match the published book | https://pfalcon.github.io/ssabook/latest/book-full.pdf |
 
 ### 16. Classical dataflow optimization
 

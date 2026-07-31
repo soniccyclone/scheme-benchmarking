@@ -216,10 +216,19 @@ or use an ordered reduction. Never silently reassociate.
 
 ### Stages 11 through 13, native emission
 
-Instruction selection over the core language after representation assignment. Register
-allocation by linear scan as the documented baseline, with graph coloring as the better
-answer. Decide between them by counting spills in the emitted inner loop: if any unboxed f64
-spills across the loop body, the allocator is erasing the analysis and needs replacing.
+Instruction selection over the core language after representation assignment.
+
+**On register allocation, the linear-scan-versus-graph-coloring framing is wrong**, per
+ch. 22 of the SSA Book. Linear scan *is* tree scan with the dominance tree flattened into a
+linear interval, and that flattening is precisely the source of its over-approximated live
+ranges. Tree scan strictly dominates it at the same cost. Further, on SSA input the
+classical simplify scheme is already exact, so the two approaches converge rather than
+trading off. If the representation moves to SSA, build tree scan and stop treating this as
+a choice.
+
+Either way the acceptance test is the same: count spills in the emitted inner loop. If any
+unboxed f64 spills across the loop body, the allocator is erasing the analysis and needs
+replacing.
 
 Two separate register files to allocate: general purpose for tagged values and untagged
 integers, and `xmm`/`zmm` for unboxed floats. Respect the platform ABI only at the foreign

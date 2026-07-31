@@ -66,16 +66,16 @@ eliminate the dead arms, and `(CAR FOO)` becomes a single PDP-10 HLRZ, the same 
 MacLISP's NCOMPLR emits. The code-pointer word is dismissed by noting the type tag already
 selects a row of the operations matrix, so BIBOP-style address encoding can carry it.
 
-**CPS converter (Appendix A, working SCHEME code).** `CPC` dispatches on ATOM, QUOTE,
-LAMBDA, IF, CATCH, LABELS, macro, form. `CPC-LAMBDA` appends a generated continuation
-parameter. `CPC-IF` names the join continuation `KN` once so both arms share it rather than
-duplicating code, then converts the predicate under `(LAMBDA (PN) (IF PN ...))`. `CPC-CATCH`
-eliminates CATCH outright by binding the catch tag to `(LAMBDA (V C) (EN V))`, a procedure
-that discards its own continuation. `CPC-FORM` is two passes: pass one walks the argument
-list, converting trivially-evaluable arguments with a null continuation into Y and stashing
-non-trivial ones in Z under a fresh temporary name; pass two folds Z inside-out to build the
-nested continuations. Appendix B extends this to multiple value return by letting a
-continuation take n arguments, which then ride in registers exactly like ordinary arguments.
+**CPS converter (Appendix A, working SCHEME code).** `CPC` dispatches on ATOM, QUOTE, LAMBDA,
+IF, CATCH, LABELS, macro, form. `CPC-LAMBDA` appends a generated continuation parameter.
+`CPC-IF` names the join continuation `KN` once so both arms share it instead of duplicating
+code, then converts the predicate under `(LAMBDA (PN) (IF PN ...))`. `CPC-CATCH` eliminates
+CATCH outright by binding the catch tag to `(LAMBDA (V C) (EN V))`, a procedure that discards
+its own continuation. `CPC-FORM` runs two passes: pass one walks the argument list, converting
+trivially-evaluable arguments with a null continuation into Y and stashing non-trivial ones in
+Z under a fresh temporary; pass two folds Z inside-out into nested continuations. Appendix B
+extends this to multiple value return by letting a continuation take n arguments, which then
+ride in registers exactly like ordinary arguments.
 
 # Applicability
 
