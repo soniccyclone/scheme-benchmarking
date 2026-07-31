@@ -137,9 +137,26 @@ Needed when the array length is not a compile-time constant, which is
 `fannkuchredux` and most real code. The check becomes provable when `i` is in the
 `strict-lt` set of the variable holding the length.
 
-Pentagon rather than Octagon deliberately: the paper's whole argument is that Pentagon is
-the cheap domain that still proves most array accesses safe. Octagon at O(n²) space and
-O(n³) time is over-engineering until measurement says otherwise.
+Pentagon rather than Octagon deliberately, and the Pentagons paper's own §8.1 is stronger
+evidence than its abstract: **closure made Pentagons less precise, not more**, on three of
+four .NET assemblies (82.77% against 83.19% on mscorlib) while tripling analysis time. Our
+stage-06 design is validated by the authors' own measurements, buried where most readers
+would miss them.
+
+**Three implementation warnings, all from reading the source papers rather than summaries:**
+
+1. **Figure 3 of the Pentagons paper prints an unsound interval widening.** Its form,
+   `a₁ ≤ a₂ ? a₂ : -∞`, tightens the lower bound. Use Cousot's widening instead. The same
+   figure's `sub` transfer function prints `b(inf(y))` where it means `inf(b(y))`. We would
+   have implemented both straight from the figure.
+2. **Never strongly-close the left argument of a widening.** Miné exhibits a four-line
+   program that produces a strictly increasing infinite chain if you do. Pentagon's `Sub`
+   has no closure operation at all, so the hazard simply does not arise. That is an
+   architectural reason for this choice, not merely a cost one.
+3. Take three things from Miné without implementing octagons: **widening with thresholds**
+   (a dense ramp of a few dozen values, reused untuned across all of Astrée), **interval
+   linear forms** with formal cancellation performed before interval evaluation, and the
+   **packing algorithm** if a relational domain is ever added.
 
 ### Stage 7, loops and induction variables
 

@@ -34,8 +34,7 @@ pass. Measured: `remove-not` went from 25 lines to 7; `convert-assigned` from 55
 
 # Mechanism
 
-**Pass taxonomy**, which is the part most often dropped from later summaries and is worth
-keeping. Four kinds:
+**Pass taxonomy**, the part most often dropped from later summaries:
 
 - *Simplification* — translate into a simpler language (pattern matching to primitives).
 - *Verification* — check invariants the grammar cannot express (all bound variables unique).
@@ -85,21 +84,15 @@ non-AST result, e.g. code-size estimate). Each transform:
   {(input-pattern {guard} output-expression)}*)
 ```
 
-Subpattern forms, in increasing sugar:
-
-1. `,a` — matches a form of nonterminal `A`, binds `a`.
-2. `,[f : a -> b]` — matches, binds `a`, and binds `b` to `(f a)`; error if the result is not
-   a form of `B`.
-3. `,[a -> b]` — form 2 when `f` is the unique transformer `A → B`.
-4. `,[b]` — form 3 where the language pins the nonterminal, without binding the input.
-
-Extended to `,[f : a x* -> b y*]` for transformers taking extra arguments and returning extra
-values. Pattern variables bound earlier may appear among the `x*`, so analysis results thread
+Subpattern forms, in increasing sugar: `,a` binds a form of `A`; `,[f : a -> b]` also binds
+`b` to `(f a)`, erroring if the result is not a form of `B`; `,[a -> b]` is that when `f` is
+the unique transformer `A → B`; `,[b]` drops the input binding. All extend to
+`,[f : a x* -> b y*]` for transformers with extra arguments and extra return values, and
+pattern variables bound earlier may appear among the `x*` — that is how analysis results thread
 through the recursion.
 
 Output is a quasiquote rebound to build *records*, not lists. `‘(if (not ,e1) ,e2 ,e3)` errors
-at construction if any inserted subform is not a form of the right output nonterminal. Ellipsis
-after an unquote requires a list.
+at construction if any inserted subform is not a form of the right output nonterminal.
 
 **The example is the argument.** Assignment conversion in two passes:
 
@@ -149,40 +142,35 @@ proportional to how much of the language a pass ignores.
 
 # Relevance
 
-This is the paper that defines what we are building in, and the 50-pass course compiler in
-Table 1 is a closer model for our phase 7 than the Chez back end is. Read that table as a
-pass list, because it is a working decomposition someone has actually taught:
-
-Week 3 is closure conversion in eleven passes — `optimize-direct-call`, `remove-anon-lambda`,
+The 50-pass course compiler in Table 1 is a closer model for our phase 7 than the Chez back end
+is, because it is a working decomposition someone has actually taught. Week 3 is closure
+conversion in eleven passes — `optimize-direct-call`, `remove-anon-lambda`,
 `sanitize-binding-forms`, `uncover-free`, `convert-closure`, `optimize-known-call`,
 `uncover-well-known`, `optimize-free`, `optimize-self-reference`, `analyze-closure-size`,
-`lift-letrec`. Our CUJ collapses all of that into unnamed work between stage 04 and stage 08.
-Week 10 is register-allocation setup with `uncover-call-live`, `optimize-save-placement`,
-`eliminate-redundant-saves`, `rewrite-saves/restores` — which is Burger-Waddell-Dybvig lazy
-saves, decomposed into four passes. That is the granularity target.
+`lift-letrec` — all of which our CUJ collapses into unnamed work between stages 04 and 08.
+Week 10 is `uncover-call-live`, `optimize-save-placement`, `eliminate-redundant-saves`,
+`rewrite-saves/restores`: Burger-Waddell-Dybvig lazy saves in four passes. That is the
+granularity target.
 
-Two design rules to adopt now rather than discover later:
+Two design rules to adopt now rather than discover later.
 
-**Verification passes are first-class and are typed as `L -> L`.** Our CUJ has no verify passes.
-It should. `verify-scheme`, `verify-a1-output`, … appear seven times in Table 1, instructor-
-supplied, precisely because they catch upstream bugs at the boundary where they were
-introduced rather than three passes downstream. For us the obvious ones are: after stage 04,
-verify every `declare` premise refers to a bound variable; after stage 06, verify no check
-survives that the domain claimed to have proven; after stage 09, verify every claimed
-non-aliasing pair traces to distinct `make-flvector` sites. Cheap, disableable, and they turn
+**Verification passes are first-class, typed `L -> L`, and disableable.** Our CUJ has none.
+`verify-scheme`, `verify-a1-output`, … appear seven times in Table 1, instructor-supplied,
+because they catch upstream bugs at the boundary where they were introduced rather than three
+passes later. For us: after stage 04, verify every `declare` premise names a bound variable;
+after stage 06, verify no check survives that the domain claimed to prove; after stage 09,
+verify every claimed non-aliasing pair traces to distinct `make-flvector` sites. That turns
 stage 10 miscompiles into stage 09 assertion failures.
 
-**The `=>` translates-to property.** Every intermediate-language production should carry a
-host-language meaning, so the output of any pass can be *run* under Chez and compared against
-the same program run through the reference. That is a differential test harness for free, and
-it is a much stronger check than end-to-end benchmark output. This feature is present here and
-absent from the 2013 framework's description; if the shipping `nanopass-framework-scheme`
-still supports it, we should be using it from stage 03 onward.
+**The `=>` translates-to property.** Every production should carry a host-language meaning, so
+any pass's output can be *run* under Chez and compared against the reference. A differential
+test harness for free, and far stronger than end-to-end benchmark output. Present here, absent
+from the 2013 framework's description; if `nanopass-framework-scheme` still supports it we
+should use it from stage 03 onward.
 
-Also note what `extends` plus the pass expander buys concretely for our `policy` and `declare`
-forms: they exist in `Lcore` and should be *removed* by the language delta at the stage that
-consumes them. Any later pass that still mentions them then fails at expansion time rather
-than silently ignoring them.
+And what `extends` buys for `policy` and `declare`: they live in `Lcore` and should be
+*removed* by the language delta at the stage that consumes them, so any later pass still
+mentioning them fails at expansion time instead of silently ignoring them.
 
 # Notes
 

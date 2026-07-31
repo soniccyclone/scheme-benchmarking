@@ -154,47 +154,42 @@ this reasoning does not carry over unchanged.
 
 # Relevance
 
-This is one of the two papers the whole compiler leans on, and the CUJ names it as the better
-fit "if the representation moves to SSA later." Reading it, the dependency is weaker than that
-suggests: what ABCD actually needs is not a CFG in SSA form but *unique names whose live range
-is contained in every constraint that mentions them*. Our core language already gives that for
-`let`-bound variables, and `letrec`-as-loop parameters are the φ-nodes. What we would have to
-add is the σ-assignment: a fresh binding on each arm of an `if` for every variable in the test,
-and a fresh binding after every checked access. In a nanopass chain that is one small pass
-producing an `Lesssa` language, not a representation change.
+The CUJ names ABCD as the better fit "if the representation moves to SSA later." The
+dependency is weaker than that suggests: what ABCD needs is not a CFG in SSA form but *unique
+names whose live range is contained in every constraint mentioning them*. Our core language
+already gives that for `let`-bound variables, and `letrec`-as-loop parameters are the φ-nodes.
+What we must add is the σ-assignment — a fresh binding on each arm of an `if` for every
+variable in the test, and a fresh binding after every checked access. That is one small
+nanopass producing an `Lessa` language, not a representation change.
 
-The σ-node is the piece our current plan is missing. Stage 06's Pentagon domain gives
-`x < y` facts, but the CUJ does not say where the fact from `(if (fx<? i n) ...)` gets
-*attached*. ABCD's answer: to a new name `i₂` bound only inside the then-arm. Without that
-you either carry a flow-sensitive map (which is what Pentagon does, and it is fine) or you
-rename (which is what ABCD does, and it makes the analysis flow-insensitive and sparse).
-These are two encodings of the same information, and the choice matters: Pentagon recomputes
-per program point, ABCD builds one graph and answers queries against it. For a batch compiler
-Pentagon's cost is acceptable; ABCD's advantage is *per-query* cost, which matters if we ever
-want to re-check after a transformation without redoing the analysis.
+The σ-node is the piece our plan is missing. Stage 06's Pentagon domain gives `x < y` facts,
+but the CUJ never says where the fact from `(if (fx<? i n) ...)` gets *attached*. ABCD's
+answer: to a new name `i₂` bound only inside the then-arm. The alternative is a flow-sensitive
+map, which is what Pentagon does and is fine. The two encode the same information; the
+difference is that Pentagon recomputes per program point while ABCD builds one graph and
+answers queries against it. ABCD's advantage is *per-query* cost, which matters if we want to
+re-check after a transformation without redoing the analysis.
 
-Concretely useful regardless of which we pick:
+Useful regardless of which we pick:
 
-The inequality-graph edge table is a direct spec for stage 06's transfer functions. Our CUJ
-sketches `strict-lt` as a map from x to a set of y with `x < y`; that is the same relation
-ABCD stores as a weight-(−1) edge, and ABCD's version composes transitively for free via
-shortest path where a set-of-successors representation does not.
+The edge table is a direct spec for stage 06's transfer functions. The CUJ sketches
+`strict-lt` as a map from x to a set of y; that is ABCD's weight-(−1) edge, and ABCD's version
+composes transitively for free via shortest path where a set-of-successors representation
+does not.
 
-The min/max distinction is a correctness trap we would otherwise walk into. Joining at a
-`letrec` loop header must take the *weakest* bound, not the strongest — obvious once stated,
-easy to get backward when the same code path handles `if` merges.
+The min/max distinction is a correctness trap. Joining at a `letrec` loop header must take the
+*weakest* bound, not the strongest — obvious once stated, easy to get backward when one code
+path handles both `if` merges and loop headers.
 
-Amplifying-cycle detection is exactly loop induction variable handling, done without a
-separate induction variable analysis. `active[v]` compares the propagated constant against its
-value one cycle ago; a strict increase means the variable grows without bound along that path.
-Our stage 07 plans an explicit induction-variable pass (step 2: "parameters whose argument at
-the recursive tail call is the parameter plus a constant"). ABCD gets the same result as a
-side effect of the traversal. Worth considering whether stage 07 can be thinner than planned.
+Amplifying-cycle detection is induction-variable handling without an induction-variable pass.
+`active[v]` compares the propagated constant against its value one cycle ago; a strict increase
+means unbounded growth along that path. Stage 07 currently plans an explicit IV analysis; ABCD
+gets the same result as a side effect, so stage 07 may be thinner than planned.
 
-The `nbody` case (length-5 arrays, constant length) falls to stage 05 intervals and needs none
-of this. `fannkuchredux` (symbolic length) is exactly ABCD's `check A[j₂]` example, and the
-proof path there — `A.length → limit₀ → limit₁ → limit₂ → limit₃ → limit₄ → j₂`, distance
-−2 — runs through a φ-node and two σ-nodes. That is the shape to test against.
+`nbody` (length-5 constant arrays) falls to stage 05 intervals and needs none of this.
+`fannkuchredux` (symbolic length) is ABCD's `check A[j₂]` example, whose proof path
+`A.length → limit₀ → … → limit₄ → j₂` at distance −2 runs through a φ-node and two σ-nodes.
+That is the shape to test against.
 
 # Notes
 
@@ -205,28 +200,21 @@ Rastislav Bodík (University of Wisconsin), Rajiv Gupta (University of Arizona),
 British Columbia, pages 321-333. Title, year, venue, and author list in the bibliography are
 all correct.
 
-Text-extraction damage worth flagging for anyone else reading this PDF: the mathematical
-symbols are largely lost. `≤` renders as blank, `φ` and `σ` render as blank or a bare `-`,
-and the ACM copyright line is truncated. Table 1 and Definition 2 are readable only by
-reconstruction from surrounding prose. The reconstruction above is confident (the constraint
-directions are cross-checked against the worked example and the consistency argument), but
-anyone implementing from this should re-derive the edge table rather than copy it blind.
+Text-extraction damage worth flagging: the math symbols are largely lost in this PDF. `≤`
+renders blank, `φ` and `σ` render blank or as a bare `-`. Table 1 and Definition 2 are
+readable only by reconstruction from surrounding prose. The reconstruction above is
+cross-checked against the worked example and the consistency argument, but anyone implementing
+from it should re-derive the edge table rather than copy it blind.
 
-The paper is honest about a scoping decision that limits it: "we forgo the (rare) optimization
-opportunities created by the interplay of the two problems," meaning lower- and upper-bound
-checks are analyzed independently. Given the unsigned-comparison merge in Section 7.2, the
-practical loss is small.
-
-Two things are oversold, mildly. First, "45% of dynamic bounds checks" is 45% of *upper-bound*
-checks only, and Figure 6 shows enormous variance — near 100% on the sort microbenchmarks,
-much less on the SPEC programs. The Symantec microbenchmarks are bubble sorts and sieves,
-which is the home turf of difference constraints over induction variables. Second, "surprisingly
-powerful" rests on the BubbleSort example, chosen because it is the case difference
-constraints handle perfectly. The honest claim is: cheap, sparse, demand-driven, and strictly
-weaker than a theorem prover, deliberately.
+Two mild oversells. "45% of dynamic bounds checks" is 45% of *upper-bound* checks only, and
+Figure 6 shows enormous variance — near 100% on the Symantec sort microbenchmarks, much less
+on SPEC. Bubble sorts and sieves are the home turf of difference constraints over induction
+variables. And "surprisingly powerful" rests on the BubbleSort example, chosen because it is
+the case the method handles perfectly. The honest claim: cheap, sparse, demand-driven, and
+deliberately weaker than a theorem prover.
 
 The 10% speedup deserves emphasis rather than dismissal. It is *low* for a 45% check
-reduction, and the reason given is that Jalapeño had no global code motion to benefit from the
-freed-up scheduling. That is a warning for us: removing checks is worth much less if stage 10
-vectorization and stage 11 selection cannot exploit the resulting freedom. The value of stage
-06 is realized downstream, not at the check site.
+reduction, and the stated reason is that Jalapeño had no global code motion to exploit the
+freed-up scheduling. That is a warning for us: removing checks is worth much less if stages 10
+and 11 cannot use the resulting freedom. The value of stage 06 is realized downstream, not at
+the check site.

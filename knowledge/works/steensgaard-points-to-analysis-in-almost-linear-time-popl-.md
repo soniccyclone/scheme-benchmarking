@@ -204,21 +204,17 @@ instead of this paper, and the two are not interchangeable. This PDF is the stro
 later one — confirmed by the presence of the `≤` typing rules and the `a = 4; x = a; y = a`
 motivating example.
 
-Two things are quietly interesting. Bill Landi "independently arrived at the same earlier
-algorithm," per a personal communication at POPL'95, and the prototype is implemented **in
-Scheme**, on the Value Dependence Graph representation. A points-to analysis for C, written
-in Scheme, at Microsoft Research in 1995.
+The prototype is implemented **in Scheme**, on the Value Dependence Graph representation — a
+points-to analysis for C, written in Scheme, at Microsoft Research in 1995. Bill Landi
+"independently arrived at the same earlier algorithm," per a personal communication at POPL'95.
 
 The performance claim is stronger than the usual "our analysis is fast." Morgenthaler's
-implementation of the *earlier* algorithm ran the analysis during parsing and increased parse
-time by 50% — emacs (127,000 lines) in ~50 extra seconds, FElt (273,000 lines) in ~82. That
-is a genuinely different regime from the flow-sensitive analyses of the period, and it is why
-Steensgaard's algorithm is still the default answer when someone needs points-to information
-and cannot afford to think about it.
+implementation of the *earlier* algorithm ran during parsing and increased parse time by 50%:
+emacs (127,000 lines) in ~50 extra seconds, FElt (273,000 lines) in ~82. That is a different
+regime from the flow-sensitive analyses of the period, and it is why Steensgaard is still the
+default answer when you need points-to information and cannot afford to think about it.
 
-The paper does not oversell. It says outright that results are less accurate than
-flow-sensitive analyses, names the exact benchmark and the exact cause of its worst merge,
-and lists both improvement directions it is pursuing. The one place it is slightly thin is
-the claim that treating all primitive operations identically is acceptable; the implementation
-already deviates for boolean-returning operations, which suggests the uniform rule was costing
-real precision.
+The paper does not oversell — it names the exact benchmark and exact cause of its worst merge,
+and lists both improvement directions. The one thin spot is the claim that treating all
+primitive operations identically is acceptable; the implementation already deviates for
+boolean-returning operations, which suggests the uniform rule was costing real precision.
