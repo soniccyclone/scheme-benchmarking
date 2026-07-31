@@ -91,11 +91,11 @@ user code makes the compiler undebuggable.
 the compiler to *unsafe* primitives and make safe primitives real procedure calls that check
 themselves. The second is slower and much simpler, and Ghuloum recommends it for the tutorial.
 
-Steps 17-24 build outward with no further compiler-architecture change: variadic procedures
-(loop building a list from the stack, front to back), `apply` (splice a list onto the stack via
-an `L_apply` label), ports as vectors with a type tag and a 4096-byte buffer, `write`/`display`
-in Scheme, a tokenizer as an explicit DFA, a 40-line recursive-descent reader, and finally an
-environment-passing interpreter that reuses the compiler's first pass.
+Steps 17-24 build outward with no architecture change: variadic procedures (loop building a
+list from the stack), `apply` (splice a list onto the stack via an `L_apply` label), ports as
+tagged vectors with a 4096-byte buffer, `write`/`display` in Scheme, a tokenizer as an explicit
+DFA, a 40-line recursive-descent reader, and an environment-passing interpreter reusing the
+compiler's first pass.
 
 # Applicability
 

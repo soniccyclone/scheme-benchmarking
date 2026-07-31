@@ -201,18 +201,11 @@ surface syntax here is *not* what `nanopass-framework-scheme` ships:
 | `,[f : a -> b]` subpattern | same idea, different spelling |
 | `void` / `datum` output languages | passes with no output language |
 
-Read this paper for the *methodology* — the pass taxonomy, the verification discipline, the
-translates-to property, the 50-pass decomposition — and read Keep and Dybvig 2013 plus the
-library source for the syntax we actually write.
+Read this paper for the *methodology* — pass taxonomy, verification discipline, translates-to,
+the 50-pass decomposition — and read Keep and Dybvig 2013 plus the library source for the
+syntax we actually write.
 
-The paper is honest that the whole thing is scoped to education, and the 2013 paper exists
-because the ICFP program committee refused to believe it generalized. Reading them together,
-the committee's objection was reasonable and wrong: compile time really is the risk, it really
-did cost 1.7x, and that turned out to be affordable. The deforestation-based pass combiner
-proposed in Section 6 as the answer was never needed.
-
-One small thing that has aged interestingly: Illustration 1 shows a raw record dump
-(`#[lambda.program.l0 (x) #[if.expr.l0 …]]`) as the thing students are protected *from*. The
-argument that internal representation should be records while every interaction is
-s-expressions is the same argument that keeps our `Lcore` readable, and it is why a nanopass
-compiler is debuggable at a REPL in a way an LLVM pass is not.
+The 2013 paper exists because the ICFP committee refused to believe this generalized past
+education. Read together, the objection was reasonable and wrong: compile time really is the
+risk, it really did cost 1.7x, and that was affordable. The deforestation-based pass combiner
+proposed here in Section 6 as the answer was never needed.

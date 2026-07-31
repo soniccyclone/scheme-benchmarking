@@ -429,10 +429,10 @@ must build.
 
 | work | why | link |
 |---|---|---|
-| Cousot & Cousot, *Abstract Interpretation* (POPL 1977) | the framework everything below sits in | https://www.di.ens.fr/~cousot/COUSOTpapers/POPL77.shtml |
+| Cousot & Cousot, *Abstract Interpretation* (POPL 1977) | the framework everything below sits in. Has widening, narrowing and fixpoint approximation, but **not Galois connections**: the α/γ pair here is a Galois *insertion*, and the adjunction is from Cousot & Cousot POPL **1979** | https://www.di.ens.fr/~cousot/COUSOTpapers/POPL77.shtml |
 | Cousot & Halbwachs, *Automatic Discovery of Linear Restraints* (POPL 1978) | polyhedra, the expensive upper bound | https://www.di.ens.fr/~cousot/COUSOTpapers/POPL78.shtml |
-| Miné, *The Octagon Abstract Domain* (2006) | level 4. What we do **not** need first | https://arxiv.org/abs/cs/0703084 |
-| Miné, Octagon, HAL mirror | alternate host | https://hal.science/hal-00136664/document |
+| Miné, *The Octagon Abstract Domain* (**AST 2001**, 10pp) | the workshop version. Punts on the integer case, and has neither widening nor narrowing | https://arxiv.org/pdf/cs/0703084 |
+| Miné, *The Octagon Abstract Domain* (**HOSC 2006**, 90pp) | **not a mirror, a different document.** The journal version adds all proofs including the 17-page closure appendix, solves the integer case with tight closure, and adds incremental strong closure, widening with thresholds, narrowing, and the Astrée evidence. Its own first footnote identifies it as the journal version of the 2001 paper | https://hal.science/hal-00136664/document |
 | Logozzo & Fähndrich, *Pentagons* (2008/2010) | **level 3, our actual target.** Purpose-built for array bounds | https://web.archive.org/web/2020/https://www.microsoft.com/en-us/research/wp-content/uploads/2009/01/pentagons.pdf |
 
 ## 8. Bounds check elimination
