@@ -345,7 +345,7 @@ core-language design in `../07-compiler/CUJ.md` step 2 comes from.
 |---|---|---|
 | Sussman & Steele, *SCHEME: An Interpreter for Extended Lambda Calculus* (1975) | the origin document | https://dspace.mit.edu/handle/1721.1/5794 |
 | Steele & Sussman, *Lambda: The Ultimate Imperative* (1976) | compiling control constructs to lambda | https://dspace.mit.edu/handle/1721.1/5790 |
-| Steele & Sussman, *LAMBDA: The Ultimate Declarative* (1976) | procedure calls as the universal primitive | https://dspace.mit.edu/handle/1721.1/6091 |
+| **Steele**, *LAMBDA: The Ultimate Declarative* (1976) | procedure calls as the universal primitive. **Single-authored**: the title page names only Guy Lewis Steele Jr. Sussman appears in the acknowledgements. An earlier draft credited both, inheriting the author list from AI Memo 353 above, which genuinely is co-authored | https://dspace.mit.edu/handle/1721.1/6091 |
 | Steele, *RABBIT: A Compiler for SCHEME* (1978) | the first optimizing Scheme compiler | https://dspace.mit.edu/handle/1721.1/6913 |
 | Dybvig, *Three Implementation Models for Scheme* (1987) | heap, stack and string models. The stack model is why Chez is fast | https://www.cs.indiana.edu/~dyb/pubs/3imp.pdf |
 | Dybvig et al., *The Development of Chez Scheme* (ICFP 2006) | retrospective on the implementation we are measuring against | https://www.cs.indiana.edu/~dyb/pubs/hocs.pdf |

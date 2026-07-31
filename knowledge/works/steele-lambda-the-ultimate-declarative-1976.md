@@ -2,7 +2,7 @@
 type: paper
 title: "LAMBDA: The Ultimate Declarative"
 description: Argues that LAMBDA is a renaming operator and a procedure call is a GOTO that passes data, from which proper tail calls, forced lexical scoping, and CPS-based compilation all follow.
-resource: knowledge/sources/steele-sussman-lambda-the-ultimate-declarative-1976.pdf
+resource: knowledge/sources/steele-lambda-the-ultimate-declarative-1976.pdf
 tags: [tail-calls, continuation-passing-style, closure-conversion, lexical-scoping, procedural-data, register-allocation]
 authors: [Guy Lewis Steele Jr.]
 year: 1976
