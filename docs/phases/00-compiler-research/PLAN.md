@@ -642,7 +642,7 @@ Wider-field gaps, found while assembling Part II and still unresolved:
   including with full browser headers. One manual download closes this. Knoop, Rüthing &
   Steffen, *Lazy Code Motion* (PLDI 1992) is separately outstanding.
 - ~~Blanchet, *Escape Analysis*~~ **RECOVERED, all three papers**, as PostScript from
-  `bblanche.gitlabpages.inria.fr/publications/`: POPL 1998 (ML), OOPSLA 1999 (Java), and the
+  `bblanche.gitlabpages.inria.fr/publications/`: POPL 1998, titled *Escape Analysis: Correctness Proof, Implementation and Experimental Results* — "ML" is the implementation language, not part of the title, OOPSLA 1999 (Java), and the
   TOPLAS 2003 journal version. This closes the one gap that threatened a design claim, since
   automatic stack allocation is one of four ways `../07-compiler/PLAN.md` says we exceed
   SBCL, and `techniques/escape-analysis.md` was `status: draft` with its data half

@@ -144,7 +144,7 @@ Not aspiration. Four specific capabilities SBCL lacks or does manually.
 |---|---|---|
 | auto-vectorization | can encode AVX-512, has no vectorizer pass | **our own vectorizer, driven by our own interval domain** |
 | abstract domain | roughly Pentagon (intervals plus `< > <= >=`) | Pentagon, then Octagon where it pays |
-| stack allocation | manual `dynamic-extent` declaration | automatic escape analysis, as .NET 9/10 now does |
+| stack allocation | manual `dynamic-extent` declaration | automatic escape analysis, as .NET 9/10 now does. **Justify by locality and unboxing, not GC**, and size it honestly: see below |
 | inference model | declaration-anchored, local | declaration-anchored local **plus** opportunistic global |
 
 That last row is the novel one. SBCL does local inference from declarations. Stalin does
@@ -210,6 +210,22 @@ serve nbody, fannkuchredux or spectralnorm are out until it does.
 **The back end gates everything, so it comes first.** Nothing downstream can be measured
 until the compiler emits correct native code, so instruction selection, register allocation
 and the assembler precede every analysis pass. That is a dependency, not a cost.
+
+**The GC argument for escape analysis does not survive measurement, for us specifically.**
+Blanchet contradicts himself across papers on where the speedup comes from: the ML paper
+says almost none of it is GC, because short-lived data is exactly what a generational minor
+collection never scans, while the Java paper says roughly half is. He names the cause
+himself, that the JDK used mark-and-sweep and CSL used generational. **We specify a precise
+generational collector, which puts us on the ML side of that split.** So any argument shaped
+"escape analysis cuts allocation, therefore cuts GC, therefore is fast" is unsound here.
+Justify the pass by data locality and by keeping unboxed flonums in registers.
+
+Size it honestly too. On Coq, the only large real program Blanchet measures, 25% of 5.25
+gigawords stack-allocated bought a **3.0 to 4.3% speedup**. That is the same order as Keep's
+3.6% for the closure half. He also reports a case where stack allocation *hurts* locality
+(`javacc`, stack gaps unreused until return). Worth having, not transformative. The part that
+could matter most on nbody, unboxed flonums staying in `xmm`, is measured by no source in
+this bundle.
 
 **RABBIT's optimizer bought only 1.2x, and the closure analysis bought the rest.** Steele
 reports 25x for compiled over interpreted, but the optimizer itself accounts for just 1.2x

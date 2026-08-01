@@ -118,6 +118,19 @@ alias and escape analysis runs before representation selection, or representatio
 or the escape-conditioned rows of that table are dead on arrival. Two independent
 sources reached this: the escape-analysis synthesis and the Steensgaard work document.
 
+**Escape analysis is an input to inlining, not only a consumer of it.** Blanchet is
+explicit in both papers: inlining exists *to create* stack-allocation opportunities and is
+performed only where it does. Coq goes from 11% to 25% of allocation stack-allocated because
+of it. Our `04b-inline.ss` sits far upstream of stage 09, so either stage 09 runs a cheap
+pre-pass to inform the inlining decision, or we accept the un-inlined ceiling and say so.
+
+Two more corrections to stage 09's shape from the same source. **Its output is not a boolean
+per variable**: it is a per-site decision plus a lifetime plus a loop-reuse flag, and without
+the reuse criterion the stack grows by a factor of ten on `javacc`. And **escape analysis at
+our cost target is downstream of type recovery**: Blanchet's cheap analysis, the
+`O(n log² n)` one, is *defined* by type heights, so without types the affordable
+representation does not exist at all. The type-free variant is the expensive one.
+
 **There was no inlining pass at all, and four stages depend on one.** `01-read` through
 `13-assemble` contained no inliner, no closure conversion and no assignment conversion, while
 stages 05, 06, 08 and 10 all assume inlining has run. Three sources demand inline-first, for
