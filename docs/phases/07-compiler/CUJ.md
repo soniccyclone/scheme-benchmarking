@@ -239,6 +239,17 @@ inside it.
 4. Hoist. If every access in the body is provable from the derived range, emit the check
    once before the loop instead of per iteration.
 
+**The SSA Book's missing figures are covered elsewhere in the corpus.** Allen and Kennedy
+§4.5 gives the whole stride-detection walkthrough in prose: `IVSub` (Figure 4.8) specifies
+dominance of the loop exit with respect to loop entry, the single-self-edge test, the
+requirement that the controlling operation be addition over a loop-invariant expression, the
+two substitution multipliers for uses textually before and after the definition, and the
+`blocking_definition` rule for when the induction self-edge may be deleted. `IVDrive` gives
+the ordering: forward-substitute first, substitute inside-out, and normalize *before*
+substituting or you emit an integer divide and multiply that strength reduction cannot
+remove. It is a def-use-graph formulation rather than SSA, so it complements the SSA Book
+rather than restating it.
+
 Reference algorithms: Gupta 1993 for the flow-analysis formulation, and ABCD
 (Bodík, Gupta and Sarkar, PLDI 2000) for the demand-driven version on SSA. ABCD's
 inequality-graph approach is the better fit if the representation moves to SSA later.

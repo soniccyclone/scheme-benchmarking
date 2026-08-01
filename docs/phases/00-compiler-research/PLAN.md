@@ -603,10 +603,13 @@ complete. Most exist behind `dl.acm.org`, which is bot-blocked but valid in a br
   revisited as a Stalin-style alternative to generational collection.
 - ~~Allen & Kennedy, *Automatic Translation of FORTRAN Programs to Vector Form*~~
   **SUPERSEDED AND RECOVERED.** The 1987 TOPLAS paper is still not open, but all ten draft
-  chapters of Allen & Kennedy's *Optimizing Compilers for Modern Architectures* were
-  recovered as PostScript from Kennedy's Rice `comp515` course directory via the CDX method,
-  and converted. Chapter 2 is *Dependence, Parallelization and Vectorization*, dated
-  1996-01-28. This is a better source than the paper: it is the whole loop-based
+  chapters were recovered as PostScript from Kennedy's Rice `comp515` course directory via the CDX method,
+  and converted. Chapter 2 is *Dependence, Parallelization and Vectorization*, dated 1996-01-28.
+  **The running header on every page reads ADVANCED COMPILING FOR HIGH PERFORMANCE**, the
+  1996-97 working title; *Optimizing Compilers for Modern Architectures* (Morgan Kaufmann,
+  2001) is the published descendant. There is no title page, author list, copyright block or
+  ISBN anywhere in the ten files, so the Allen and Kennedy attribution is inferred from
+  internal evidence rather than printed. Ten draft chapters map to the published twelve. This is a better source than the paper: it is the whole loop-based
   vectorization tradition, and it complements SLP's basic-block approach at pipeline
   stage 10.
 - Serrano & Feeley, *Storage Use Analysis and its Applications* (ICFP 1996).

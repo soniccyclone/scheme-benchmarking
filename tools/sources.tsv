@@ -53,7 +53,7 @@ waddell-dybvig-fast-and-effective-procedure-inlining-sas-1	5	https://web.archive
 keep-hearn-dybvig-optimizing-closures-in-o-0-time	5	https://andykeep.com/pubs/scheme-12a.pdf
 burger-waddell-dybvig-register-allocation-pldi-1995	11	https://web.archive.org/web/20050312122528id_/http://www.cs.indiana.edu/~dyb/pubs/Reg-Alloc-PLDI95.pdf
 dybvig-et-al-bibop	12	https://web.archive.org/web/20050208204441id_/http://www.cs.indiana.edu/~dyb/pubs/bibop.pdf
-# allen-kennedy-optimizing-compilers-ch01..ch10	9	NOT auto-fetchable: source is PostScript, converted locally with ps2pdf.
+# allen-kennedy-advanced-compiling-high-performance-ch01..ch10	9	NOT auto-fetchable: source is PostScript, converted locally with ps2pdf.
 #   https://web.archive.org/web/2005id_/http://www.cs.rice.edu/~ken/comp515/Chapter{1..10}.ps
 chaitin-register-allocation-graph-coloring-1982	18	https://www.cs.utexas.edu/~pingali/CS380C/2007fa/papers/p66-chaitin.pdf
 kildall-unified-approach-global-optimization-1973	16	https://web.archive.org/web/2018id_/http://courses.cs.washington.edu/courses/cse501/15sp/papers/kildall.pdf
