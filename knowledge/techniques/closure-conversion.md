@@ -8,7 +8,7 @@ sources:
   - resource: /works/dybvig-three-implementation-models-for-scheme-1987.md
   - resource: /works/keep-hearn-dybvig-optimizing-closures-in-o-0-time.md
   - resource: /works/keep-a-nanopass-framework-for-commercial-compiler-developm.md
-  - resource: /works/serrano-weis-bigloo-a-portable-and-optimizing-compiler-for.md
+  - resource: /works/serrano-cfa-closure-allocation-sac-1995.md
   - resource: /works/dybvig-et-al-the-development-of-chez-scheme-icfp-2006.md
   - resource: /works/steele-lambda-the-ultimate-declarative-1976.md
   - resource: /works/steele-sussman-lambda-the-ultimate-imperative-1976.md

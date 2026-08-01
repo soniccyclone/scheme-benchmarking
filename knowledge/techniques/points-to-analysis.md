@@ -10,7 +10,7 @@ sources:
   - resource: /works/lattner-adve-llvm-a-compilation-framework-for-lifelong-pro.md
   - resource: /works/keep-hearn-dybvig-optimizing-closures-in-o-0-time.md
   - resource: /works/sarkar-waddell-dybvig-a-nanopass-infrastructure-for-compil.md
-  - resource: /works/serrano-weis-bigloo-a-portable-and-optimizing-compiler-for.md
+  - resource: /works/serrano-cfa-closure-allocation-sac-1995.md
 implemented_by: [/implementations/llvm.md]
 absent_from: [/implementations/chez.md]
 pipeline_stage: 09-alias

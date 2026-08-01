@@ -5,7 +5,7 @@ description: Recovers which lambdas a call site can invoke by abstract interpret
 tags: [control-flow-analysis, abstract-interpretation, closure-conversion, escape-analysis, polyvariance]
 sources:
   - resource: /works/shivers-control-flow-analysis-of-higher-order-languages-19.md
-  - resource: /works/serrano-weis-bigloo-a-portable-and-optimizing-compiler-for.md
+  - resource: /works/serrano-cfa-closure-allocation-sac-1995.md
   - resource: /works/steensgaard-points-to-analysis-in-almost-linear-time-popl-.md
   - resource: /works/waddell-dybvig-fast-and-effective-procedure-inlining-sas-1.md
   - resource: /works/keep-hearn-dybvig-optimizing-closures-in-o-0-time.md

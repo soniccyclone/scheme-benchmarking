@@ -2,7 +2,7 @@
 type: paper
 title: "Control Flow Analysis: a Functional Languages Compilation Paradigm"
 description: Uses 0CFA in the Bigloo Scheme compiler to classify every procedure into one of three nested predicates, then picks a cheaper closure representation for each class; removes ~87-95% of closure allocations and roughly halves run time.
-resource: knowledge/sources/serrano-weis-bigloo-a-portable-and-optimizing-compiler-for.pdf
+resource: knowledge/sources/serrano-cfa-closure-allocation-sac-1995.pdf
 tags: [control-flow-analysis, closure-conversion, escape-analysis, scheme, bigloo]
 authors: [Manuel Serrano]
 year: 1995
@@ -133,7 +133,7 @@ is not Chez, so the number does not transfer.
 # Notes
 
 **Bibliography correction, high confidence.** The slug
-`serrano-weis-bigloo-a-portable-and-optimizing-compiler-for` claims Serrano and Weis,
+`serrano-cfa-closure-allocation-sac-1995` claims Serrano and Weis,
 "Bigloo: a portable and optimizing compiler for strict functional languages", SAS 1995. The
 PDF is a different paper:
 

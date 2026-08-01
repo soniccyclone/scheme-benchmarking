@@ -8,7 +8,7 @@ sources:
   - resource: /works/steele-rabbit-a-compiler-for-scheme-1978.md
   - resource: /works/steele-lambda-the-ultimate-declarative-1976.md
   - resource: /works/shivers-control-flow-analysis-of-higher-order-languages-19.md
-  - resource: /works/serrano-weis-bigloo-a-portable-and-optimizing-compiler-for.md
+  - resource: /works/serrano-cfa-closure-allocation-sac-1995.md
   - resource: /works/appel-ssa-is-functional-programming-1998.md
   - resource: /works/hieb-dybvig-bruggeman-representing-control-in-the-presence.md
   - resource: /works/waddell-dybvig-fast-and-effective-procedure-inlining-sas-1.md

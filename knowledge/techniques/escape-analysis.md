@@ -1,12 +1,15 @@
 ---
 type: technique
 title: Escape analysis
-description: Proving a value does not outlive the activation that created it, which is what licenses stack allocation, closure elimination, and keeping an unboxed flonum in a register; the bundle has no dedicated source for this and the data half is assembled from closure and points-to work.
-tags: [escape-analysis, stack-allocation, closure-conversion, points-to-analysis, dynamic-extent]
+description: Proving a value does not outlive the activation that created it, which is what licenses stack allocation, closure elimination, and keeping an unboxed flonum in a register; three Blanchet papers now supply the data half, and they set the cost at O(n log² n) with type information and a proof obligation without it.
+tags: [escape-analysis, stack-allocation, closure-conversion, dynamic-extent, abstract-interpretation]
 sources:
+  - resource: /works/blanchet-escape-analysis-ml-popl-1998.md
+  - resource: /works/blanchet-escape-analysis-oopsla-1999.md
+  - resource: /works/blanchet-escape-analysis-java-toplas-2003.md
   - resource: /works/keep-hearn-dybvig-optimizing-closures-in-o-0-time.md
   - resource: /works/keep-a-nanopass-framework-for-commercial-compiler-developm.md
-  - resource: /works/serrano-weis-bigloo-a-portable-and-optimizing-compiler-for.md
+  - resource: /works/serrano-cfa-closure-allocation-sac-1995.md
   - resource: /works/steensgaard-points-to-analysis-in-almost-linear-time-popl-.md
   - resource: /works/dybvig-three-implementation-models-for-scheme-1987.md
   - resource: /works/hieb-dybvig-bruggeman-representing-control-in-the-presence.md
@@ -16,197 +19,263 @@ sources:
 implemented_by: [/implementations/chez.md]
 absent_from: [/implementations/sbcl.md]
 pipeline_stage: 09-alias
-status: draft
-generated: { by: "wave2-synthesis/claude", at: "2026-07-31T00:00:00Z" }
+status: stable
+generated: { by: "wave2-synthesis/claude", at: "2026-08-01T00:00:00Z" }
 ---
 
 # Problem
 
-Which values can live in a frame that gets popped, rather than in a heap that must be
-collected. Equivalently, and more usefully for us: which flonum can stay unboxed in an
-`xmm` register for its whole lifetime, and which closure needs no heap object at all. The
-predicate is "v does not outlive the activation that created it."
+Which values can live in a frame that gets popped rather than in a heap that must be collected.
+For us, more usefully: which flonum can stay unboxed in an `xmm` register for its whole lifetime,
+and which closure needs no heap object at all. The predicate is "v does not outlive the activation
+that created it."
 
-Common Lisp makes the programmer answer with `dynamic-extent`, unchecked. Automating it is
-one of four capabilities where our plan claims to exceed SBCL. **Caveat up front: this
-bundle contains no dedicated escape analysis paper.** Choi et al. (connection graphs,
-OOPSLA 1999) and Blanchet (escape analysis for ML by type height, POPL 1998 / TOPLAS 2003)
-are recorded gaps. What follows is closure analysis and points-to analysis pressed into
-service, plus one framework for the "inevitably does X" question. The closure half is
-sourced. The data half is inference and is marked as such.
+Common Lisp makes the programmer answer with `dynamic-extent`, unchecked. Automating it is one of
+four capabilities where `docs/phases/07-compiler/PLAN.md` claims we exceed SBCL. This document was
+`status: draft` because its data half was extrapolated from Steensgaard's storage shape graph,
+which is not what that paper is about. Three Blanchet papers now cover it directly, including a
+correctness proof and measurements on a 65,000-line program, so the claim is on evidence.
 
 # Mechanism
 
-Three approximations at three granularities.
+Four analyses at three granularities. The first is nearly free and covers closures; the second is
+the sourced answer for data; the last two are supporting.
 
-**1. Syntactic well-knownness, for closures.** A procedure is *known* at a call site if that
-site provably invokes exactly that lambda. It is *well-known* if its value is never used
-anywhere except at sites where it is known, which is to say it never escapes. A well-known
-procedure's code pointer is dead, because every call jumps to a direct-call label.
+**1. Syntactic well-knownness, for closures.** A procedure is *known* at a call site if that site
+provably invokes exactly that lambda, and *well-known* if its value is never used anywhere except
+where it is known. A well-known procedure's code pointer is dead: every call jumps to a label.
 
-The analysis is a single linear pass, and this is the cheapest real result in the bundle:
-give each `letrec` lambda a fresh label, optimistically mark it well-known, and demote it on
-any reference outside call-operator position. No call graph, no fixpoint. It requires
-assignment conversion and letrec purification first. Measured: 56.94% of closures and
-44.89% of free variables eliminated statically, 58.25% of closure allocation and 58.58% of
-closure-related memory references eliminated dynamically, over 67 R6RS benchmarks.
+One linear pass. Give each `letrec` lambda a fresh label, optimistically mark it well-known, demote
+on any reference outside call-operator position. No call graph, no fixpoint. Requires assignment
+conversion and letrec purification first. Measured over 67 R6RS benchmarks: 56.94% of closures and
+44.89% of free variables eliminated statically, 58.25% of closure allocation eliminated dynamically.
 
-**2. Three-valued classification from 0CFA, for procedures.** Serrano's Bigloo work. 0CFA
-gives `A(f)`, the callable set at each site; invert it to `USE(f)`, the sites that can
-invoke `f`. Then three nested predicates, `S ⇒ X ⇒ T`, each with a cheaper representation:
+**2. Blanchet's analysis, for data.** A backward abstract interpretation over the program's AST or
+SSA form, in four levels, each derived from the previous by abstract interpretation with a stated
+Galois connection.
 
-- `S(f)`: not escaping and `USE(f)` is empty, so `f` never reaches a `funcall` at all. No
-  closure, no environment, every call a direct branch, free variables lambda-lifted into
-  the parameter list. Proposition 2 is the practical one: **any function never passed as an
-  argument and never returned satisfies S.**
-- `X(f)`: not escaping and `A(g) = {f}` exactly at every use site. No closure structure,
-  though an environment may remain.
-- `T(f)`: a family always applied at the same places. Closure shrinks to a single
-  entry-point slot, no tag, no arity field, and the call site drops the type and arity check.
+*Level 1, access paths (analysis E).* Escape contexts are sets of access paths. In the ML paper,
+`Path = l:Path | r:Path | app:Path | ⊤ | ⊥`, where `l` is head-of-list / left-of-pair /
+contents-of-ref, `r` is tail / right, and `app` means the value is a function that gets applied.
+Contexts must be **non-empty**: under call-by-value an expression is evaluated even when its result
+is unused, and that evaluation can cause escape through assignment. Abstract values are *context
+transformers*, `Ctx → (Var ∪ Ind) → Ctx`: given the escape context of the result, they yield the
+escape context of each free variable and each parameter index. Parameterizing on the calling
+context is what makes the analysis context sensitive without reanalyzing a procedure per call site.
+E is stated to apply to any functional language, "even untyped," and is explicitly too complex to
+implement directly.
 
-Escape here is a flag on the variable, not a derived fact: `ESC` (exported or imported) and
-`FOR` (foreign) poison the arguments and body to unknown immediately. That is the honest
-model for separate compilation.
-
-**3. Storage shape graph reachability, for data.** Steensgaard. Points-to analysis recast as
-type inference over a non-standard type system and solved by union-find, in O(N α(N,N)) time
-and O(N) space. A location escapes iff its equivalence class representative is reachable
-from a global, a parameter, or a returned value. The paper says as much itself about
-Table 3: variables whose type variable describes nothing else "are candidates for global
-optimizations such as being represented by a register rather than a memory location." That
-is storage class assignment. One pass feeds non-escape to stage 08 and non-aliasing to
-stage 10.
-
-**4. The "inevitably" framework.** Burger, Waddell and Dybvig's `St`/`Sf` split answers "does
-this expression inevitably do X" on an AST, in one bottom-up linear pass. Union along a path,
-intersection across paths, and the whole register set `R` for impossible paths so they impose
-no constraint. That is the shape our escape predicate wants, and the `R`-for-impossible-paths
-trick is the non-obvious part. **Carry the correction:** the callee-save criterion
-`ret ∈ St[E] ∩ Sf[E]` is wrong as printed in the ACM proceedings; our copy has the fix in
-footnote 2 on page 5.
-
-Our predicate, defaulting to escape:
+*The two-direction fix for mutation.* The ML paper treats a value as escaping the moment it is
+stored into another value. That is useless the moment assignment is common. The Java papers replace
+it with **bidirectional propagation**: a backward `E` and a forward `ES` ("store-escape"), mutually
+dependent. `E` alone cannot see that `o` escapes because it was stored into a parameter, since at
+the assignment point a backward analyzer does not yet know the target is a parameter. For `x.f = y`
+this yields *two* equations, and the second looks wrong until you see the counterexample:
 
 ```
-escapes?(v) :=  v is stored into a heap object not itself proven non-escaping
-             |  v is passed to a call whose callee is not known
-             |  v is returned from the procedure that created it
-             |  v occurs free in a lambda that is not well-known
-             |  a continuation may be captured in v's scope   ; see Preconditions
+E(y) ⊒ f⁻¹.ES(x)     when x.f escapes, y escapes        (obvious)
+E(x) ⊒ f.ES(y)       when y escapes, x.f escapes        (necessary)
+
+C.static_field = y;  x.f = y;  x.f.f' = z;
 ```
+
+Without the second, `x` has empty escaping parts and `z` is wrongly reported non-escaping — the code
+is equivalent to `y.f' = z` and `y` escapes.
+
+*The soundness condition.* δ-transitivity: `f` is δ-transitive if for `y` in the lexical scope of
+`x`, `f c x ⊔ [[y]] ⊥ x ⊑ [[y]] (f c y) x` — escape through an intermediate binding is accounted
+for. Blanchet's counterexample is `let rec f(x) = ... z := f ... in f(3)`, where the naive
+criterion is correct against the correctness predicate yet still concludes wrongly.
+
+*Level 2, integers.* Escaping parts become the *height of the type of the escaping part*.
+`⊤₂[bool] = 1`, `⊤₂[τ₁→τ₂] = ⊤₂[τ₂]`, `⊤₂[τ₁×τ₂] = 1 + max`, `⊤₂[τ list] = 1 + ⊤₂[τ]`,
+`⊤₂[τ ref] = 1 + ⊤₂[τ]`. Recursive types: all types in one strongly connected component of the
+containment graph share a height; +1 between components; O(size of type declarations). An object of
+type τ is stack-allocatable when its escape context is strictly below `⊤[τ]`. Higher-order needs
+*two* integer analyses, not one, and the reason is specific: a variable captured in a closure may
+have a higher level than the closure itself, so the escape function would not be *inferior* and
+Knuth's solver would not apply. F1 tracks escape through closures as a boolean, F2 gives levels for
+everything else.
+
+*Level 3, one-step representation.* Additivity splits each transformer into `⊔ᵢ gᵢ(cᵢ) ⊔ u`, and each
+`gᵢ` is stored as a triple `(s, s⁺, l)` meaning `γ ↦ (if γ ≥ s then s⁺ else 0) ⊔ (γ ⊓ l)`, held
+sparsely so only the parameters a context actually depends on are present.
+
+*Solving.* Equations form a tree with edges labeled `λc.(c ⊓ f) ⊔ i`, composed as
+`(f₁,i₁) ∘ (f₂,i₂) = (f₁ ⊓ f₂, (i₂ ⊓ f₁) ⊔ i₁)` with Tarjan path compression, solved by Knuth's
+generalization of Dijkstra's algorithm after splitting into strongly connected components.
+
+*The transformation, which is half the value.* `letstack x = M in N` stack-allocates the outer
+constructor of `x` and frees it at the end of `N`; `letstack'` frees it *before* the tail call of
+`N`, so tail call optimization survives. Choose the enclosing context as small as possible to
+minimize lifetime, via a second path-compressed tree walk. In a loop, do not allocate fresh each
+iteration; the reuse criterion is *assume every variable live just before the allocation escapes,
+and if the allocated object still does not escape, the slot can be reused*. Inline small allocating
+procedures, but only when doing so actually creates an opportunity.
+
+**3. Serrano's three-valued classification, for procedures.** 0CFA gives the callable set; invert to
+get the use sites. Then `S ⇒ X ⇒ T`, each with a cheaper representation. Proposition 2 is the
+practical one: **any procedure never passed as an argument and never returned satisfies S** — no
+closure, no environment, every call a direct branch, free variables lambda-lifted.
+
+**4. The "inevitably" framework.** Burger, Waddell and Dybvig's `St`/`Sf` split answers "does this
+expression inevitably do X" in one bottom-up linear pass: union along a path, intersection across
+paths, and the whole register set `R` for impossible paths so they impose no constraint. **Carry the
+correction:** the callee-save criterion `ret ∈ St[E] ∩ Sf[E]` is wrong as printed in the ACM
+proceedings; our copy has the fix in footnote 2 on page 5.
 
 # Preconditions
 
-Assignment conversion and letrec purification, or well-knownness is unsound.
+**Assignment conversion and letrec purification**, or well-knownness is unsound.
 
-**Continuation capture is the hard one, and it is where this bundle earns its keep.** Dybvig
-§4.5: a box may be skipped when an assigned variable occurs free in no closure *and* no
-continuation can be captured in its scope. The first is a syntactic check on free-variable
-lists. The second, the dissertation says plainly, needs significant analysis, because any
-call outside the variable's scope might capture a continuation. That is a k-CFA-shaped
-question. Chez did not have that analysis in 1987 and mostly still relies on the syntactic
-check. Any claim we make about automated escape analysis lands on this problem.
+**Type information, for the fast version.** This is the constraint the bundle did not have written
+down, and two of the three sources reach it independently. Analysis E is type-free and applies to
+untyped languages; analysis L is *defined* by type heights. Without types there are no levels and
+the O(n log² n) representation does not exist. **Escape analysis at our cost target is downstream of
+type recovery.**
 
-**The control representation decides what stack allocation even means.** Under Hieb, Dybvig
-and Bruggeman's segmented stack, capture *seals* the current segment rather than copying it,
-so objects with dynamic extent may be stack-allocated and *mutated*. That is not sound under
-the naive copy model or under the Clinger-Hartheimer-Ost hybrid. So escape analysis is worth
-strictly more under segmented continuations than under snapshot continuations. That is a
-representation choice enabling an analysis, and it should be recorded that way.
+**SSA form, for the good complexity bound.** The TOPLAS version's improvement over OOPSLA is
+entirely from analyzing SSA instead of an abstract state per program point: `(l+s)` factors vanish,
+equations and unknowns drop from `O(n(l+s))` to `O(n)`. The resulting flow sensitivity is exactly
+"as flow sensitive as SSA" — flow sensitive on local variables, flow *insensitive* on assignments to
+object fields.
 
-**RABBIT's negative result has not been retracted by anything else in this bundle.** Steele,
-p. 92: if a side-effecting expression is substituted past a call to an unknown function, and
-that function performs a `CATCH` whose escape procedure is later invoked twice, the effect
-happens twice. There is no way to decide this short of fearing every unknown call, fearing
-them defeats most optimization, and RABBIT therefore ignores the problem. Every escape
-analysis in a language with first-class continuations inherits that choice.
+**Whole-program or module-closed** for anything CFA-based, and for the Java version, a resolved call
+graph before analysis. Separate compilation is supported but costs precision directly.
 
-Whole-program or module-closed, for anything CFA-based. Separate compilation costs precision
-directly.
+**Continuation capture is the hard one and none of the three sources touch it.** Blanchet's
+semantics has no control operator. Dybvig §4.5: a box may be skipped when an assigned variable
+occurs free in no closure *and* no continuation can be captured in its scope; the first is
+syntactic, the second needs significant analysis. RABBIT's negative result stands unretracted
+(Steele p. 92): substituting a side-effecting expression past an unknown call that performs a
+`CATCH` whose escape procedure is invoked twice makes the effect happen twice, there is no way to
+decide it short of fearing every unknown call, and fearing them defeats most optimization.
+
+**The control representation decides what stack allocation means.** Under Hieb, Dybvig and
+Bruggeman's segmented stack, capture *seals* the current segment rather than copying it, so
+dynamic-extent objects may be stack-allocated *and mutated*. Not sound under the naive copy model.
+Escape analysis is worth strictly more under segmented continuations.
 
 # Cost
 
 Well-knownness: one linear pass, compile time change under 1%. Effectively free.
 
-0CFA: worst case O(n³) in functions plus call sites; iteration counts to fixpoint were at
-most 5 on real programs, but the wall clock is real — 60.5s against 6.4s on `conform`, an
-845% increase in Scheme-side compile time. Bigloo repays it because it emits C and better C
-compiles faster.
+Blanchet on ML: **O(n log² n)**, measured near-linear in practice because each recursive declaration
+is analyzed independently. Analysis alone 16-19% of compile time; total compile 19-21% longer
+because the transformed code also takes longer to compile.
 
-Steensgaard: about 4x the cost of traversing the program representation; ~27 seconds on
-75,000 lines of C on 1996 hardware.
+Blanchet on Java: worst case `O(n²pp'²H)` on SSA form (`O(n²(l+s)²pp'²H)` without SSA), but
+iterations to fixpoint were at most 17 with an average of 3.9 per equation, and the analysis was
+about 10% of compile time with 29% total compile overhead. Splitting the dependence graph into
+strongly connected components before iterating took `jess` from 156 s to 129 s.
 
-k-CFA for k ≥ 1 is exponential in the worst case, and 0CFA is cubic. Shivers offers no
-complexity analysis and says so; those results came later and settled it against him.
+0CFA: worst case cubic; on `conform`, 60.5 s against 6.4 s, an 845% increase in Scheme-side compile
+time. Steensgaard: about 4× the cost of traversing the program representation.
 
-The precision cost of unification is the one that will hurt us. One `x = y` merges two
-points-to sets permanently, symmetrically, everywhere. `(let ([v (if p a b)]) ...)` merges
-`a` and `b` for the whole program. In a numeric kernel where arrays flow through a shared
-helper, that is the common case, not the rare one. The direction of error is safe (merging
-loses distinctness claims, never invents them) but it degrades fast.
+**What it buys, honestly.** Coq, 65,000 lines, 5.25 gigawords allocated: 17% stack-allocated
+preserving recursive tail calls, 25% without — for a **3.0-4.3% speedup**. Small benchmarks do much
+better (`taku` 74% of memory, 25% speedup) but Coq is the honest number at scale. Without inlining,
+Coq could not exceed 11%. On Java, 13-95% of data stack-allocated for a 21% geometric-mean speedup,
+but roughly half of that comes from synchronization elimination, which we have no analogue for.
 
-**The calibration number.** Keep's full closure optimization, all six free-variable
-eliminations plus representation selection plus sharing plus borrowing, moves benchmark run
-time by an average of **3.6%**, range negligible to 20%, with a few benchmarks getting
-*slower* from cache effects. Eliminating 58% of closure allocation buys 3.6% wall clock,
-because Chez's inline allocation is already about three instructions plus a store per field.
-Size any escape-analysis proposal against that ratio before building it.
+**Two negative results to budget for.** Stack overflow is a real failure mode: without the loop-reuse
+criterion the stack grows by a factor of 10 on `javacc` and 129% on `JLex`. And stack allocation can
+*hurt* locality — in `javacc`, stack-allocated arrays became unreachable at the next iteration
+without the analysis seeing it, leaving gaps in the stack unreused until return, where heap
+allocation would have let the collector reclaim them.
+
+**The calibration number for the closure half.** Keep's full closure optimization — six free-variable
+eliminations plus representation selection plus sharing plus borrowing — moves benchmark run time by
+an average of **3.6%**, range negligible to 20%, with a few benchmarks getting *slower* from cache
+effects. Eliminating 58% of closure allocation buys 3.6% wall clock, because Chez's inline
+allocation is already about three instructions plus a store per field.
 
 # Disagreements
 
-**Is flow analysis worth it for escape?** Serrano says yes: 0CFA pays because it enables a
-specific representation choice nobody had named before, and he rejects 1CFA outright ("what
-can be done with this information in a compiler? We have found no answers"). Keep, Hearn and
-Dybvig get their entire result from a linear syntactic pass with no CFA at all, and their
-numbers are in the same range as Serrano's. Serrano's dismissal of 1CFA has aged badly for
-exactly our case: polyvariant CFA is how you get type specialization, which is what unboxing
-wants.
+**Where the speedup comes from, and Blanchet contradicts himself across two papers.** POPL 1998:
+almost none of it is GC; the speedup is data locality, because stack allocation catches short-lived
+data and short-lived data is exactly what a generational minor collection never scans. OOPSLA 1999:
+roughly half is GC, a quarter locality, a quarter allocation time. He names the cause — the JDK used
+mark-and-sweep, CSL used a generational collector. **This is not a disagreement about escape
+analysis, it is a disagreement about collectors, and it resolves for us in favour of the ML answer**,
+because our plan specifies a precise generational copying collector. Expect locality and unboxing
+wins; do not justify the pass by GC pressure.
 
-**Escape at what granularity?** Prior closure analyses (Kranz's ORBIT, Séniak's SQIL)
-partition procedures into allocates and does-not-allocate. Serrano argues that partition is
-exactly the weakest of his three predicates and that the two stronger classes admit strictly
-cheaper representations the binary analysis throws away. The subsumption claim is stated, not
-proved, and rests on reading their algorithms as computing exactly `S`.
+**Integers versus graphs.** Blanchet abstracts escaping parts to a single integer per value. Choi et
+al. (connection graphs) and Whaley and Rinard (points-to escape graphs) are, in Blanchet's own
+words, "more precise than our analysis because they distinguish different fields of objects and are
+flow sensitive." His counter is cost, plus one structural argument that is decisive:
+**Choi et al. consider a `new` stack-allocatable only when it is so in all calling contexts, so
+inlining cannot be used to increase stack allocation opportunities.** Blanchet's own data says
+inlining is what takes Coq from 11% to 25%. Note the integer abstraction's own weak spot, stated by
+Blanchet: integers cannot distinguish different fields of the same object, so precision degrades the
+deeper into a data structure you go — which he argues does not matter, because the top of a
+structure is what you can usually stack-allocate anyway.
 
-**Manual versus automatic.** No source in this bundle argues for the manual `dynamic-extent`
-form. Equally, no source in this bundle demonstrates a sound automatic escape analysis for
-*data* as opposed to closures. The gap runs in both directions and we should not pretend
-otherwise.
+**Is flow analysis worth it for escape?** Serrano says yes and rejects 1CFA outright ("what can be
+done with this information in a compiler? We have found no answers"). Keep, Hearn and Dybvig get
+their entire closure result from a linear syntactic pass with no CFA at all, in the same numeric
+range. Serrano's dismissal of 1CFA has aged badly for our case: polyvariant CFA is how you get type
+specialization, which is what unboxing wants.
 
-**The source gap, stated plainly.** This technique needs a source we do not hold. Everything
-above about data escape is extrapolated from Steensgaard's points-to graph and from
-Steensgaard's own aside about register candidacy. That is a legitimate reading of the paper
-and it is not what the paper is about. Before we commit stage 09 to a design, fetch Choi et
-al. 1999 and Blanchet's TOPLAS 2003. Blanchet in particular is the one aimed at a functional
-language with closures, which is our shape.
+**Escape at what granularity?** Prior closure analyses (Kranz's ORBIT, Séniak's SQIL) partition
+procedures into allocates and does-not-allocate. Serrano argues that partition is exactly the
+weakest of his three predicates. The subsumption claim is stated, not proved.
+
+**What no source in the bundle covers.** First-class continuations. Blanchet has no control operator
+in any of the three semantics; Dybvig identifies the problem and does not solve it; RABBIT
+identifies it and declines. Any claim we make about automated escape analysis in the presence of
+`call/cc` is ours to establish, not something we inherit.
+
+**Manual versus automatic.** No source argues for the manual `dynamic-extent` form. All three
+Blanchet papers demonstrate the automatic form working at scale on real programs, which closes the
+gap this document previously admitted.
 
 # For us
 
-Stage `09-alias` produces the fact; stage `08-represent` consumes it. **The CUJ orders 08
-before 09, and that is backwards.** Stage 08's table keys on "proven flonum, does not
-escape", which stage 09 is the thing that proves. Either 09 moves ahead of 08, or 08 runs
-twice, or the escape half of 08's table is dead on arrival. Steensgaard's work document
-reaches the same conclusion from the other side.
+Stage `09-alias` produces the fact; stage `08-represent` consumes it. The CUJ numbers 08 before 09
+and the CUJ already carries the correction: storage class assignment keys on "proven flonum, does
+not escape," which is what 09 proves. Blanchet does not suggest a different placement — his analysis
+is a whole-procedure abstract interpretation that runs once and answers per allocation site, which
+is exactly stage 09's shape.
+
+He does suggest two things about *ordering* that we did not have.
+
+**Escape analysis is an input to the inlining decision, not a consumer of it.** In both papers,
+inlining exists to create stack-allocation opportunities and is performed only when it does so.
+Coq goes 11% → 25% because of it; char arrays are 4% of javac's data, 20% of turboJ's, 29% of
+javacc's, entirely from inlining `StringBuffer.ensureCapacity` and `toString`. Our `04b-inline.ss`
+sits far upstream of stage 09, so either 09 has to run a cheap pre-pass to inform inlining, or we
+accept the un-inlined ceiling. Blanchet's `(j+1)`-cell summary — three constant-size cells per
+procedure with an exact fallback that fired 21 times in 2 Mb of classes — is how he gets it without
+quadratic blowup, and it is in the OOPSLA paper, not the TOPLAS one.
+
+**Granularity is per-allocation-site with a lifetime, not a boolean per variable.** The predicate
+"does not escape" is only half the transformation. The other half is placing the deallocation as
+early as possible, which changes `taku`'s stack from 75% larger to 25% larger. And in a Scheme where
+every loop is a tail call, `letstack'` versus `letstack` is our default case, not an edge case:
+putting a `letstack` in tail position in a recursive loop grows the stack every iteration.
 
 Build order, cheapest first:
 
-1. Well-knownness. Linear, ~free, and it is what decides whether a closure exists at all.
-   Keep's per-optimization breakdown says self-reference elimination alone accounts for
-   25.41% of free variables and 45.64% of eliminated memory references, and mutual-reference
-   elimination another 7.91%/32.55% — the two simplest transformations carry most of it.
-   Sharing and borrowing together are 2.11% and can be skipped.
-2. Serrano's `S` predicate, which needs only "never passed as an argument, never returned"
-   and covers most functions in most programs.
-3. Steensgaard's union-find core for data. Maybe 150 lines as a nanopass stage: fresh ECR
-   per `make-flvector` site, join on assignment/argument/return, escape iff reachable from a
-   global, a parameter or a return. The `pending`-set conditional join is what makes one
-   pass suffice, with no fixpoint and no worklist.
+1. **Well-knownness.** Linear, free, and it decides whether a closure exists at all. Keep's
+   breakdown: self-reference elimination alone is 25.41% of free variables and 45.64% of eliminated
+   memory references, mutual-reference elimination another 7.91%/32.55%. Sharing and borrowing
+   together are 2.11% and can be skipped.
+2. **Serrano's `S` predicate** — never passed as an argument, never returned. Covers most procedures
+   in most programs and needs no fixpoint.
+3. **Blanchet's analysis E on paths, restricted to flvectors and flonums.** Type-free, so it does not
+   wait on type recovery. Backward pass over SSA, contexts as sets of paths, with the bidirectional
+   `E`/`ES` pair — because `(vector-set! v 0 x)` is `x.f = y`, and the POPL 1998 store-escapes rule
+   would kill exactly the flvector case stage 08 exists to serve.
+4. **The integer abstraction, once type recovery lands.** This is what buys O(n log² n). Not before.
 
-Do not reach for k-CFA. If unification proves too coarse, the escape hatch is context
-sensitivity (polymorphic inference), not Andersen's inclusion-based analysis — our precision
-problem will be about context, not about inclusion versus unification.
+Do not reach for k-CFA. Do not build connection graphs first; the ground Blanchet covers is enough
+to start, and Choi et al. is a second opinion rather than a prerequisite.
 
-And hold the honest position on the SBCL comparison. Automating `dynamic-extent` is a real
-capability gap, but the bundle does not contain the paper that shows how to close it for
-data, and Keep's 3.6% is the calibration for the closure half. The flonum half is the part
-that could actually matter on `nbody`, and no source here measures it.
+Hold the honest position on the SBCL comparison. Automating `dynamic-extent` is a real capability
+gap and it is now demonstrated closeable — Blanchet did it in a production ML compiler and a
+production Java compiler, with a proof. The size of the prize is the open question: **3-4% on a
+large real program**, per Coq, which is the same order as Keep's 3.6% for the closure half. That is
+worth having and it is not a transformative number. The part that could actually matter on `nbody`
+is unboxed flonums staying in `xmm` registers, and no source in this bundle measures that.

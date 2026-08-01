@@ -4,6 +4,7 @@ title: Dataflow analysis
 description: The monotone-framework recipe for computing a sound fact at every program point, its dense and sparse solvers, and what widening costs when the lattice has no finite height.
 tags: [dataflow-analysis, lattice, fixpoint, worklist, widening, sparse-analysis]
 sources:
+  - resource: /works/kildall-unified-approach-global-optimization-1973.md
   - resource: /works/cousot-cousot-abstract-interpretation-popl-1977.md
   - resource: /works/wegman-zadeck-constant-propagation-with-conditional-branch.md
   - resource: /works/rastello-et-al-ssa-based-compiler-design-the-ssa-book.md
@@ -147,7 +148,7 @@ so `h` scales with variable count).
 Sparse: `O(|E_SSA| * h + |E_CFG|)`, with one cell per SSA name and no in/out sets at all.
 SSA graph growth over the non-SSA program is measured linear. For SCCP specifically the
 bound is tighter, `O(E + |SSA edges|)`, because a three-level cell can only lower twice, so
-each SSA edge is examined at most twice. Compare Kildall's simple constant at `O(E * V^2)`.
+each SSA edge is examined at most twice. Kildall's own bound is `n · h(P')` step-A5 executions, with `h` growing linearly in `n` for constant propagation, giving O(n²) node-visits. (The `O(E·V²)` figure often attributed to him is Wegman and Zadeck's restatement in different units).
 
 Precision given up: widening is, in the authors' own words, "a very rough operation which
 introduces a great loss of information". The narrowing pass is the cheap part and it is
@@ -156,6 +157,16 @@ skipping it forfeits most loop-bounds checks. The `W-arcs` choice is a real desi
 and on an irreducible graph it is arbitrary; a bad cut widens more than necessary.
 
 # Disagreements
+
+**Kildall's Theorem 2 is false as stated, for his own example analysis.** The proof requires
+the homomorphism property `f(N, x ∧ y) = f(N,x) ∧ f(N,y)`, which is *distributivity*, not the
+monotonicity his framework assumes. His constant-propagation function fails it: with
+`P1={(a,1),(b,2)}` and `P2={(a,2),(b,1)}` meeting at `d := a+b`, `f(N, P1∧P2) = ∅` while
+`f(N,P1) ∧ f(N,P2) = {(d,3)}`. So Algorithm A computes **MFP, not MOP**. Kam and Ullman
+(1977) supplied the correction. This is load-bearing for stages 05 through 07: MFP is sound,
+but a document claiming MOP is claiming more precision than the algorithm delivers. Read the
+paper as the monotone framework, and note that `# Preconditions` above is right about
+soundness and would be wrong if it were read as licensing MOP.
 
 **Def-use chains versus SSA as the sparse representation.** Wegman and Zadeck reject def-use
 chains explicitly. They can be `N^2` per variable, and they carry values along
