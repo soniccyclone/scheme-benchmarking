@@ -105,37 +105,73 @@ What it gives up: SBCL's threading story against Chez's, which is a separate pro
 comparability with the Game's parallel headline numbers, which `RESEARCH.md` already forbids
 mixing into our tables anyway.
 
-## Later: CI-based measurement, and why the obvious approach fails
+## Later: CI-based measurement
 
-After the initial findings land, this should move to continuous measurement rather than
-ad-hoc local runs. GitHub Actions is the obvious host and the free runners are a poor fit for
-wall-clock benchmarking, for reasons worth writing down before anyone tries:
+**Not now.** This section describes where measurement goes *after* the initial findings land.
+Until then everything runs serially on this machine.
 
-- **Shared tenancy.** Free runners are VMs on shared hardware with noisy neighbours. No
-  governor control, no pinning, no isolation.
-- **Heterogeneous silicon.** GitHub has rotated CPU generations over time, so two runs a week
-  apart may not be the same microarchitecture. Cross-run wall-clock comparison is
-  meaningless without pinning the hardware, which the free tier does not offer.
-- **No PMU, probably.** The same problem this machine has: hardware counters are usually
-  unavailable in a VM, so `perf stat` gives software events only.
-- **Reported variance** for wall-clock microbenchmarks on shared CI commonly lands in the
-  10-30% band, which is larger than most of the deltas this project is hunting.
+### The design
 
-The way out is to change the metric rather than the host. Two approaches, and they answer
-different questions:
+The unit of measurement is **one complete benchmark suite run inside one CI job**, and
+comparisons are only ever made *within* such a run. Never across them.
 
-1. **Deterministic counting, for regression detection.** Run under `cachegrind` or
-   `callgrind` and compare *instruction counts*, which are immune to scheduling noise and
-   reproduce exactly across runners and CPU models. This is what `iai` and CodSpeed-style
-   services do. It catches "did this commit make the compiler emit more work", which is the
-   question CI should be asking. It does **not** measure time, and it misrepresents anything
-   whose cost is cache or branch behaviour rather than instruction count, which for a
-   vectorization project is a real caveat.
-2. **Within-run relative comparison only.** A and B measured in the same job on the same
-   runner is viable; A today against B last Tuesday is not. Structure every CI benchmark as a
-   ratio against a baseline built in the same job.
+That constraint dissolves the objections that make CI benchmarking look hopeless. Shared
+tenancy, rotating CPU generations, invisible frequency scaling and absent PMU access all
+break *cross-run* comparison. None of them break A-against-B measured on the same runner,
+in the same job, minutes apart, because whatever silicon and neighbours that job drew apply
+equally to both arms.
 
-Wall-clock claims need dedicated hardware. That means a self-hosted runner on a machine we
-control, which is also where **parallelism should be reintroduced**: once the hardware is
-fixed and the topology is visible, the thread-count axis becomes measurable and the
-serial-only restriction above can be revisited. Not before.
+Then get statistics honestly:
+
+- Repeat each configuration enough times **within the job** to produce a real confidence
+  interval rather than a single number.
+- **Fan out across many CI nodes**, each running a complete comparable set. Every node yields
+  one independent full-suite sample. Many nodes give a distribution of ratios, and the
+  microarchitecture heterogeneity that would poison a cross-run comparison becomes a sampled
+  variable instead of a confound.
+- Report ratios across the whole suite, with p-values. A ratio is what the project cares
+  about anyway: `RESEARCH.md` already forbids mixing absolute numbers with anyone else's.
+
+This is strictly better than the deterministic-instruction-counting workaround an earlier
+draft of this section proposed. Instruction counts under `cachegrind` are noise-immune but
+answer a different question, and for a vectorization project they are actively misleading:
+packed AVX-512 wins by doing the same work in fewer instructions **and** by better cache
+behaviour, and an instruction count shows only the first.
+
+### The trap: repetition alone does not fix measurement bias
+
+Reference: Emery Berger, *Performance Matters* (Strange Loop 2019),
+https://youtu.be/r-TLSBdHe1A. Also Mytkowicz et al., *Producing Wrong Data Without Doing
+Anything Obviously Wrong!* (ASPLOS 2009), which is the underlying result.
+
+Running one binary a thousand times gives a thousand samples of **one memory layout**, not a
+thousand independent draws. Layout is not neutral: stack frame placement, heap object
+placement and code placement all affect cache and branch-predictor behaviour, and the
+observed effect can exceed the size of the optimization being measured. Mytkowicz et al.
+showed that changing an environment variable, or renaming a function, can move measured
+performance by more than the compiler change under test. Standard statistics applied to
+those samples produce a tight, confident, wrong interval.
+
+Berger's answer is **Stabilizer**: randomize layout repeatedly during execution, so the
+measurement is drawn from the distribution *over* layouts. That makes the samples genuinely
+independent, which is the precondition for the statistics above to mean anything.
+
+Practical consequence for our design: vary layout across the fanned-out nodes rather than
+assuming node diversity supplies it for free. Different runners give different CPUs and
+different neighbours, but potentially very similar link order and environment size.
+
+Berger's other tool, **Coz** (causal profiling), is worth knowing for a different reason. It
+answers "what would happen if I sped up this component" by slowing everything else down, and
+that is the question our stages actually raise. ABCD removed 45% of bounds checks for about
+10% speedup because nothing downstream consumed the freedom; causal profiling is how you
+learn that *before* building the pass rather than after.
+
+I have not watched the talk in this session; the Stabilizer and Coz descriptions above are
+from prior knowledge and should be checked against it before they are relied on in a
+writeup.
+
+### What still needs dedicated hardware
+
+Absolute wall-clock claims, and the thread-count axis. Once hardware is fixed and CCD
+topology is actually visible, **parallelism can be reintroduced** and the serial-only
+decision above revisited. Not before.
