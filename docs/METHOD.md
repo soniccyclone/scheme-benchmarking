@@ -76,3 +76,66 @@ requirements, so preserve headers.
 
 ---
 
+---
+
+## Decisions, ratified 2026-07-30
+
+**R6RS is in scope.** Configuration 2a uses `(rnrs arithmetic flonums)` and
+`(rnrs arithmetic fixnums)`, which Chez ships. It is the only standardized
+instruction-level hatch with a real implementation behind it, so omitting it would measure a
+path nobody can take.
+
+**Serial-only, for now.** Every configuration runs single-threaded, enforced rather than
+intended: any run whose cpu-time over elapsed-time ratio exceeds 1.3 is rejected as
+contaminated. Reasons, in order of weight:
+
+1. The Benchmarks Game comparison is confounded by thread count. Measured: fannkuchredux,
+   mandelbrot and spectralnorm run about 3.9-way parallel in every language, which is
+   internally fair, but binarytrees ranges 1.93 to 3.49, so part of that spread is thread
+   count rather than code generation.
+2. This machine cannot support parallel measurement. No `cpufreq` access under WSL2, and the
+   L3 sibling list reads `0-31` for every CPU, so the real 2-CCD split on this part is
+   invisible and we cannot tell whether our pinned cores share a die.
+3. nbody is serial in every published entry, so it costs nothing for our chosen program.
+
+**Serial-only does not constrain vectorization.** Stage 10 is SIMD, data parallelism inside
+one core. Threading and vectorization get conflated constantly and are orthogonal here.
+
+What it gives up: SBCL's threading story against Chez's, which is a separate project, and
+comparability with the Game's parallel headline numbers, which `RESEARCH.md` already forbids
+mixing into our tables anyway.
+
+## Later: CI-based measurement, and why the obvious approach fails
+
+After the initial findings land, this should move to continuous measurement rather than
+ad-hoc local runs. GitHub Actions is the obvious host and the free runners are a poor fit for
+wall-clock benchmarking, for reasons worth writing down before anyone tries:
+
+- **Shared tenancy.** Free runners are VMs on shared hardware with noisy neighbours. No
+  governor control, no pinning, no isolation.
+- **Heterogeneous silicon.** GitHub has rotated CPU generations over time, so two runs a week
+  apart may not be the same microarchitecture. Cross-run wall-clock comparison is
+  meaningless without pinning the hardware, which the free tier does not offer.
+- **No PMU, probably.** The same problem this machine has: hardware counters are usually
+  unavailable in a VM, so `perf stat` gives software events only.
+- **Reported variance** for wall-clock microbenchmarks on shared CI commonly lands in the
+  10-30% band, which is larger than most of the deltas this project is hunting.
+
+The way out is to change the metric rather than the host. Two approaches, and they answer
+different questions:
+
+1. **Deterministic counting, for regression detection.** Run under `cachegrind` or
+   `callgrind` and compare *instruction counts*, which are immune to scheduling noise and
+   reproduce exactly across runners and CPU models. This is what `iai` and CodSpeed-style
+   services do. It catches "did this commit make the compiler emit more work", which is the
+   question CI should be asking. It does **not** measure time, and it misrepresents anything
+   whose cost is cache or branch behaviour rather than instruction count, which for a
+   vectorization project is a real caveat.
+2. **Within-run relative comparison only.** A and B measured in the same job on the same
+   runner is viable; A today against B last Tuesday is not. Structure every CI benchmark as a
+   ratio against a baseline built in the same job.
+
+Wall-clock claims need dedicated hardware. That means a self-hosted runner on a machine we
+control, which is also where **parallelism should be reintroduced**: once the hardware is
+fixed and the topology is visible, the thread-count axis becomes measurable and the
+serial-only restriction above can be revisited. Not before.
