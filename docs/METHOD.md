@@ -140,9 +140,19 @@ behaviour, and an instruction count shows only the first.
 
 ### The trap: repetition alone does not fix measurement bias
 
-Reference: Emery Berger, *Performance Matters* (Strange Loop 2019),
-https://youtu.be/r-TLSBdHe1A. Also Mytkowicz et al., *Producing Wrong Data Without Doing
-Anything Obviously Wrong!* (ASPLOS 2009), which is the underlying result.
+Source talk: Emery Berger, *Performance Matters*, published 2019-09-15,
+https://youtu.be/r-TLSBdHe1A. Randomizing memory layout is its central thesis, not an aside.
+
+The two papers behind it are now **in this corpus** and should be read rather than
+paraphrased:
+
+- `knowledge/sources/curtsinger-berger-stabilizer-asplos-2013.pdf` — Curtsinger and Berger,
+  *STABILIZER: Statistically Sound Performance Evaluation*, ASPLOS 2013.
+- `knowledge/sources/curtsinger-berger-coz-causal-profiling.pdf` — Curtsinger and Berger,
+  *COZ: Finding Code that Counts with Causal Profiling*, arXiv:1608.03676.
+
+Also Mytkowicz et al., *Producing Wrong Data Without Doing Anything Obviously Wrong!*
+(ASPLOS 2009), which is the underlying result and is **not** yet in the corpus.
 
 Running one binary a thousand times gives a thousand samples of **one memory layout**, not a
 thousand independent draws. Layout is not neutral: stack frame placement, heap object
@@ -165,10 +175,6 @@ answers "what would happen if I sped up this component" by slowing everything el
 that is the question our stages actually raise. ABCD removed 45% of bounds checks for about
 10% speedup because nothing downstream consumed the freedom; causal profiling is how you
 learn that *before* building the pass rather than after.
-
-I have not watched the talk in this session; the Stabilizer and Coz descriptions above are
-from prior knowledge and should be checked against it before they are relied on in a
-writeup.
 
 ### What still needs dedicated hardware
 
