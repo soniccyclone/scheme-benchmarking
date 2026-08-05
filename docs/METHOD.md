@@ -166,15 +166,59 @@ Berger's answer is **Stabilizer**: randomize layout repeatedly during execution,
 measurement is drawn from the distribution *over* layouts. That makes the samples genuinely
 independent, which is the precondition for the statistics above to mean anything.
 
-Practical consequence for our design: vary layout across the fanned-out nodes rather than
-assuming node diversity supplies it for free. Different runners give different CPUs and
-different neighbours, but potentially very similar link order and environment size.
+**An earlier draft of this section said to vary layout across the fanned-out nodes. That is
+the position Stabilizer explicitly argues against**, and its §7 rebuts it directly: link
+order only changes inter-module placement, so one function growing still shifts everything
+after it, and environment size moves the stack base without changing inter-frame distance.
+Per-node one-time randomization buys sampling but neither normality nor variance reduction,
+both of which require re-randomizing *inside* a run. Their Table 1 is the evidence: one-time
+randomization leaves five benchmarks non-normal, re-randomization fixes four.
 
-Berger's other tool, **Coz** (causal profiling), is worth knowing for a different reason. It
-answers "what would happen if I sped up this component" by slowing everything else down, and
-that is the question our stages actually raise. ABCD removed 45% of bounds checks for about
-10% speedup because nothing downstream consumed the freedom; causal profiling is how you
-learn that *before* building the pass rather than after.
+Mechanism specifics worth having, since they set what we would have to reimplement. Heap is
+randomized per object through a size-segregated allocator with a Fisher-Yates shuffling
+layer, touching only cache index bits. Code is randomized per function on a **500ms timer**,
+lazily via a trap at each entry so the move never lands inside non-reentrant code. Stack is
+randomized per call with 0 to 4080 bytes of padding in 16-byte steps. One run then becomes a
+sum over roughly `T/500ms` i.i.d. layout intervals, so the central limit theorem makes total
+time Gaussian at around 30 randomizations *whatever the layout-effect distribution looks
+like*, which is what licenses Student's t and ANOVA. Overhead is 6.7% median and under 40%
+everywhere, so cost was never the obstacle.
+
+**Stabilizer itself is not adoptable as shipped.** It is an LLVM 3.1 `opt` pass driven
+through clang or dragonegg, and stage 13 emits x86-64 objects directly while Chez, SBCL and
+Racket never touch LLVM. It could only be pointed at the C baseline. The mechanism is
+portable though, and **our runtime is better placed than C for the part that matters most**:
+Stabilizer cannot move live heap objects because C forbids it, whereas a precise generational
+copying collector already relocates survivors, so randomized survivor placement behind a
+benchmark flag gives continuous heap re-randomization that C cannot have.
+
+**The inverse risk, which is live right now.** A plain Cheney scan lays survivors out in
+deterministic BFS order, so our collector as specified *reduces* cross-run layout diversity
+rather than supplying it. That bites nbody, with its one long-lived `flvector`, and
+binarytrees, precisely.
+
+**Turn stack randomization off when measuring stage 10.** Stabilizer's pads are 16-byte
+multiples and AVX-512 aligned moves want 64, so leaving it on makes vector-data alignment a
+one-in-four coin flip. The authors attribute `hmmer` losing normality to exactly this, and
+their §2.5 gives the protocol: disable the randomization your optimization targets, keep the
+others on.
+
+**Coz** (causal profiling, SOSP 2015; the arXiv copy we hold is the 2016 postprint) answers
+"what would happen if I sped up this component" by slowing everything else down. It is
+half-relevant to our stages, and the missing half is the one stage 06 depends on.
+
+Virtually speeding a bounds-check line to 100% models removing it from the time budget, so it
+would have shown ABCD's roughly 10% ceiling in advance, and it errs conservative so it will
+not talk you into a pass that cannot pay. But ABCD's shortfall was not that the checks were
+cheap to run: Bodík et al. blamed Jalapeño for lacking the global code motion the removal
+existed to enable. Virtual speedup models "this instruction stream runs faster". It cannot
+model "this instruction disappears, its scheduling barrier goes with it, and the loop now
+vectorizes". **Enablement is not a speed change**, so for the stage 06 to stage 10
+relationship Coz measures the floor and is blind to the ceiling.
+
+Also unresolved: virtual speedup is implemented as pausing the other threads, and the paper
+never treats the single-threaded case. That sits in tension with the serial-only decision
+above and needs working out before Coz is relied on here.
 
 ### What still needs dedicated hardware
 

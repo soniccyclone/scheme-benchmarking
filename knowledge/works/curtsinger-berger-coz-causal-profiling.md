@@ -148,10 +148,19 @@ slowness.
 `METHOD.md` commits us to serial-only measurement, enforced by rejecting any run whose
 cpu-time over elapsed-time ratio exceeds 1.3. In a strictly single-threaded program there is
 no divergence for Coz to find. The causal answer collapses to "fraction of time in the line
-times the line speedup", which is what a flat sampling profiler already prints. Coz would
-still be *correct* on such a program, since the accounting subtracts credited delays from the
-effective duration whether or not any thread actually slept, but it would be an expensive way
-to reproduce `perf record`.
+times the line speedup", which is what a flat sampling profiler already prints.
+
+**The paper never discusses the single-threaded case, so what follows is my inference and not
+its claim.** Reading Section 3.4.3, a lone thread that samples the selected line increments
+its local delay count and therefore never actually sleeps, so no wall-clock delay is inserted
+at all. Whether Coz then reports the correct non-zero answer or a flat zero for every line
+turns on whether the logged "total inserted delay" that forms the effective duration counts
+credited delays or only slept ones, which the PDF does not state. If it counts credited
+delays the accounting is right and Coz degenerates to an expensive `perf record`; if not, a
+serial profile would be uniformly flat. This is checkable in the source and should be checked
+before anyone points Coz at a serial benchmark. The one adjacent data point in the paper is
+Related Work, which notes Mytkowicz et al. used delays to validate profilers on
+single-threaded Java programs, so the general approach is not inherently parallel-only.
 
 On the ABCD question, see `# Notes`.
 
