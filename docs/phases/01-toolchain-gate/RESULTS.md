@@ -178,20 +178,60 @@ do not exist in the implementation. A Scheme compiler emitting x86-64 directly h
 ceiling. This is the clearest instance so far of the project's thesis, and it arrived from
 a `require` rather than from a benchmark.
 
-## perf is not installed, and installing it needs a decision
+## perf works, needs no sudo, and is exactly deterministic
 
-`perf` is absent from the system. `linux-perf` is packaged and installable, but only with
-`sudo`, so this is Nathan's call rather than something to do unilaterally.
+`perf` was absent and `linux-perf` wants root to install. It does not have to be
+installed. Extracted to the scratchpad instead, same technique as the earlier
+`libasound` fix:
 
-The kernel side looks workable if it goes in: `/proc/sys/kernel/perf_event_paranoid` is
-`2`, and `/sys/bus/event_source/devices/` exposes `cpu`, `msr`, `software`, `tracepoint`,
-`breakpoint`, `kprobe` and `uprobe`. A `cpu` PMU node under WSL2 is more than expected.
-Whether it delivers real hardware counters or synthetic ones is still unknown and only a
-`perf stat` run will say.
+```
+apt-get download linux-perf libdw1t64 libdebuginfod1t64 libtraceevent1
+dpkg-deb -x each .deb into a prefix
+LD_LIBRARY_PATH=<prefix>/usr/lib/x86_64-linux-gnu <prefix>/usr/bin/perf
+```
 
-Not blocking. `METHOD.md` already treats counters as a diagnostic rather than a primary
-measurement, and reading emitted code is the ground truth for the questions this project
-asks.
+`perf version 7.0.12`, running unprivileged at `perf_event_paranoid` 2.
+
+**The counters are real hardware counters, not synthetic.** A `gcc -O1
+-fno-tree-vectorize` accumulation loop, three problem sizes:
+
+| N | instructions | delta |
+|---|---|---|
+| 10,000,000 | 70,123,493 | |
+| 20,000,000 | 140,123,501 | 70,000,008 |
+| 40,000,000 | 280,123,513 | 140,000,012 |
+
+Exactly 7.0000 instructions per iteration with ~123,485 constant startup, linear across
+a 4x range. A synthetic or sampled counter cannot produce that.
+
+**This changes the instrument, not just the diagnostics.** This machine has no `cpufreq`
+access, so wall-clock ratios drift and only closely-spaced comparisons are trustworthy.
+Retired instruction counts do not drift. A bounds check that gets elided is a
+compare-and-branch that stops being retired, so **instruction count measures check
+elision directly and noise-free** — which is the single number phase 3 exists to
+produce. Bootstrap CIs still govern every time-based delta; counts do not need them.
+
+## Docker would not help, and the reason is architectural
+
+Considered running the benchmarks in Docker Desktop to escape WSL2 overhead. It does not
+escape anything: WSL2 runs **one** utility VM shared by all distros, and Docker Desktop's
+engine is a distro inside it.
+
+```
+this shell:  boot_id 53fc36a4-47e6-49ab-80e2-9f33bd761e37  MemTotal 12242652 kB
+container:   boot_id 53fc36a4-47e6-49ab-80e2-9f33bd761e37  MemTotal 12242652 kB
+```
+
+Same kernel instance, same memory pool, uptimes three seconds apart. `docker info`
+reporting 12,536,475,648 bytes is this VM's `memory=12GB` from `.wslconfig`, not an
+allocation Docker manages. Its cgroup limits are ceilings *below* the shared pool and
+can only constrain. `cpufreq` is absent inside containers too, and the L3 sibling list
+still reads `0-31`, so neither real WSL2 cost is addressed.
+
+**One actionable finding from looking:** `.wslconfig` sets
+`autoMemoryReclaim=gradual`, which periodically walks and returns memory to Windows.
+That is a background stall source and it belongs to the noise floor phase 2 measures.
+Turn it off before calibrating, or the floor absorbs it.
 
 ## Still outstanding
 
