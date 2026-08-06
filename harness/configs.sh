@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/nbody"
 
-CONFIGS="c-scalar c-native chez-2a racket-2a chez-4 racket-4 sbcl-5"
+CONFIGS="c-scalar c-native chez-2a racket-2a chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9"
 
 mkdir -p "$BUILD"
 
@@ -97,6 +97,23 @@ cfg_run_racket_4() {
     echo "env PLT_COMPILED_FILE_CHECK=exists racket $BUILD/racket-4.rkt $1"
 }
 
+# --- the check-isolation control ------------------------------------------
+# config4-chez.ss compiled at optimize-level 2 instead of 3. Same source, same
+# flvector storage, same operators: the ONLY difference is whether Chez emits
+# checks. So (chez-4-safe - chez-4) is the cost of checking with storage held
+# constant, which is the one thing the 2a-to-4 delta cannot separate.
+
+cfg_src_chez_4_safe() { echo "config4-chez.ss"; }
+cfg_compile_chez_4_safe() {
+    cp "$BENCH/config4-chez.ss" "$BUILD/chez-4-safe.ss"
+    scheme -q >/dev/null <<EOF
+(optimize-level 2)
+(compile-file "$BUILD/chez-4-safe.ss")
+EOF
+    test -f "$BUILD/chez-4-safe.so"
+}
+cfg_run_chez_4_safe() { echo "scheme -q --optimize-level 2 --script $BUILD/chez-4-safe.so $1"; }
+
 # --- configuration 5: tuned conformant Common Lisp -------------------------
 # save-lisp-and-die rather than a fasl: a core has no load step at all, which
 # keeps startup out of the dev-N numbers where it would otherwise dominate.
@@ -111,7 +128,33 @@ cfg_compile_sbcl_5() {
          >/dev/null 2>&1
     test -f "$BUILD/sbcl-5.core"
 }
-cfg_run_sbcl_5() { echo "sbcl --core $BUILD/sbcl-5.core --noinform --end-runtime-options $1"; }
+cfg_run_sbcl_5() { echo "env NBODY_N=$1 sbcl --core $BUILD/sbcl-5.core --noinform --end-runtime-options"; }
+
+# --- configuration 9: the same CL source under ECL and CLISP ---------------
+# Separates "Common Lisp is fast" from "SBCL is fast". CLISP largely ignores
+# declarations, so it should be slow, and that result is the demonstration that
+# the standard obliges implementors to ACCEPT the notation without obliging
+# them to act on it.
+
+cfg_src_ecl_9() { echo "config5.lisp"; }
+cfg_compile_ecl_9() {
+    cp "$BENCH/config5.lisp" "$BUILD/ecl-9.lisp"
+    ecl -norc --eval "(progn (compile-file \"$BUILD/ecl-9.lisp\" :output-file \"$BUILD/ecl-9.fas\") (quit))" >/dev/null 2>&1
+    test -f "$BUILD/ecl-9.fas"
+}
+cfg_run_ecl_9() {
+    echo "env NBODY_N=$1 ecl -norc -q --load $BUILD/ecl-9.fas --eval (main) --eval (quit)"
+}
+
+cfg_src_clisp_9() { echo "config5.lisp"; }
+cfg_compile_clisp_9() {
+    cp "$BENCH/config5.lisp" "$BUILD/clisp-9.lisp"
+    clisp -q -norc -x "(progn (compile-file \"$BUILD/clisp-9.lisp\") (quit))" >/dev/null 2>&1
+    test -f "$BUILD/clisp-9.fas"
+}
+cfg_run_clisp_9() {
+    echo "env NBODY_N=$1 clisp -q -norc -i $BUILD/clisp-9.fas -x (main)"
+}
 
 # --- dispatch --------------------------------------------------------------
 # Config names carry hyphens for readability; shell function names cannot.

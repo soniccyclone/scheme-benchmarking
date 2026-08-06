@@ -18,6 +18,8 @@
 ;;;;
 ;;;; Written from SPEC.md. Expression order matches ref.c exactly.
 
+#+sbcl (require :sb-posix)
+
 (declaim (optimize (speed 3) (safety 0) (debug 0) (compilation-speed 0)))
 
 (defconstant +pi+ 3.141592653589793d0)
@@ -122,11 +124,16 @@
         (setf e (- e (pair-potential i j)))))))
 
 (defun main ()
-  (let* ((args #+sbcl (cdr sb-ext:*posix-argv*)
-               #+ecl  (cdr (si:command-args))
-               #+clisp (coerce (ext:argv) 'list)
-               #-(or sbcl ecl clisp) nil)
-         (n (or (and args (parse-integer (car (last args)) :junk-allowed t)) 1000)))
+  ;; N comes from the NBODY_N environment variable. SBCL, ECL and CLISP each
+  ;; expose command-line arguments differently, and CLISP's -x rejects a
+  ;; trailing argument outright, so an environment variable is the one channel
+  ;; all three share. Configuration 9 runs this file unchanged under all three,
+  ;; which is the whole point of it.
+  (let* ((raw #+sbcl  (sb-posix:getenv "NBODY_N")
+              #+ecl   (ext:getenv "NBODY_N")
+              #+clisp (ext:getenv "NBODY_N")
+              #-(or sbcl ecl clisp) nil)
+         (n (or (and raw (parse-integer raw :junk-allowed t)) 1000)))
     (declare (type fixnum n))
     (init!)
     (offset-momentum!)
