@@ -28,6 +28,13 @@ BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/riscv"
 QEMU="${QEMU_RISCV:-$HOME/.local/bin/qemu-riscv64}"
 CC=riscv64-linux-gnu-gcc
+# PIN the march. Never inherit the toolchain default: on this box it is RVA23
+# class (rv64imafdcbv_..._zba_zbb_zbs_...) with RVV 1.0 and Zba ON, which is far
+# richer than a typical devboard. A JH7110/U74 is rv64gc with no V at all, so
+# inheriting the default emits code the eventual hardware cannot run.
+MARCH=${MARCH:-rv64gc}
+MABI=${MABI:-lp64d}
+CFLAGS_RV="-march=$MARCH -mabi=$MABI"
 N=${1:-1000}
 
 mkdir -p "$BUILD"
@@ -38,14 +45,14 @@ need "$CC"; need riscv64-linux-gnu-objdump
 [ -x "$QEMU" ] || { echo "MISSING: $QEMU"; fail=1; }
 [ "$fail" -eq 0 ] || { echo; echo "FAIL: toolchain incomplete"; exit 1; }
 
-echo "RISC-V smoke gate, N=$N"
+echo "RISC-V smoke gate, N=$N, -march=$MARCH -mabi=$MABI"
 echo
 
 # --- 1. the reference compiles and runs, and agrees with x86-64 bit for bit ---
 # Float semantics are the thing most likely to differ silently across ISAs, and
 # SPEC.md's expression-order discipline is what makes them not differ. This
 # checks that claim rather than assuming it.
-$CC -O2 -static -o "$BUILD/ref" "$BENCH/ref.c" -lm 2>/dev/null || { echo "FAIL: cross-compile"; exit 1; }
+$CC $CFLAGS_RV -O2 -static -o "$BUILD/ref" "$BENCH/ref.c" -lm 2>/dev/null || { echo "FAIL: cross-compile"; exit 1; }
 rv=$("$QEMU" "$BUILD/ref" "$N")
 gcc -O2 -fno-tree-vectorize -o "$BUILD/ref-host" "$BENCH/ref.c" -lm 2>/dev/null
 host=$("$BUILD/ref-host" "$N")
@@ -107,7 +114,7 @@ fi
 # vectorization both off. See docs/phases/07-compiler/EXECUTION.md and the
 # open decision on whether SonicScheme permits contraction.
 sed 's/%\.9f/%.17g/' "$BENCH/ref.c" > "$BUILD/ref17.c"
-$CC -O2 -static -ffp-contract=off -fno-tree-vectorize -o "$BUILD/r17" "$BUILD/ref17.c" -lm 2>/dev/null
+$CC $CFLAGS_RV -O2 -static -ffp-contract=off -fno-tree-vectorize -o "$BUILD/r17" "$BUILD/ref17.c" -lm 2>/dev/null
 gcc  -O2         -ffp-contract=off -fno-tree-vectorize -o "$BUILD/h17" "$BUILD/ref17.c" -lm 2>/dev/null
 if [ "$("$QEMU" "$BUILD/r17" "$N")" = "$("$BUILD/h17" "$N")" ]; then
     printf '  ok    bit-exact at 17 significant digits (contract=off, novec)\n'
