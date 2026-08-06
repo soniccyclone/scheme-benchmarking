@@ -99,80 +99,104 @@ Seven epics. The edges between them are the real content of this section; the wo
 inside each are listed at the grain a bead should take, without being enumerated as a task
 breakdown.
 
-### E1. Substrate and IR contracts — *blocks everything*
+### E1. Substrate and machine model contracts — *blocks everything*
 
-The critical bead. Nanopass or hand-rolled (see §7), `boot.ss`, the identity-pass smoke
-test `CUJ.md` calls for, and then the frozen language definitions for every inter-stage IR.
+The critical epic, and materially larger than a first pass suggests. `PREEMPTION.md` (D21)
+puts four cross-target decisions here that cannot be deferred, because all four constrain
+the register allocator and one of them constrains every backend instruction.
 
-Ships the fixture vocabulary too: constructors and a printer for each IR, so every
-downstream bead can write test inputs without importing an upstream pass.
+- Substrate: nanopass or hand-rolled, `boot.ss`, the identity-pass smoke test.
+- The core language, formalized from `sonic/src/sonic/analyze.ss`, plus every inter-stage
+  IR contract.
+- **The register partition.** Value, raw and dedicated classes, defined for **both** targets.
+  Dedicated registers for nil, current CPU and current thread, as arm64 does; RISC-V has no
+  segment registers to abuse and that is the better answer anyway.
+- **The GC metadata vocabulary, per target from the start.** Not a shared enum with
+  per-target semantics. Mezzano's `extra-registers` means "rax holds a tagged value" on
+  x86-64 and "x9 holds an interior pointer into x1" on arm64, and a third architecture must
+  widen the field or accept another reinterpretation.
+- **The PC-total metadata encoding.** Varint step function, function-wide frame bitvector,
+  dedupe rule.
+- **The redefinition cell.** A pointer store into a data slot, never a patched branch,
+  because `FENCE.I` is optional (Zifencei) and local-hart only, so cross-hart instruction
+  visibility needs a data fence plus an IPI to every remote hart. The seal bit lives in that
+  same cell, and sealed means the compiler may inline through it.
+- The fixture vocabulary: constructors and printers per IR, so downstream beads write test
+  inputs without importing an upstream pass.
 
-**Blocks: E2, E3, E4, E5.** Nothing starts before this closes. It should be sized
-deliberately small and reviewed hard, because a revision here invalidates work everywhere.
+**Define the machine model against both ISAs here even though only one gets implemented
+first.** That is what makes RISC-V first-class rather than a port: the abstraction is
+designed against two instruction sets, so the second target is mechanical rather than a
+retrofit. Designing against one and generalizing later is how you get an x86-shaped
+abstraction with a RISC-V adapter bolted on.
+
+**Blocks: E2, E3, E4, E5, E7.** Size it small per item, review it hard, and expect it to be
+the slowest epic per line of code produced.
 
 ### E2. Back end — *the serial spine, and it comes first*
 
-Instruction selection, register allocation, x86-64 and AVX-512 encoding, object emission,
-stack maps for precise GC roots.
+Split by D22 into machine-independent work and per-target work.
 
-`CUJ.md`'s decomposition note is emphatic and correct about ordering: **the back end comes
-before any analysis**, because a compiler that emits correct scalar code is the platform
-every later measurement is taken against. Without it, no analysis bead can be validated
-end-to-end and milestone 1 is unreachable.
+**E2-core**: the lowered machine-independent IR, the instruction selection framework, the
+register allocator enforcing E1's partition, metadata emission threaded through codegen,
+object emission. This is where the coupling lives and it does not parallelize; treat it as a
+short chain, not a swarm.
 
-This epic is where parallel width is genuinely poor. Selection, allocation and encoding are
-coupled through the machine model, and splitting them across agents mostly creates merge
-conflict. Treat it as a short chain, not a swarm, and expect it to dominate the critical
-path.
+**E2-x86 / E2-rv64**: selection and encoding per target. These *do* parallelize against each
+other once E2-core exists, and each is scoped to the instruction subset the benchmarks need
+rather than the full ISA. nbody wants seven float opcodes plus integer address arithmetic.
 
-**Blocked by: E1. Blocks: E6 (milestone 1), E5.**
+`CUJ.md`'s ordering note holds and is the reason this epic precedes all analysis: a compiler
+that emits correct scalar code is the platform every later measurement is taken against.
+
+**Blocked by: E1. Blocks: E5, E6.**
 
 ### E3. Front end — *parallel with the back end*
 
-Reader, `syntax-rules` expander, surface-to-core parse, declaration forms into the
-environment.
+Reader, `syntax-rules` expander, surface-to-core parse, declaration forms, A-normalization.
 
 Deliberately not first. A reader is a solved problem with no research risk, and starting
-here is the classic way to spend three weeks before learning anything. It is on the
-milestone-1 path but it is not on the *risk* path, so it runs alongside E2.
+here spends weeks before learning anything. On the milestone-1 path, not on the risk path.
 
 **Blocked by: E1. Blocks: E6.**
 
 ### E4. Analysis — *the widest epic, and partly done*
 
-Intervals (done), Pentagon, e-SSA construction, ABCD, check elision, loop recognition and
-induction variables, representation/storage-class assignment, alias analysis, inlining,
-escape analysis.
+Intervals (**done**), the fixpoint analyzer (**done, prototype**), e-SSA, ABCD, check
+elision, Pentagon, loop recognition with induction variables and trip counts,
+representation and storage-class assignment, alias analysis, inlining, escape analysis.
 
-Every one of these is testable on fixtures alone, so this is where swarm width lives. The
-internal edges are real but shallow: e-SSA before ABCD, ABCD before elision, loops before
-stage 10's unroll factor, alias before vectorization.
+Every one is testable on fixtures alone, so this is where swarm width lives. Internal edges
+are real but shallow: e-SSA before ABCD, ABCD before elision, loops before stage 10's unroll
+factor, alias before vectorization.
 
-Note the free lunch already recorded in `CUJ.md`: if ABCD is built, its amplifying-cycle
-detection supplies induction-variable discrimination as a side effect, so the loop bead
-shrinks. It does not vanish, because ABCD does not supply a trip count.
+Free lunch already recorded in `CUJ.md`: ABCD's amplifying-cycle detection supplies
+induction-variable discrimination as a side effect, so the loop bead shrinks. It does not
+vanish, because ABCD does not supply a trip count.
 
 **Blocked by: E1. Blocks: E5.**
 
 ### E5. Vectorization — *the headline, and last*
 
-Scalar f64 loop to packed AVX-512. The capability no Lisp-family compiler has: Chez emits
-only scalar `sd` forms, and SBCL can encode AVX-512 but has no auto-vectorization pass at
-all.
+Scalar f64 loop to packed. The capability no Lisp-family compiler has: Chez emits only
+scalar `sd` forms, SBCL can encode AVX-512 but has no auto-vectorization pass at all, and
+`sb-simd` stops at AVX2.
 
-Depends on correctness of representation, loops, alias analysis and check elision
-simultaneously. Genuinely last, and the plan should not pretend otherwise.
+**The two targets are not the same problem.** AVX-512 is fixed-width; RISC-V Vector is
+length-agnostic, with the vector length a runtime value the loop reads and adapts to. That
+is a different legality argument and a different emission strategy, and it should be
+scoped as two beads sharing one legality analysis rather than one bead with a flag.
 
-**Blocked by: E2, E4. Blocks: E6 (milestones 4, 5).**
+**Blocked by: E2, E4. Blocks: E6 milestones 4 and 5.**
 
 ### E6. Verification and milestones
 
 The correctness oracle wired to the compiler, differential testing (optimized against
-all-optimization-disabled, any divergence is an unsound analysis), disassembly assertions,
-and the six milestone gates.
+all-optimization-disabled; any divergence is an unsound analysis), disassembly assertions,
+the six milestone gates.
 
-Not a phase at the end. Each milestone bead is closed by the epic that reaches it, and the
-differential harness must exist before milestone 1, not after.
+Not a phase at the end. Each milestone bead closes by the epic that reaches it, and the
+differential harness must exist **before** milestone 1.
 
 **Blocked by: E2, E3 for milestone 1.**
 
@@ -181,16 +205,35 @@ differential harness must exist before milestone 1, not after.
 Precise generational copying collector, calling convention, foreign boundary, numeric tower
 for fixnum and flonum, primitives.
 
-`CUJ.md` gets this right: a bump allocator that never collects is enough through milestone
-5, because nbody allocates almost nothing. So the GC bead is real but its *urgency* is low,
-and it can absorb slack for anyone blocked elsewhere.
+Four mechanisms to copy outright rather than invent, all from the OS bundle:
 
-Depends on E1 only for the stack-map contract with E2.
+- **Alias the allocation check with the remembered-set overflow check.** Allocation pointer
+  grows up from the nursery base, remembered-set pointer grows down from its top. Running
+  out of either is the same event on the same path, so the store buffer's dedicated limit
+  register and bound check are both free.
+- **No generation check in the emitted barrier.** Store, test one tag bit, push the slot
+  address if not a fixnum. The mutator never reads the segment table; all filtering is
+  deferred and batched. About ten instructions per pointer store. Note the barrier is the
+  price of choosing *generations*, not of mutation: Loko, Gambit and Guile all have full
+  mutation and no barrier because none is generational.
+- **Constant per-byte assist, not a feedback pacer.** A control loop has transients and an
+  unbounded assist charge can land inside a lock or an interrupt handler.
+- **Reserve the collection worst case before you need it.** The only systems in the bundle
+  that survive heap exhaustion do this; Linux, Chez and Mirage all die instead.
+
+Plus **restart regions** for the allocator's claim-then-fill window, per D21, which cost
+nothing on the fast path and nothing when no collection happens.
+
+`CUJ.md` is right that a bump allocator that never collects suffices through milestone 5,
+because nbody allocates almost nothing. So the GC bead is real but low-urgency and can
+absorb slack.
+
+**Blocked by: E1** for the stack-map and partition contracts.
 
 ## 5. Critical path
 
 ```
-E1 contracts ──► E2 back end ──► E6 milestone 1 ──► E4 elision ──► E5 vectorize ──► E6 m4/m5
+E1 contracts ──► E2-core ──► E2-<target> ──► E6 milestone 1 ──► E4 elision ──► E5 ──► E6 m4/m5
 ```
 
 Everything else has slack. Two implications worth stating before the breakdown:
@@ -224,6 +267,15 @@ inconvenient, and the whole thing stalls at the first attempt to emit an object 
 ## 7. Decisions needed before breakdown
 
 Three, and the first is the only one that blocks.
+
+**Which target is implemented first?** RISC-V is first-class (D22) but the machine that
+holds every measured baseline in phases 3 and 4 is this x86-64 box, and running SonicScheme
+under QEMU would confound the comparison the whole project exists to make.
+**Recommendation: x86-64 implemented first, both machine models designed in E1.** RISC-V
+lands second and its landing is the proof that the abstraction was real. The counter-argument
+is that implementing the second target first is the honest test of the abstraction, and it
+has weight; QEMU works and the RV64 boot prologue is already assembled and booted in
+`compare-operating-systems`.
 
 **Nanopass, or hand-rolled?** `CUJ.md` step 1 says `git submodule add
 nanopass-framework-scheme`. That is a real dependency in a public repo, and the counter-
