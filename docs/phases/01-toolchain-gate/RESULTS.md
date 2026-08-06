@@ -110,12 +110,93 @@ Tangerine in 2019, and remain unimplemented by either leading implementation in 
 That is a more interesting result than any number this project was going to produce, and
 it should lead the write-up.
 
-## Still to determine at runtime
+---
 
-Reading source settled the library question. These need the installed toolchains:
+# Runtime results, 2026-08-06
 
-- Whether SRFI 145 `assume`, where obtainable at all, is honored as an optimization
-  license. Chez does not ship it and Racket does not ship it, so this may be moot.
-- Whether packaged SBCL 2.6.0 includes `contrib/sb-simd` and detects AVX-512.
-- Whether `perf` hardware counters work under this WSL2 kernel.
-- The AOT recipes and the recompilation trap test.
+Run against the installed toolchains. Four of the five outstanding items are now answered.
+
+## SRFI 145 is unobtainable, so configuration 3 needs redefining too
+
+Confirmed at runtime what the source reading predicted:
+
+```
+$ echo '(import (srfi :145))' | scheme -q
+Exception: library (srfi :145) not found
+
+$ racket -e '(require srfi/145)'
+open-input-file: cannot open module file
+  path: /usr/share/racket/pkgs/srfi-lite-lib/srfi/145.rkt
+```
+
+Racket's SRFI 144 is absent by the same path. The R6RS flonum library does work in Chez
+with no `--libdirs` shim needed:
+
+```
+$ echo '(import (rnrs arithmetic flonums)) (display (flsqrt 2.0))' | scheme -q
+1.4142135623730951
+```
+
+**This is the same finding as configuration 2, one level up, and it is worth more than
+the delta configuration 3 was going to measure.** There is no implementation on which a
+*premise* can be portably expressed at all. SRFI 145 is the only standardized notation
+for one and neither leading implementation ships it. So configuration 3 is not writeable
+as specified, and it should be rebuilt around what each implementation actually accepts
+as a premise: a predicate guard that Chez's `cptypes` narrows on, which is exactly
+configuration 2c, and nothing at all on the Racket side, since `racket/unsafe/ops` has no
+premise notion and only an unchecked-operator notion.
+
+The R7RS-large story and the premise story are therefore the same story: standardized,
+then unimplemented.
+
+## sb-simd loads, and tops out two vector widths below the hardware
+
+`(require :sb-simd)` succeeds on packaged SBCL 2.6.0. The packages it defines:
+
+```
+SB-SIMD  SB-SIMD-AVX  SB-SIMD-AVX2  SB-SIMD-FMA  SB-SIMD-INTERNALS
+SB-SIMD-SSE  SB-SIMD-SSE2  SB-SIMD-SSE3  SB-SIMD-SSE4.1  SB-SIMD-SSE4.2
+SB-SIMD-SSSE3  SB-SIMD-X86-64
+```
+
+**There is no `SB-SIMD-AVX512` package.** The contrib stops at AVX2, 256-bit.
+
+The machine is an AMD Ryzen AI MAX+ PRO 395 (Zen 5) and `/proc/cpuinfo` reports
+`avx512f avx512dq avx512cd avx512bw avx512vl avx512_vnni avx512_bf16 avx512vbmi
+avx512_vbmi2 avx512ifma avx512_bitalg avx512_vpopcntdq avx512_vp2intersect`. Full
+512-bit AVX-512 is present and `gcc -O3 -march=native` can reach it.
+
+Two consequences, and the second one matters more than the first.
+
+**It strengthens the case for excluding `sb-simd` from configuration 5**, which was
+already the decision. A comparison that pitted 256-bit hand-written CL intrinsics against
+512-bit gcc autovectorization would be measuring vector width, not language.
+
+**It hands phase 7 stage 10 a target that SBCL structurally cannot reach.** The
+CL-versus-C vectorization gap on this hardware is not a tuning gap; the intrinsics simply
+do not exist in the implementation. A Scheme compiler emitting x86-64 directly has no such
+ceiling. This is the clearest instance so far of the project's thesis, and it arrived from
+a `require` rather than from a benchmark.
+
+## perf is not installed, and installing it needs a decision
+
+`perf` is absent from the system. `linux-perf` is packaged and installable, but only with
+`sudo`, so this is Nathan's call rather than something to do unilaterally.
+
+The kernel side looks workable if it goes in: `/proc/sys/kernel/perf_event_paranoid` is
+`2`, and `/sys/bus/event_source/devices/` exposes `cpu`, `msr`, `software`, `tracepoint`,
+`breakpoint`, `kprobe` and `uprobe`. A `cpu` PMU node under WSL2 is more than expected.
+Whether it delivers real hardware counters or synthetic ones is still unknown and only a
+`perf stat` run will say.
+
+Not blocking. `METHOD.md` already treats counters as a diagnostic rather than a primary
+measurement, and reading emitted code is the ground truth for the questions this project
+asks.
+
+## Still outstanding
+
+- The AOT recipes, one per implementation.
+- The recompilation trap test, which is the acceptance criterion that catches the single
+  most common failure mode for a benchmark of this kind.
+- The Benchmarks Game corpus is not on this machine. Item 8 needs the zip re-fetched
+  before the nbody sources and per-entry compiler flags can be extracted.

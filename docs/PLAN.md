@@ -69,7 +69,7 @@ to sanity-check against.
 | 2a | **R6RS: `(rnrs arithmetic flonums)` + `(rnrs arithmetic fixnums)`** | **the only standardized hatch with a real implementation, available since 2007** |
 | 2b | **Tangerine over a shim we ship: SRFI 144 + SRFI 160** | **what Tangerine would give you if anyone implemented it** |
 | 2c | **predicate-guarded entry at `optimize-level 2`, otherwise portable** | **the arithmetic win Chez already gives you for free. See `CHEZ-ANALYSIS.md`** |
-| 3 | assumption as optimization license, however it can be expressed | what a premise buys, if anything |
+| 3 | **premise, in whatever form the implementation actually accepts** | what a premise buys, if anything. **SRFI 145 ships nowhere. See below** |
 | 4 | implementation-specific max: Chez `optimize-level 3`, Racket unsafe ops | the folklore ceiling |
 | 5 | SBCL, `declare` + `(safety 0)`, scalar, no `sb-simd` | tuned conformant CL |
 | 6 | `gcc -O2 -fno-tree-vectorize`, and `-O3 -march=native` | scalar and vectorized C reference |
@@ -98,6 +98,20 @@ in 2013, nominally restored by R7RS-large Tangerine in 2019, and remain unimplem
 either leading implementation in 2026. Configuration 2a measures the path that actually
 exists. Configuration 2b measures the path the standard promises, with the shim cost
 reported alongside it.
+
+### Why configuration 3 needs the same treatment
+
+Phase 1's runtime pass found that **SRFI 145 is not obtainable on either implementation**.
+`(import (srfi :145))` fails in Chez and `(require srfi/145)` fails in Racket. So the
+premise configuration is not writeable as specified either, for the same reason
+configuration 2 was not.
+
+This is the R7RS-large finding one level up, and it is worth more than the delta
+configuration 3 was going to produce: **there is no implementation on which a premise can
+be portably expressed at all.** Rebuild configuration 3 around what each implementation
+actually accepts. On Chez that is a predicate guard `cptypes` narrows on, which is already
+configuration 2c. On Racket it is nothing, because `racket/unsafe/ops` has an
+unchecked-operator notion and no premise notion.
 
 Run configurations 1 through 4 on both Chez and Racket, since section 5's data says
 they are within 15% on numeric code and any large divergence here would itself be a
