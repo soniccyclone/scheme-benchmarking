@@ -19,6 +19,7 @@ and leave the plan describing the plan.
 | `CHEZ-ANALYSIS.md` | what Chez's optimizer already does, read from source, and the one capability it lacks |
 | `phases/NN-name/PLAN.md` | per phase: goal, inputs, work items, acceptance criteria, risks |
 | `phases/NN-name/CUJ.md` | per phase: the technical implementation journey. Commands, code shapes, schemas, decision branches |
+| `phases/07-compiler/EXECUTION.md` | SonicScheme's dependency graph: epics, blocking edges, critical path, what parallelizes |
 | `knowledge/` | the OKF bundle produced by phase 0. Traversable in later planning sessions |
 
 `PLAN.md` in a phase directory says what and why. `CUJ.md` says how, concretely enough
