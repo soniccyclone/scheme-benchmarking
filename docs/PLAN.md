@@ -185,19 +185,35 @@ can reach monomorphic operator selection but not check elision.
 Each phase has its own directory under `phases/`. Phases run in order except where
 noted.
 
-| phase | directory | goal | gates |
+| phase | directory | goal | status |
 |---|---|---|---|
-| **0** | **`phases/00-compiler-research/`** | **an OKF bundle of compiler and language-design knowledge, built from a verified bibliography** | **7** |
-| 1 | `phases/01-toolchain-gate/` | install, and find out whether Tangerine is implemented anywhere | everything |
-| 2 | `phases/02-calibration/` | real dev-N timings and the machine noise floor | 3, 4 |
-| 3 | `phases/03-core-measurement/` | configurations 1 to 6. The number the project exists for | 5, 6 |
-| 4 | `phases/04-reference-points/` | configurations 7, 8, 9. Ada, the CL controls, Stalin | 6 |
-| 5 | `phases/05-portable-library/` | the compatibility layer. **Optional now, see below** | 6 |
-| 6 | `phases/06-writeup/` | the standards timeline with measured deltas attached | nothing |
-| **7** | **`phases/07-compiler/`** | **an optimizing Scheme that reaches and beats CL-level optimization** | **nothing** |
+| 0 | `phases/00-compiler-research/` | an OKF bundle of compiler and language-design knowledge | **done**: 70 PDFs, 62 works, 51 techniques, zero unresolved links |
+| 1 | `phases/01-toolchain-gate/` | install; find out whether Tangerine is implemented anywhere | **done**: nobody implements it, nor R7RS-small, nor SRFI 145 |
+| 2 | `phases/02-calibration/` | dev-N timings and the machine noise floor | **absorbed** into 3. Instruction counts need no floor, and `bench.sh` carries the wall-clock protocol |
+| 3 | `phases/03-core-measurement/` | configurations 1 to 6 | **done**: see `RESULTS.md` |
+| 4 | `phases/04-reference-points/` | configurations 7, 8, 9 | **done**: D5 ratified, Stalin closed as not measurable |
+| 5 | `phases/05-portable-library/` | the compatibility layer | optional, and now unattractive: config 2b shows the portable spelling can cost 6.35x |
+| 6 | `phases/06-writeup/` | the standards timeline with measured deltas attached | ready to write |
+| **7** | **`phases/07-compiler/`** | **SonicScheme: an optimizing Scheme that reaches and beats CL-level optimization** | **in progress** |
 
-Phase 1 can invalidate the premise of phases 3 and 5. Phase 3 can invalidate the
-proposal. Both are deliberate: the cheap falsification steps come first.
+Phase 1 could have invalidated the premise of phases 3 and 5; phase 3 could have
+invalidated the proposal. Neither did, and the measurements sharpened the target
+considerably. What phases 1, 3 and 4 established, and what phase 7 now has to act on:
+
+1. **Checks are 4.77x; storage is 1.12x.** Holding storage constant and flipping only
+   Chez's check policy is the whole gap. The parts Scheme standardized, in 2007 and again
+   in 2019, are the small term.
+2. **The residual is pure bounds checking.** Predicate guards at `optimize-level 2` recover
+   nothing, because `cptypes` had already narrowed the type unaided. What is left is
+   `i in [0,35)`, which a level-1 category lattice cannot represent.
+3. **Tuned Scheme already beats tuned Common Lisp**, by 3.2x in wall time. Scheme's problem
+   was never speed, only the inability to say so portably.
+4. **Ada reaches 1.13x scalar C while staying fully standard**, and named per-check
+   suppression costs exactly nothing against `Suppress (All_Checks)`.
+
+So SonicScheme's target is not "make Scheme fast". It is: reach Ada's 1.13x while keeping
+the suppression scoped and named, by building the interval domain that makes bounds-check
+elision provable rather than asserted.
 
 **Phase 7 is the point, and it does not wait on the measurement.** It needs only phase 1,
 and can run in parallel with everything else. The reason is that `CHEZ-ANALYSIS.md` already
