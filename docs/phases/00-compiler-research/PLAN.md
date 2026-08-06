@@ -297,19 +297,18 @@ Also: this machine has no `poppler-utils`, so the `Read` tool's PDF path fails o
 Working route is PyMuPDF. Installing `poppler-utils` would save every ingest agent from
 rebuilding a venv.
 
-### Correction: several entries in this bibliography were wrong
+### Bibliography errors found and fixed
 
 The largest was two SSA papers with their labels swapped. `ssa.pdf` from c9x.me is the
 11-page **POPL 1989** conference paper; the UT Austin file, listed as "same, mirror", is the
 40-page **TOPLAS 1991** journal article. They are different documents, not two scans of one:
 different sha256, and the journal version alone carries arrays and aliasing, translation out
-of SSA, the correctness proofs, and the measurements. Worse, an earlier draft of this
-document claimed the c9x.me row's "title confirmed by text extraction" — the extraction had
-in fact returned the POPL title, *An Efficient Method of...*, and it was misread as
-confirming the TOPLAS one. Two agents reached this independently from opposite files.
+of SSA, the correctness proofs, and the measurements. The row also carried a "title
+confirmed by text extraction" note that was false; the extraction had returned the POPL
+title, *An Efficient Method of...*, and it was misread as confirming the TOPLAS one. Two
+agents reached this independently from opposite files.
 
-Beyond the reachability problem below, running the recovery found that some entries here
-were simply incorrect, and all four errors were mine:
+Four further entries were simply wrong:
 
 - `oneshot.pdf` never existed at that path. The one-shot continuations paper was published
   as `call1cc.pdf`. There is also no separate Dybvig & Hieb `call/1cc` paper, so what were
@@ -326,12 +325,10 @@ publication index is not evidence that the file exists or that the citation is r
 `scheme.com/pubs/` supplied the authoritative filename-to-title mapping even though every
 one of its links is dead.
 
-### Correction: status codes are not payload verification
+### Status codes are not payload verification
 
-An earlier revision of this document claimed all 55 links verified reachable. That claim
-was wrong and is retracted.
-
-The check used `curl -sIL` and looked only at the HTTP status. Running the actual fetch
+A `curl -sIL` reachability sweep over the original 55 links reported every one of them
+reachable. Running the actual fetch
 showed that **20 of the 55 URLs do not serve a PDF**, and several return HTTP 200 while
 doing it. All 11 `www.cs.indiana.edu` links returned the identical 67253-byte HTML landing
 page, a soft-404 with a 200 status. arXiv `/abs/` pages, DSpace `/handle/` pages, and the
@@ -374,7 +371,7 @@ core-language design in `../07-compiler/CUJ.md` step 2 comes from.
 |---|---|---|
 | Sussman & Steele, *SCHEME: An Interpreter for Extended Lambda Calculus* (1975) | the origin document | https://dspace.mit.edu/handle/1721.1/5794 |
 | Steele & Sussman, *Lambda: The Ultimate Imperative* (1976) | compiling control constructs to lambda | https://dspace.mit.edu/handle/1721.1/5790 |
-| **Steele**, *LAMBDA: The Ultimate Declarative* (1976) | procedure calls as the universal primitive. **Single-authored**: the title page names only Guy Lewis Steele Jr. Sussman appears in the acknowledgements. An earlier draft credited both, inheriting the author list from AI Memo 353 above, which genuinely is co-authored | https://dspace.mit.edu/handle/1721.1/6091 |
+| **Steele**, *LAMBDA: The Ultimate Declarative* (1976) | procedure calls as the universal primitive. **Single-authored**: the title page names only Guy Lewis Steele Jr. Sussman appears in the acknowledgements. Do not inherit the author list from AI Memo 353 above, which genuinely is co-authored | https://dspace.mit.edu/handle/1721.1/6091 |
 | Steele, *RABBIT: A Compiler for SCHEME* (1978) | the first optimizing Scheme compiler | https://dspace.mit.edu/handle/1721.1/6913 |
 | Dybvig, *Three Implementation Models for Scheme* (1987) | heap, stack and string models. The stack model is why Chez is fast | https://www.cs.indiana.edu/~dyb/pubs/3imp.pdf |
 | Dybvig et al., *The Development of Chez Scheme* (ICFP 2006) | retrospective on the implementation we are measuring against | https://www.cs.indiana.edu/~dyb/pubs/hocs.pdf |

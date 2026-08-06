@@ -95,12 +95,10 @@ for a person to read. And with no declarations in the source, a programmer gets 
 help from tools.
 
 Stalin took the other inference route, whole-program analysis with no annotations.
-An earlier draft of this document dismissed it on the grounds that it had few
-users. That was a bad argument and it is retracted. Adoption count says nothing
-about whether a technique works, and Stalin's technique demonstrably works: it
-reaches C-competitive numeric code and beats a current Chez by 2x to 4x on float
-and array benchmarks. `RESEARCH.md` section 3 covers the machinery and the measured
-profile in detail, and Stalin is now configuration 7 in the experiment.
+Its technique demonstrably works: it reaches C-competitive numeric code and beats a
+current Chez by 2x to 4x on float and array benchmarks. Adoption count says nothing
+about that either way. `RESEARCH.md` section 3 covers the machinery and the measured
+profile in detail, and Stalin is configuration 7 in the experiment.
 
 What Stalin's numbers do show is a different limitation, and it is the one that
 matters here. Its performance is bimodal. Where the flow analysis succeeds it
@@ -376,11 +374,9 @@ hatch, which puts C# in group 1 of `RESEARCH.md` section 2's taxonomy.
 
 ### 4f. How fast is C# really, measured rather than recalled
 
-An earlier draft of this section asserted that .NET runs 1.2x to 2x behind Rust on
-compute-bound work. That number came from recall and not from checking, which was a
-mistake. Here is what three corpora actually say. The short version is that the
-answer depends entirely on what you measure, and the two common impressions are both
-correct about different workloads.
+Three corpora, and they disagree with each other in a way that is itself the finding:
+the answer depends entirely on what you measure, and the two common impressions about
+.NET are each correct about a different workload.
 
 **Benchmarks Game, .NET SDK 9.0.100 against rustc 1.84.1**, both current. Extracted
 from `public/data/data.csv`, fastest entry per language, as a ratio to Rust where

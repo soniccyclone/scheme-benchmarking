@@ -107,10 +107,9 @@ mixing into our tables anyway.
 
 ## Statistical protocol, and it applies from phase 2 onward
 
-An earlier version of this document put statistical rigour only in the CI section below, as
-though it were a future concern. It is not. Phases 2 and 3 said "report with spread" and
-"above the noise floor", and **neither of those is a test**. If we are hand-rolling this, get
-it right from the first measurement.
+Not a CI-era concern. "Report with spread" and "above the noise floor" are not tests, so
+every phase that produces a number produces it under this protocol, starting with phase 2's
+noise floor.
 
 ### We are not licensed to use t-tests
 
@@ -236,8 +235,8 @@ Berger's answer is **Stabilizer**: randomize layout repeatedly during execution,
 measurement is drawn from the distribution *over* layouts. That makes the samples genuinely
 independent, which is the precondition for the statistics above to mean anything.
 
-**An earlier draft of this section said to vary layout across the fanned-out nodes. That is
-the position Stabilizer explicitly argues against**, and its §7 rebuts it directly: link
+**Do not vary layout across the fanned-out nodes.** It is the obvious move and Stabilizer
+§7 rebuts it directly: link
 order only changes inter-module placement, so one function growing still shifts everything
 after it, and environment size moves the stack base without changing inter-frame distance.
 Per-node one-time randomization buys sampling but neither normality nor variance reduction,

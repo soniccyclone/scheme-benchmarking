@@ -7,12 +7,11 @@ optimization and then exceed them.
 
 ## Why this is required rather than optional
 
-An earlier revision of this plan argued against building a compiler on the grounds that
-you should not write one to prove a claim about a standard. That argument was answering
-the wrong question. It holds for the standards question, which a five-line macro and a
-measurement can settle (`../../CHEZ-ANALYSIS.md` section 2). It does not hold for the
-question of whether Scheme can reach and beat CL-level optimization, because that is a
-compiler question and there is no way to answer it without a compiler.
+"Don't write a compiler to prove a claim about a standard" is sound advice about the
+standards question, which a five-line macro and a measurement settle
+(`../../CHEZ-ANALYSIS.md` section 2). It says nothing about the question this project
+is actually asking. Whether Scheme can reach and beat CL-level optimization is a
+compiler question, and there is no way to answer it without a compiler.
 
 Chez cannot host the experiment. Four walls, all architectural, none reachable from
 outside the implementation:
@@ -41,9 +40,9 @@ The tractability objection also does not hold. The nanopass framework exists and
 maintained, and Chez itself is written in nanopass style by the people who invented it.
 This is a known-shape project, not a research gamble.
 
-One hedge on a claim an earlier draft made here. SICP chapter 5 is often cited as evidence
-that writing a Scheme compiler is undergraduate work, and that is true of a *correct*
-compiler but not of an *optimizing native* one. Section 5.5's entire optimizer is a single
+SICP chapter 5 is often cited as evidence that writing a Scheme compiler is undergraduate
+work. That is true of a *correct* compiler and not of an *optimizing native* one, so the
+citation is worth bounding. Section 5.5's entire optimizer is a single
 rule, `preserving`, a local save-and-restore elision with no liveness dataflow. It has no
 intermediate representation, and it targets an abstract machine whose primitives include
 `extend-environment` and `apply-primitive-procedure`. It also offers no answer to the
@@ -68,8 +67,8 @@ register partitioning between Lisp and foreign code, no general tail calls.
 callee.
 
 **Continuations permanently blocked.** C owns the stack, so `call/cc` can never be more
-than escape-only. An earlier draft called that an acceptable compromise. It is not: it
-means the compiler can never grow up.
+than escape-only. That is not an acceptable compromise; it means the compiler can never
+grow up.
 
 **Representation control is the whole point.** SBCL's IR2 assigns values to specific
 storage classes and register files. Through C you describe intent and hope gcc infers it.

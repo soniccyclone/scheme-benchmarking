@@ -229,8 +229,8 @@ The domain is the first. The second is structural and I missed it initially:
 the entire compiler. SBCL has `src/compiler/loop.lisp` with `loop-analyze` and natural-loop
 detection.
 
-This matters for *hoisting* a check out of a loop. It matters less for *proving* one
-inside a loop than an earlier draft of this section claimed. Clousot is the counterexample:
+This matters for *hoisting* a check out of a loop. It matters much less for *proving*
+one inside a loop. Clousot is the counterexample:
 it has no loop recognition pass and no induction-variable analysis, stores invariants only
 at loop headers, and still validates 88.9% of array accesses. A widened-and-narrowed
 fixpoint at the header already gives the index's range across all iterations. ABCD makes the
@@ -254,14 +254,14 @@ and a nanopass backend. Dybvig optimized for compilation speed, and classical lo
 optimization is expensive. Chez compiles very fast and produces good code, and the absent
 loop optimizer is part of how it achieves the first of those.
 
-### The standards connection, corrected
+### The standards connection
 
-An earlier draft of this section said SBCL elides bounds checks "because it has ranges."
-That was incomplete. Intervals alone suffice only when the array length is a compile-time
-constant. For dynamic lengths, the relational constraints from `constraint.lisp` are what
-carry it. Both mechanisms exist in SBCL and cover different cases.
+SBCL elides bounds checks by two mechanisms, not one. Intervals suffice only when the
+array length is a compile-time constant; for dynamic lengths it is the relational
+constraints from `constraint.lisp` that carry it. Both exist and cover different cases,
+so "because it has ranges" is only half the story.
 
-The standards point survives, in a narrower form. ANSI CL standardized integer range types:
+The standards point holds in the narrower form. ANSI CL standardized integer range types:
 `(integer 0 9)`, `(mod 10)` and `(unsigned-byte 8)` are standard specifiers, so every
 conforming implementation must represent ranges, which puts level 2 in reach by obligation.
 Scheme standardized no type language, so its implementations built level 1 lattices,

@@ -241,11 +241,9 @@ declining them. That is the gap this project measures.
 ## 3. How Stalin works, and what its numbers already show
 
 Stalin deserves its own section because it is the strongest counterexample to
-"Scheme is slow," and because an earlier revision of this document dismissed it on
-the grounds that it had few users. That was a bad argument. Adoption is not
-evidence about a technique. Stalin producing C-competitive numeric code is the
-relevant fact, and it makes Stalin the ceiling that any declaration-based approach
-has to be measured against.
+"Scheme is slow." It has almost no users, which is not evidence about the technique.
+Stalin producing C-competitive numeric code is the relevant fact, and it makes Stalin
+the ceiling that any declaration-based approach has to be measured against.
 
 ### The machinery
 
@@ -355,8 +353,7 @@ the fixture.
 
 ## 4. Supporting measurement evidence
 
-Kept from revision 2 because it constrains the design, compressed because it is no
-longer the point.
+Kept because it constrains the design, compressed because it is no longer the point.
 
 **The Debian Benchmarks Game is frozen and is not evidence about tuned
 performance.** Verified from the corpus: SBCL 2.4.8, Racket v8.15, README saying

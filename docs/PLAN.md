@@ -1,15 +1,18 @@
 # Optimization Escape Hatches: Common Lisp vs Scheme
 
-Overview and phase index. Revision 4, 2026-07-29.
+Overview and phase index.
 
-Revision 4 splits the former single plan document into an overview plus per-phase
-documents, so each phase can get a CUJ document and a task breakdown of its own.
+Every document under `docs/` is an **active plan**: it describes what we are doing and
+what is currently true. The reasoning that produced it, including every position we
+later reversed, lives in `LEDGER.md`. Do not add decision history here; add it there
+and leave the plan describing the plan.
 
 ## Document map
 
 | document | contents |
 |---|---|
 | `PLAN.md` (this file) | thesis, the experiment matrix, phase index, open questions |
+| `LEDGER.md` | the decision record: what was ratified, what was reversed, what we got wrong |
 | `RESEARCH.md` | standards survey, cross-language comparison, Stalin analysis, measurement evidence |
 | `PROPOSAL.md` | prior art, the design we would propose, .NET architecture notes, compiler layering |
 | `METHOD.md` | machine, measurement method, dependency table |
@@ -39,11 +42,10 @@ policy, and SBCL matches or beats GCC on array-heavy numeric code.
 
 The mechanism worth being precise about is that standardizing the notation does
 two things at once. It obliges implementors to have an optimization story, and it
-means code that uses that story does not fall off the standard. Revision 2 framed
-"CL standardizes notation, not effect" as a weakness of the CL argument. That was
-backwards. Standardizing the notation is exactly the trick, because the
-alternative is what Scheme actually got: every implementation invents its own
-syntax, and tuned code stops being portable the moment it is tuned.
+means code that uses that story does not fall off the standard. That is exactly
+the trick, because the alternative is what Scheme actually got: every
+implementation invents its own syntax, and tuned code stops being portable the
+moment it is tuned.
 
 So the question is whether Scheme ever did the same thing, and the answer turns
 out to be more interesting than a flat no.
@@ -138,23 +140,13 @@ result is the demonstration that the standard obliges implementors to accept the
 notation without obliging them to act on it. This sharpens section 1's thesis
 instead of undermining it.
 
-**SIMD stays out of scope**, deliberately. The fast Benchmarks Game and PLB Common
-Lisp entries use `sb-simd` (verified: `grep -rl sb-simd` hits nbody 3 through 6 and
-spectral-norm 2 through 7 in the PLB tree, with Bela Pecsek's attribution and
-"Based on 2.zig" headers). That is why configuration 5 excludes it. A portable
-Scheme SIMD library is writeable and is a separate project. Mixing it in here would
-confound the standards question with an intrinsics question.
-
-**SIMD is out of scope**, deliberately. The fast Benchmarks Game and PLB Common
-Lisp entries use `sb-simd` (verified: `grep -rl sb-simd` hits nbody 3 through 6
-and spectral-norm 2 through 7 in the PLB tree, with Bela Pecsek's attribution and
-"Based on 2.zig" headers). That is why configuration 5 excludes it. You are right
-that a portable Scheme SIMD library is writeable, and it is a separate project;
-mixing it in here would confound the standards question with an intrinsics
-question. Noted in section 7 as a follow-on.
-
----
-
+**SIMD stays out of the measurement matrix**, deliberately. The fast Benchmarks Game
+and PLB Common Lisp entries use `sb-simd` (verified: `grep -rl sb-simd` hits nbody 3
+through 6 and spectral-norm 2 through 7 in the PLB tree, with Bela Pecsek's
+attribution and "Based on 2.zig" headers). That is why configuration 5 excludes it:
+mixing it in would confound the standards question with an intrinsics question. This
+is a scoping decision about phases 3 and 4 only. Phase 7 stage 10 *is* vectorization,
+and configuration 6's `-O3 -march=native` arm is there as its eventual target.
 
 ---
 
@@ -177,8 +169,7 @@ can reach monomorphic operator selection but not check elision.
 ## 4. Phase index
 
 Each phase has its own directory under `phases/`. Phases run in order except where
-noted. The numbering is now contiguous; an earlier revision skipped phase 4 by
-accident.
+noted.
 
 | phase | directory | goal | gates |
 |---|---|---|---|
@@ -197,9 +188,9 @@ proposal. Both are deliberate: the cheap falsification steps come first.
 **Phase 7 is the point, and it does not wait on the measurement.** It needs only phase 1,
 and can run in parallel with everything else. The reason is that `CHEZ-ANALYSIS.md` already
 established, by reading source against the compiler literature, what Chez structurally
-cannot do: its lattice is level 1 in the abstract-domain hierarchy, it has no loop analysis
-at all, its `optimize-level` is global rather than lexical, and it offers no way to feed the
-lattice beyond predicates. Those are architectural, not configurable, so no amount of
+cannot do: its lattice is level 1 in the abstract-domain hierarchy, it has no classical loop
+optimizer, its `optimize-level` is global rather than lexical, and it offers no way to feed
+the lattice beyond predicates. Those are architectural, not configurable, so no amount of
 measurement on Chez tells us anything about the design's ceiling. Answering "can Scheme
 reach and beat CL" requires a compiler.
 
@@ -216,27 +207,24 @@ phase 7 has to beat: configuration 5 is milestone 4's target, configuration 6 is
 
 ## 5. Open questions
 
+Only questions still genuinely open. Settled ones and their reasoning are in `LEDGER.md`.
+
 **Is the deliverable the writeup or the library?** Phases 3 and 4 answer the
 question and produce the timeline-plus-numbers artifact. Phase 5 produces a thing
-people could use. I lean writeup first, because the measurement tells us whether
-the library's ceiling is worth the effort, and because if Tangerine turns out to be
-unimplemented then phase 5's shape changes completely.
+people could use. I lean writeup first, because the measurement tells us whether the
+library's ceiling is worth building toward. Affects phase 5 and 6 emphasis, nothing
+upstream, so it does not need answering yet.
 
-**How much does the expansion-time propagator matter to you?** It is the novel part of
-the library track. Note that `CHEZ-ANALYSIS.md` since found that Chez already narrows types
-from predicate tests, so a propagator over Chez has less to do than originally thought. In
-our own compiler it is stage 5 onward and is the main event.
+**How much does the expansion-time propagator matter?** It is the novel part of the
+library track. `CHEZ-ANALYSIS.md` found that Chez already narrows types from predicate
+tests, so a propagator over Chez has less to do than originally thought. In our own
+compiler it is stage 5 onward and is the main event.
 
-**Should R6RS implementations be in scope?** R6RS standardized the fx/fl operators
-in 2007 and R7RS-small dropped them, so R6RS Schemes (Larceny, Ypsilon, Mosh,
-Sagittarius, IronScheme, and Chez in R6RS mode) had a portable tuned numeric path
-for twelve years that R7RS users did not. Including one would let us measure
-whether that path was actually faster in practice, which speaks directly to
-whether standardizing instructions without a policy switch accomplishes anything.
-I think this is worth one implementation, and Chez can do it without adding a
-dependency.
+**Does Chez's `cptypes` already do our job at `optimize-level 2`?** Configuration 2c
+is the experiment. `fold-primref/try-unsafe` (`cptypes.ss:1963`) promotes 270 safe
+primitives to unsafe automatically once argument types check out. If a predicate guard
+at level 2 emits the same code as level 3, the standards gap is narrower than section
+1 implies and `PROPOSAL.md` changes.
 
-**Do you want the SIMD question kept out?** I scoped it out to keep the standards
-question clean, but you raised it and you may want it in. My view is it is a strong
-follow-on precisely because it is orthogonal: a portable Scheme SIMD library over
-SRFI 160 storage would be a real contribution, and it is a different paper.
+**A portable Scheme SIMD library over SRFI 160 storage** is a real contribution and a
+different paper. Follow-on, tracked here so it is not lost.
