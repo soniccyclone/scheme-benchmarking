@@ -25,16 +25,38 @@ source "$(dirname "${BASH_SOURCE[0]}")/configs.sh"
 N=1000
 TOLERANCE=1.25   # ratio above which we call it a recompile
 
-ms() {  # median of 3, in milliseconds, to blunt scheduler noise
-    local cmd="$1" t best=() i s
-    for i in 1 2 3; do
-        s=$( { /usr/bin/time -f '%e' bash -c "$cmd >/dev/null 2>&1"; } 2>&1 )
-        best+=("$s")
-    done
-    printf '%s\n' "${best[@]}" | sort -n | sed -n 2p | awk '{printf "%.0f", $1*1000}'
+# Nanosecond timing, not /usr/bin/time. Its %e is 10ms-granular and these runs
+# are 40-70ms, so quantization alone produced a spurious 1.5x on the first
+# version of this script.
+#
+# hyperfine cannot do this job either, and the reason is worth recording: the
+# FIRST run after a touch is the one that recompiles and rewrites the cache, so
+# any warmup or repeat run masks exactly what we are testing. Each post-touch
+# sample must be a genuinely cold single run.
+one_run_ns() {
+    local t0 t1
+    t0=$(date +%s%N)
+    eval "$1" >/dev/null 2>&1
+    t1=$(date +%s%N)
+    echo $(( (t1 - t0) / 1000000 ))
 }
 
-ratio() { awk -v a="$1" -v b="$2" 'BEGIN{ if (a<1) a=1; printf "%.2f", b/a }'; }
+steady() {  # median of 3, no touching
+    local cmd="$1" v=()
+    for _ in 1 2 3; do v+=("$(one_run_ns "$cmd")"); done
+    printf '%s\n' "${v[@]}" | sort -n | sed -n 2p
+}
+
+post_touch() {  # median of 3, each sample preceded by its own touch
+    local cmd="$1" v=() f
+    for _ in 1 2 3; do
+        for f in "${TOUCH[@]}"; do [ -e "$f" ] && touch "$f"; done
+        v+=("$(one_run_ns "$cmd")")
+    done
+    printf '%s\n' "${v[@]}" | sort -n | sed -n 2p
+}
+
+ratio() { awk -v a="$1" -v b="$2" 'BEGIN{ if (a<5) a=5; printf "%.2f", b/a }'; }
 
 fail=0
 printf '%-12s %7s %7s %7s   %s\n' config A B C verdict
@@ -43,15 +65,17 @@ printf '%-12s %7s %7s %7s   %s\n' ------ ---- ---- ---- -------
 for c in ${*:-$CONFIGS}; do
     cfg_compile "$c" >/dev/null 2>&1 || { printf '%-12s compile FAILED\n' "$c"; fail=1; continue; }
     cmd="$(cfg_run "$c" "$N")"
-    src="$BENCH/$(cfg_src "$c")"
 
-    a=$(ms "$cmd")
-    b=$(ms "$cmd")
-    touch "$src"
-    # The copy in build/ is what the run step actually reads, so touch both;
-    # touching only the pristine source would test nothing.
-    for f in "$BUILD"/"$c".sps "$BUILD"/"${c}".c; do [ -f "$f" ] && touch "$f"; done
-    c_t=$(ms "$cmd")
+    # Touch every source the run step could plausibly consult: the pristine
+    # source, and the build-directory copy the artifact was compiled from.
+    TOUCH=("$BENCH/$(cfg_src "$c")")
+    for f in "$BUILD/$c".* ; do
+        case "$f" in *.so|*.zo|*.core|*.dep) ;; *) TOUCH+=("$f") ;; esac
+    done
+
+    a=$(steady "$cmd")
+    b=$(steady "$cmd")
+    c_t=$(post_touch "$cmd")
 
     rb=$(ratio "$a" "$b")
     rc=$(ratio "$b" "$c_t")

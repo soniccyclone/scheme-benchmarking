@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/nbody"
 
-CONFIGS="c-scalar c-native chez-2a racket-2a"
+CONFIGS="c-scalar c-native chez-2a racket-2a chez-4 racket-4 sbcl-5"
 
 mkdir -p "$BUILD"
 
@@ -66,6 +66,52 @@ cfg_compile_racket_2a() {
 cfg_run_racket_2a() {
     echo "env PLT_COMPILED_FILE_CHECK=exists racket -I r6rs $BUILD/racket-2a.sps $1"
 }
+
+# --- configuration 4: implementation-specific maximum ----------------------
+# The folklore ceiling, and note the two implementations do not even offer the
+# same KIND of mechanism. Chez has a global policy (optimize-level 3); Racket
+# has per-call-site unchecked operators (racket/unsafe/ops). Neither is
+# standardized. That is the portability problem stated concretely.
+
+cfg_src_chez_4() { echo "config4-chez.ss"; }
+cfg_compile_chez_4() {
+    cp "$BENCH/config4-chez.ss" "$BUILD/chez-4.ss"
+    # optimize-level is a global compile-time parameter, not a lexical form, so
+    # it is set HERE and cannot be scoped inside the source. Wall 3 of the four
+    # in docs/phases/07-compiler/PLAN.md.
+    scheme -q --optimize-level 3 >/dev/null <<EOF
+(optimize-level 3)
+(compile-file "$BUILD/chez-4.ss")
+EOF
+    test -f "$BUILD/chez-4.so"
+}
+cfg_run_chez_4() { echo "scheme -q --optimize-level 3 --script $BUILD/chez-4.so $1"; }
+
+cfg_src_racket_4() { echo "config4-racket.rkt"; }
+cfg_compile_racket_4() {
+    cp "$BENCH/config4-racket.rkt" "$BUILD/racket-4.rkt"
+    raco make "$BUILD/racket-4.rkt" >/dev/null
+    test -f "$BUILD/compiled/racket-4_rkt.zo"
+}
+cfg_run_racket_4() {
+    echo "env PLT_COMPILED_FILE_CHECK=exists racket $BUILD/racket-4.rkt $1"
+}
+
+# --- configuration 5: tuned conformant Common Lisp -------------------------
+# save-lisp-and-die rather than a fasl: a core has no load step at all, which
+# keeps startup out of the dev-N numbers where it would otherwise dominate.
+
+cfg_src_sbcl_5() { echo "config5.lisp"; }
+cfg_compile_sbcl_5() {
+    cp "$BENCH/config5.lisp" "$BUILD/sbcl-5.lisp"
+    rm -f "$BUILD/sbcl-5.core"
+    sbcl --noinform --non-interactive \
+         --load "$BUILD/sbcl-5.lisp" \
+         --eval "(save-lisp-and-die \"$BUILD/sbcl-5.core\" :toplevel #'main :executable nil)" \
+         >/dev/null 2>&1
+    test -f "$BUILD/sbcl-5.core"
+}
+cfg_run_sbcl_5() { echo "sbcl --core $BUILD/sbcl-5.core --noinform --end-runtime-options $1"; }
 
 # --- dispatch --------------------------------------------------------------
 # Config names carry hyphens for readability; shell function names cannot.
