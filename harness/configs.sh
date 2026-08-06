@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/nbody"
 
-CONFIGS="c-scalar c-native chez-2a racket-2a chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
+CONFIGS="c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
 
 mkdir -p "$BUILD"
 
@@ -35,6 +35,47 @@ cfg_compile_c_native() {
     gcc -O3 -march=native -o "$BUILD/ref-native" "$BENCH/ref.c" -lm
 }
 cfg_run_c_native() { echo "$BUILD/ref-native $1"; }
+
+# --- configuration 1: the floor, R5RS --------------------------------------
+# Specified as portable R7RS-small until phase 1 found (scheme base) resolves
+# on neither implementation. R5RS is the oldest standard that runs on both.
+# N arrives on stdin because R5RS has no command line and no environment.
+
+cfg_src_chez_1() { echo "config1.scm"; }
+cfg_compile_chez_1() {
+    cp "$BENCH/config1.scm" "$BUILD/chez-1.ss"
+    scheme -q >/dev/null <<EOF
+(optimize-level 2)
+(compile-file "$BUILD/chez-1.ss")
+EOF
+    test -f "$BUILD/chez-1.so"
+}
+# A generated wrapper, not an inline pipeline: the run command passes through
+# echo and eval in three different scripts, and embedded quoting does not
+# survive that intact.
+cfg_run_chez_1() {
+    cat > "$BUILD/chez-1.sh" <<'EOS'
+#!/bin/sh
+echo "$2" | scheme -q --script "$1"
+EOS
+    chmod +x "$BUILD/chez-1.sh"
+    echo "$BUILD/chez-1.sh $BUILD/chez-1.so $1"
+}
+
+cfg_src_racket_1() { echo "config1.scm"; }
+cfg_compile_racket_1() {
+    { printf '#lang r5rs\n'; cat "$BENCH/config1.scm"; } > "$BUILD/racket-1.rkt"
+    raco make "$BUILD/racket-1.rkt" >/dev/null 2>&1
+    test -f "$BUILD/compiled/racket-1_rkt.zo"
+}
+cfg_run_racket_1() {
+    cat > "$BUILD/racket-1.sh" <<'EOS'
+#!/bin/sh
+echo "$2" | PLT_COMPILED_FILE_CHECK=exists racket "$1"
+EOS
+    chmod +x "$BUILD/racket-1.sh"
+    echo "$BUILD/racket-1.sh $BUILD/racket-1.rkt $1"
+}
 
 # --- configuration 2a: portable R6RS, on both implementations --------------
 # The same source file runs under both. Chez ships (rnrs arithmetic flonums)

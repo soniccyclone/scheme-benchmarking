@@ -49,6 +49,17 @@ reversal attached, never edited away.
 
 ## Corrections to our own claims
 
+- **"Stalin is 2-4x faster than Chez on float and array benchmarks"**, taken from
+  `r7rs-benchmarks` into `RESEARCH.md` section 3 and used to frame Stalin as the Scheme
+  ceiling. The comparison does not hold. **Stalin computes in IEEE single precision**, with
+  no option to change it: its generated C has 335 `float` and zero `double`, and
+  `(/ 1.0 3.0)` returns `0.3333333492279052734375`. The corpus was therefore comparing
+  Stalin's binary32 against Chez's binary64, and phase 1 already found the same corpus ran
+  Chez at `--optimize-level 2` with checks on. Measured head to head on nbody, Stalin
+  retires 1889.99 instructions per step against `chez-4`'s 1788.41 **while doing half-width
+  arithmetic**, so it loses by 5.7% with an advantage. Configuration 7 is closed as not
+  measurable on equal terms.
+
 - **Chez was suspected of boxing flonum intermediates**, offered as the explanation for a
   bad `chez-4` number. Measured and false: `bytes-allocated` around a tight `fl+`/`fl*`
   loop shows **0.18 bytes per iteration** at `optimize-level 3`, 0.22 at level 2. That is

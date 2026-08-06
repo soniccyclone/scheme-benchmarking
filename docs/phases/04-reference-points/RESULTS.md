@@ -74,7 +74,71 @@ suppress it at any scope gets closest to C, and it gets there without leaving th
 
 Both Scheme ceilings and SBCL's require leaving the standard entirely. Ada's does not.
 
+## Configuration 7: Stalin computes in single precision, and does not win
+
+Stalin was the control on this entire project. `PLAN.md`: "If Stalin already beats every
+declaration-based configuration by a wide margin, then the interesting problem is inference
+and not standardization, and this project is aimed at the wrong target."
+
+Two findings, and the first one qualifies the second.
+
+### Stalin's flonums are IEEE single precision, with no option to change that
+
+```
+$ stalin -On prec.sc && ./prec        $ scheme -q < prec.ss
+4.84143161773681640625                4.841431442464721
+3.333333492279052734375e-1            0.3333333333333333
+```
+
+The generated C confirms it: `stalin -On -c` on our nbody emits **335 occurrences of
+`float` and zero of `double`**, and the constant `4.84143144246472090` is emitted as
+`4.84143161773681640625`, which is its float32 rounding.
+
+This is not a flag we failed to find. The man page has zero mentions of flonum precision,
+real-number representation or IEEE anything; the only precision options control the
+precision of *flow analysis*, not of arithmetic.
+
+**So Stalin cannot express this benchmark.** Its output diverges from every other
+configuration at the seventh significant figure and it fails the correctness oracle
+outright. Configuration 7 is not measurable on equal terms, and no amount of care with
+expression order fixes a data-width difference.
+
+### Even with that advantage, it does not beat a tuned Chez
+
+Measured anyway, for information, and never to be placed in the main ranking:
+
+| configuration | instr/step | precision |
+|---|---|---|
+| `chez-4` | 1788.41 | **binary64** |
+| `stalin-7` | 1889.99 | **binary32** |
+| `sbcl-5` | 2015.00 | binary64 |
+
+Stalin retires **5.7% more instructions than Chez's ceiling while doing half-width
+arithmetic**. Single precision should be an advantage; it still loses.
+
+`RESEARCH.md` section 3 records Stalin as 2x to 4x faster than Chez on float and array
+benchmarks, taken from the `r7rs-benchmarks` corpus. **That comparison is now suspect on
+its face.** Those benchmarks were comparing Stalin's binary32 against Chez's binary64, and
+phase 1 already established that the same corpus ran Chez at `--optimize-level 2`, safe
+mode with checks on. So the published gap is a single-precision program with a private shim
+measured against a double-precision program running safe. It is not a compiler-quality
+result.
+
+### What this does to the argument
+
+**The control passes: this project is aimed at the right target.** Whole-program inference,
+in the one implementation famous for it, does not beat declaration-plus-policy. It ties
+Chez's ceiling while cheating on precision.
+
+It also strengthens `LEDGER.md` D7 with a second independent reason. D7 rejected
+annotation-free whole-program inference because Stalin's performance is bimodal and nothing
+in the source tells you which mode you are in. Compiling `config1.scm` unmodified showed
+that mechanism directly: every warning Stalin emitted originated in `read`, and an
+unprovable region did not stay local, it poisoned everything downstream that touched it.
+Removing `read` silenced all of them. With no declarations to anchor on, there is nothing
+to stop that propagation.
+
 ## Still outstanding
 
-- **Configuration 7, Stalin.** The Scheme ceiling reached by whole-program inference
-  instead of declaration, and the control on the entire approach.
+Nothing in phase 4. Configuration 7 is closed as **not measurable on equal terms**, which
+is a result rather than a gap.
