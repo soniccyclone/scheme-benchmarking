@@ -241,3 +241,95 @@ Turn it off before calibrating, or the floor absorbs it.
 - `bench/nbody/SPEC.md`: the initial conditions, expected energies and expression order
   that every variant is written against. **Not** an extraction from the Benchmarks Game
   zip, which per `LEDGER.md` D16 we no longer depend on in any form.
+
+## Configuration 1 is not writeable either, and that completes the pattern
+
+`(import (scheme base))` does not resolve on Chez, and Racket has no `r7rs` collection in
+this install. So **"portable R7RS-small", the floor of the whole matrix, does not run on
+either leading implementation.**
+
+```
+$ echo '(import (scheme base)) (display 1)' | scheme --program /dev/stdin
+Exception: library (scheme base) not found
+
+$ racket -e '(require r7rs)'
+standard-module-name-resolver: collection not found  for module path: r7rs
+```
+
+R7RS support exists for Racket as an add-on package and does not exist for Chez at all.
+
+That is the third independent instance of one finding, and together they are the result:
+
+| configuration | standard | year | runs on Chez | runs on Racket |
+|---|---|---|---|---|
+| 1 | R7RS-small | 2013 | no | no (add-on package) |
+| 2b | R7RS-large Tangerine | 2019 | no | no |
+| 3 | SRFI 145 | 2016 | no | no |
+| **2a** | **R6RS** | **2007** | **yes** | **yes** |
+| floor | R5RS | 1998 | yes (bare script) | yes (`#lang r5rs`) |
+
+**Every escape hatch standardized after 2007 is unimplemented by both leading
+implementations, and the 2007 one is implemented by both.** The portable paths that
+actually execute are R5RS, which has no hatches at all, and R6RS, which has instruction
+hatches and neither premises nor a policy switch.
+
+Consequence for the matrix: configuration 1's floor is written in R5RS, not R7RS-small.
+
+**Racket ships `#lang r6rs` natively**, which is better than expected and upgrades
+configuration 2a from Chez-only to both implementations. One source file,
+`bench/nbody/config2a.sps`, runs under `scheme --program` and under `racket -I r6rs`
+unmodified.
+
+## The harness, and what the trap test caught
+
+`harness/` holds `configs.sh`, `compile.sh`, `run.sh` and `trap-test.sh`. Four
+configurations build and run: `c-scalar`, `c-native`, `chez-2a`, `racket-2a`.
+
+**The trap test earned its place on the first run.** Racket recompiled when the source
+mtime moved, at 1.86x:
+
+```
+config             A       B       C   verdict
+racket-2a       170ms    220ms    410ms   RECOMPILES ON MTIME (1.86x)
+```
+
+`raco make` was already being run, so the `.zo` existed. The default
+`PLT_COMPILED_FILE_CHECK=modify-seconds` makes Racket stat the source on every startup and
+rebuild when it is newer. Setting `PLT_COMPILED_FILE_CHECK=exists` fixes it and all four
+configurations now pass. Without that variable every Racket number in this project would
+have carried a recompile.
+
+N is deliberately 1000 in the trap test. Recompilation is a fixed cost, so the smaller the
+real work the more it stands out; at a measurement-sized N it would hide inside the run.
+
+## First cross-implementation numbers
+
+Correctness first. C, Chez and Racket agree **bit-exactly** at N=1000:
+
+```
+c-scalar     -0.169075164          (%.9f)
+c-native     -0.169075164
+chez-2a      -0.16907516382852447
+racket-2a    -0.16907516382852447
+```
+
+Retired instructions, from the N=1M and N=2M pair so process startup cancels:
+
+| configuration | per step | vs scalar C |
+|---|---|---|
+| `c-scalar` (gcc -O2, no vectorizer) | 654.00 | 1.00x |
+| `racket-2a` (portable R6RS) | 9506.26 | **14.53x** |
+| `chez-2a` (portable R6RS) | 9546.76 | **14.60x** |
+
+Two things worth stating carefully, because this is a preliminary number and phase 3 owns
+the real one.
+
+**Chez and Racket land within 0.4% of each other.** `RESEARCH.md` section 4 predicted
+within 15% on numeric code from the `r7rs-benchmarks` corpus. They are far closer than
+that here, which is corroboration rather than the divergence phase 3 was told to watch for.
+
+**Most of the 14.5x is expected to be boxing, not check overhead.** R6RS standardized
+flonum *operators* and no unboxed flonum *storage*, so configuration 2a keeps its bodies in
+an ordinary `vector` whose slots are boxed. Separating boxing from check overhead is
+exactly what configurations 2b, 2c and 4 are for. Do not quote 14.5x as "the cost of the
+missing policy switch"; it is the cost of everything R6RS left out at once.

@@ -17,3 +17,6 @@ compiled/
 
 # Benchmark run output
 results/*.json
+
+# build artifacts
+build/
