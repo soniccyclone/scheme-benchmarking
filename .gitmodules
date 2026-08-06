@@ -1,0 +1,3 @@
+[submodule "sonic/vendor/nanopass"]
+	path = sonic/vendor/nanopass
+	url = https://github.com/nanopass/nanopass-framework-scheme
