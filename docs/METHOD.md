@@ -105,6 +105,76 @@ What it gives up: SBCL's threading story against Chez's, which is a separate pro
 comparability with the Game's parallel headline numbers, which `RESEARCH.md` already forbids
 mixing into our tables anyway.
 
+## Statistical protocol, and it applies from phase 2 onward
+
+An earlier version of this document put statistical rigour only in the CI section below, as
+though it were a future concern. It is not. Phases 2 and 3 said "report with spread" and
+"above the noise floor", and **neither of those is a test**. If we are hand-rolling this, get
+it right from the first measurement.
+
+### We are not licensed to use t-tests
+
+This follows directly from Stabilizer. Parametric tests assume the samples are normally
+distributed, and the whole argument of that paper is that repeated runs of one binary are
+samples of **one memory layout**, not independent draws. Without layout re-randomization the
+distribution is unknown and can be multi-modal. Stabilizer's Table 1 measured exactly this:
+five of eighteen benchmarks fail a normality test without it.
+
+**And we cannot run Stabilizer.** It is an LLVM 3.1 pass; stage 13 emits x86-64 directly and
+no implementation in our matrix touches LLVM. So we do not get normality handed to us, and
+Student's t, ANOVA and anything else assuming Gaussian samples are off the table. Using them
+anyway would produce a tight, confident, wrong interval, which is the specific failure
+Stabilizer exists to name.
+
+### Use bootstrap confidence intervals on the ratio
+
+The distribution-free option, and it happens to produce exactly the quantity we report.
+
+```
+given samples A[1..n], B[1..n] for two configurations
+repeat 10000 times:
+    a* = resample A with replacement, n draws
+    b* = resample B with replacement, n draws
+    record ratio = median(b*) / median(a*)
+report the 2.5th and 97.5th percentiles of the recorded ratios
+```
+
+If that interval excludes 1.0, the difference is real at the 95% level. No normality
+assumption anywhere. Report the interval, not just the point estimate.
+
+Non-parametric rank tests (Mann-Whitney U unpaired, Wilcoxon signed-rank paired) are the
+alternative and are fine, but they test "are these distributions different" where we want
+"how much faster, and how sure are we". Bootstrap answers the question we actually have.
+
+### Three ways to get this wrong that are easy to miss
+
+**Multiple comparisons.** The matrix has ten configurations. Testing every pairwise delta at
+α=0.05 means roughly a one-in-three chance of at least one spurious result across
+45 comparisons. Either correct with Holm-Bonferroni, or **pre-register** the specific deltas
+that matter before looking at any data. `PLAN.md` section 2 already names them: 1→2a, 2a→2b,
+2a→2c, 2c→4, 2a→4, 4→5, 5→6. That is seven, decided in advance, and no others get a p-value.
+
+**Effect size is not significance.** With enough repetitions any nonzero difference becomes
+statistically significant. Decide the minimum interesting effect *before* measuring. For this
+project a ratio inside roughly 1.05 is not interesting regardless of its p-value, because it
+cannot support a claim about a language design decision.
+
+**The noise floor is a precondition, not a result.** Phase 2's coefficient of variation tells
+us whether a given effect size is detectable at all on this machine. It does not by itself
+establish that any observed difference is real. If the CV comes in above about 10%, the
+smaller deltas are unmeasurable here and should be reported as such rather than given a
+number.
+
+### What this changes in the phases
+
+Phase 2 additionally reports the **distribution shape**, not only mean and spread: run one
+unchanged binary twenty times, and check normality (Shapiro-Wilk) so we know from the outset
+whether we are in the non-normal regime Stabilizer predicts. Phase 3's exit gate becomes a
+bootstrap CI on every pre-registered delta, with any interval spanning 1.0 reported as no
+detected difference rather than as a small one.
+
+---
+
 ## Later: CI-based measurement
 
 **Not now.** This section describes where measurement goes *after* the initial findings land.

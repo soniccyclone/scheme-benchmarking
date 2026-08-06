@@ -47,8 +47,13 @@ complete, so N values and the noise floor are known.
 
 - All nine program variants produce byte-identical correct output.
 - Every configuration passes phase 1's no-recompilation check.
-- The 2-to-4 delta is reported with its spread, and is either larger than phase 2's
-  noise floor or explicitly declared unmeasurable on this machine.
+- Every pre-registered delta carries a **bootstrap 95% confidence interval on the ratio**,
+  per `../../METHOD.md`'s statistical protocol. An interval spanning 1.0 is reported as no
+  detected difference, never as a small one. Parametric tests are not licensed here: without
+  layout re-randomization the samples are not normally distributed, and we cannot run
+  Stabilizer because it is an LLVM pass and we emit x86-64 directly.
+- Only the seven pre-registered deltas get an interval. No fishing across the other
+  comparisons, or the multiple-comparisons problem eats the result.
 - Each delta named above has a number attached: 1 to 2, 2 to 3, 2 to 4, 4 to 5, 5 to 6.
 
 ## Risks
