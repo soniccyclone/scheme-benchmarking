@@ -24,15 +24,20 @@ suppression costs exactly nothing against `Suppress (All_Checks)`.
 
 | stage | what | state |
 |---|---|---|
-| 06 | interval abstract domain | **working, 6101 checks passing** |
-| 01-05 | reader, expander, core language, A-normalization, CFG | not started |
-| 07-09 | e-SSA, ABCD, check elision | not started |
+| 06 | interval abstract domain | **working**, 6101 checks |
+| 05, 07-09 | core language, fixpoint analysis, elision decision | **working prototype**, 11 cases |
+| 01-04 | reader, expander, macro expansion, A-normalization | not started |
 | 10 | vectorization | not started |
 | 11-13 | instruction selection, register allocation, x86-64 emission | not started |
 
-Nothing here compiles a program yet. `src/sonic/interval.ss` is the analysis core, built
-first because it is the part the measurements proved is load-bearing and the part no
-existing Scheme has.
+Nothing here compiles a program yet, and the front end is deliberately last. The analysis
+came first because it is the part the measurements proved is load-bearing, and the part no
+existing Scheme has. A reader is a solved problem; this is not.
+
+The core language is s-expressions, A-normalized. A-normalization is a **precondition**
+rather than a tidiness preference: the analysis hangs an abstract value on each variable,
+so an unnamed subexpression has nowhere to put its interval and the transfer functions
+cannot compose.
 
 ## What the domain does
 
@@ -70,6 +75,45 @@ And the query the whole file exists to answer, on nbody's real access pattern
 
 It refuses correctly too: an unknown index, an index that can go negative, an index that
 can reach `len`, and an index checked against an unknown length are all non-eliminable.
+
+## What the analyzer does
+
+`src/sonic/analyze.ss` runs the domain over a core-language program to a fixpoint with
+widening, and reports one verdict per vector reference.
+
+```
+$ make test
+bounds check elision:
+  ok   loop 0..34 over length-35 vector  -> (#t)
+  ok   loop 0..35 over length-35 vector is NOT safe  -> (#f)
+  ok   unknown vector length  -> (#f)
+  ok   loop -1..34 is NOT safe  -> (#f)
+  ok   nbody b[i*7+k], nested loops  -> (#f)
+  ok   nbody b[i*7+k] with the stride bound  -> (#t)
+  ok   guarded by (< i n) and (>= i 0)  -> (#t)
+  ok   guarded by (< i n) only  -> (#f)
+  ok   mixed: first safe, second not  -> (#t #f)
+  ok   index derived through two primops, still provable  -> (#t)
+  ok   derived index that overruns is refused  -> (#f)
+
+11 cases, 0 failures
+```
+
+Nested loops with a strided index, which is nbody's real access pattern, prove out:
+`b[i*7+k]` with `i` in [0,5) and `k` in [0,7) against a length-35 vector gives [0,34] and
+the check is deleted. **That is the exact access Chez cannot prove**, because its lattice
+collapses `index`, `length` and `sub-index` into one category.
+
+The refusals matter as much. An analysis that says yes to everything is not an analysis,
+and the "mixed" case exists specifically to catch one that collapses all references into a
+single verdict.
+
+**Known gap: widening termination is not exercised at program level.** The core language is
+pure and has no loop-carried state, so no program in it can produce a divergent fixpoint.
+`interval-test.ss` tests the widening operator directly, including a termination loop, but
+the program-level test has to wait for mutable variables. One test case in
+`analyze-test.ss` was originally written expecting a refusal on that theory and the
+analyzer was right; the comment there records it.
 
 ## Notes for whoever touches this next
 

@@ -11,6 +11,8 @@ help:
 
 test:
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss
 
 clean:
 	@find . -name '*.so' -delete
