@@ -17,6 +17,7 @@ process startup cancels exactly. Measured with `harness/measure.sh`.
 | 4 | **`chez-4`** — flvector + `optimize-level 3` | **1788.41** | **2.73x** |
 | 5 | **`sbcl-5`** — tuned ANSI CL, `(safety 0)`, scalar | **2015.00** | **3.08x** |
 | — | `chez-4-safe` — as `chez-4` but `optimize-level 2` | 8521.41 | 13.03x |
+| 2c | `chez-2c` — predicate-guarded, `optimize-level 2` | 8533.41 | 13.05x |
 | 2a | `racket-2a` — portable R6RS | 9367.26 | 14.32x |
 | 2a | `chez-2a` — portable R6RS | 9546.76 | 14.60x |
 | 9 | `ecl-9` — same CL source, ECL | 159625.85 | 244.08x |
@@ -99,6 +100,41 @@ the instructions retired, including in the collector. If unboxing's real cost is
 concentrated in GC pauses or cache pressure rather than retired instructions, wall time
 will show a larger storage term than 1.12x. That is a reason to measure it, not a reason to
 discount this.
+
+## Finding 2c: predicate guards buy nothing, and the residual is pure bounds checking
+
+`PLAN.md` section 5 asked whether Chez's `cptypes` already does our job at
+`optimize-level 2` when fed a predicate guard. `fold-primref/try-unsafe`
+(`cptypes.ss:1963`) promotes safe primitives to unsafe twins for 270 primitives once
+argument types check out, and predicate tests are the one user-visible way to feed that
+lattice. `config2c-chez.ss` is byte-identical to `config4-chez.ss` apart from
+`flvector?` and `fixnum?` guards on every hot entry.
+
+| configuration | instr/step |
+|---|---|
+| `chez-2c` — guarded, `optimize-level 2` | 8533.41 |
+| `chez-4-safe` — unguarded, `optimize-level 2` | 8521.42 |
+| `chez-4` — unguarded, `optimize-level 3` | 1788.41 |
+
+**The guards buy nothing. They cost 12 instructions per step**, which is the guard tests
+themselves. A 0.14% regression, and the answer to the open question is a flat no.
+
+`CHEZ-ANALYSIS.md` predicted this would go *half* way: guards would drop the type check
+and leave the bounds check. The real result is cleaner than that prediction and better for
+the argument. `cptypes` had **already** narrowed `b` to `flvector` on its own, from its
+`(make-flvector ...)` definition, so the guard supplied no information the pass did not
+have. Nothing was left for it to recover.
+
+Which means the entire 4.77x residual between level 2 and level 3 is **bounds checking**,
+not type dispatch. And bounds-check elision is precisely the capability
+`cptypes-lattice.ss` architecturally cannot express: it is a level-1 lattice of categories
+in which `index`, `length` and `sub-index` all collapse to `fixnum-pred`, so `i in [0,35)`
+is not a representable fact.
+
+This is the closest thing the project has to a direct experimental validation of
+`PROPOSAL.md`. The missing capability is not notation and not type inference. It is an
+interval or relational abstract domain, which is what SonicScheme's stage 06 exists to
+build, and no amount of predicate guarding reaches it from outside.
 
 ## Finding 3: the implementations agree closely, in both regimes
 

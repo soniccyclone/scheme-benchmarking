@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/nbody"
 
-CONFIGS="c-scalar c-native chez-2a racket-2a chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9"
+CONFIGS="c-scalar c-native chez-2a racket-2a chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9"
 
 mkdir -p "$BUILD"
 
@@ -96,6 +96,18 @@ cfg_compile_racket_4() {
 cfg_run_racket_4() {
     echo "env PLT_COMPILED_FILE_CHECK=exists racket $BUILD/racket-4.rkt $1"
 }
+
+# --- configuration 2c: predicate-guarded at optimize-level 2 ---------------
+cfg_src_chez_2c() { echo "config2c-chez.ss"; }
+cfg_compile_chez_2c() {
+    cp "$BENCH/config2c-chez.ss" "$BUILD/chez-2c.ss"
+    scheme -q >/dev/null <<EOF
+(optimize-level 2)
+(compile-file "$BUILD/chez-2c.ss")
+EOF
+    test -f "$BUILD/chez-2c.so"
+}
+cfg_run_chez_2c() { echo "scheme -q --optimize-level 2 --script $BUILD/chez-2c.so $1"; }
 
 # --- the check-isolation control ------------------------------------------
 # config4-chez.ss compiled at optimize-level 2 instead of 3. Same source, same

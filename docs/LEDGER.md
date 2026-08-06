@@ -80,10 +80,10 @@ Kept because they are implementation hazards, not trivia.
 
 | question | status |
 |---|---|
+| Does Chez's `cptypes` already do our job at `optimize-level 2`? | **Answered no, 2026-08-06.** Predicate guards cost 12 instr/step and recover nothing: 8533.41 guarded vs 8521.42 unguarded vs 1788.41 at level 3. `cptypes` had already narrowed the type unaided, so the whole 4.77x residual is bounds checking, which its level-1 lattice cannot represent. Direct validation of `PROPOSAL.md`. |
 | Writeup or library as the deliverable? | Unanswered. Affects phase 5/6 emphasis only. |
 | How much does the expansion-time propagator matter? | Unanswered. Phase 5 tier two. |
 | Deutsch & Schiffman 1984 | **Genuinely unavailable.** No OA location per OpenAlex and Semantic Scholar. Only real loss in the corpus. |
-| Does Chez's `cptypes` already do our job at `optimize-level 2`? | Open experiment. If a predicate guard at level 2 emits the same code as level 3, the gap is smaller than the standards analysis implies and `PROPOSAL.md` changes. |
 
 ## Housekeeping conventions learned the hard way
 
