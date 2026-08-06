@@ -18,7 +18,10 @@ process startup cancels exactly. Measured with `harness/measure.sh`.
 | 5 | **`sbcl-5`** — tuned ANSI CL, `(safety 0)`, scalar | **2015.00** | **3.08x** |
 | — | `chez-4-safe` — as `chez-4` but `optimize-level 2` | 8521.41 | 13.03x |
 | 2c | `chez-2c` — predicate-guarded, `optimize-level 2` | 8533.41 | 13.05x |
-| 2a | `racket-2a` — portable R6RS | 9367.26 | 14.32x |
+| 2a | `racket-2a` — portable R6RS | 9379.61 | 14.34x |
+| 2b | `chez-2b` — bytevector f64 storage | 9400.48 | 14.37x |
+| 2b | `racket-2b` — bytevector f64 storage | 59526.49 | 91.02x |
+| 1 | `chez-1` / `racket-1` — R5RS floor | measured, see phase 3 table | |
 | 2a | `chez-2a` — portable R6RS | 9546.76 | 14.60x |
 | 9 | `ecl-9` — same CL source, ECL | 159625.85 | 244.08x |
 | 9 | `clisp-9` — same CL source, CLISP | 421988.68 | 645.24x |
@@ -100,6 +103,44 @@ the instructions retired, including in the collector. If unboxing's real cost is
 concentrated in GC pauses or cache pressure rather than retired instructions, wall time
 will show a larger storage term than 1.12x. That is a reason to measure it, not a reason to
 discount this.
+
+## Finding 2bis: portable unboxed storage is free on Chez and a 6x trap on Racket
+
+Configuration 2b is 2a with one change: storage moves from a boxed `vector` to unboxed
+doubles reached through `bytevector-ieee-double-native-ref/set!`.
+
+**That accessor pair is portable R6RS**, in `(rnrs bytevectors)`, standardized in 2007 and
+shipped by both implementations. Which means SRFI 160's `f64vector`, the half of Tangerine
+that R6RS supposedly lacks, has been expressible in portable R6RS for nineteen years under
+a name nobody associates with numerics. Configuration 2b therefore measures something
+sharper than planned: not what Tangerine would buy, but what Tangerine would buy *that R6RS
+did not already have*.
+
+| configuration | storage | instr/step | vs its own 2a |
+|---|---|---|---|
+| `chez-2a` | boxed `vector` | 9546.77 | — |
+| `chez-2b` | bytevector f64 | 9400.48 | **0.98x** |
+| `racket-2a` | boxed `vector` | 9379.61 | — |
+| `racket-2b` | bytevector f64 | **59526.49** | **6.35x worse** |
+
+On Chez, portable unboxed storage buys **1.6%**. On Racket it **costs 6.35x**.
+
+Racket's R6RS bytevector layer evidently does not lower to its native byte operations on
+this path, so the portable spelling of unboxed storage is not merely unhelpful there, it is
+a trap. A program written to the standard, using the standard's own unboxed accessor, runs
+six times slower than the naive boxed version.
+
+Two consequences.
+
+**It compounds finding 2b rather than competing with it.** Unboxing was already worth only
+1.12x with checks held on. Now the *portable* spelling of unboxing is worth 1.02x on one
+implementation and -6.35x on the other. Storage is not where the performance is, and
+chasing it portably can lose badly.
+
+**It is the strongest available evidence against Tangerine as a remedy.** Standardizing
+`(scheme vector f64)` guarantees the notation, and this is what the notation is worth when
+an implementation has not invested in lowering it. Both implementations here are
+conformant. One of them makes the standard path 6x slower than not using it.
 
 ## Finding 2c: predicate guards buy nothing, and the residual is pure bounds checking
 

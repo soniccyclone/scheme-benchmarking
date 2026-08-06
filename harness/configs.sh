@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/nbody"
 
-CONFIGS="c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
+CONFIGS="c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2b racket-2b chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
 
 mkdir -p "$BUILD"
 
@@ -136,6 +136,31 @@ cfg_compile_racket_4() {
 }
 cfg_run_racket_4() {
     echo "env PLT_COMPILED_FILE_CHECK=exists racket $BUILD/racket-4.rkt $1"
+}
+
+# --- configuration 2b: Tangerine over a shim we ship ------------------------
+# Same source as 2a with one change: storage moves from a boxed `vector` to a
+# bytevector accessed through bytevector-ieee-double-native-ref/set!, which is
+# portable R6RS and is what SRFI 160's f64vector amounts to.
+
+cfg_src_chez_2b() { echo "config2b.sps"; }
+cfg_compile_chez_2b() {
+    cp "$BENCH/config2b.sps" "$BUILD/chez-2b.sps"
+    scheme -q --optimize-level 2 >/dev/null <<EOF
+(compile-program "$BUILD/chez-2b.sps")
+EOF
+    test -f "$BUILD/chez-2b.so"
+}
+cfg_run_chez_2b() { echo "scheme --program $BUILD/chez-2b.so $1"; }
+
+cfg_src_racket_2b() { echo "config2b.sps"; }
+cfg_compile_racket_2b() {
+    cp "$BENCH/config2b.sps" "$BUILD/racket-2b.sps"
+    raco make "$BUILD/racket-2b.sps" >/dev/null
+    test -f "$BUILD/compiled/racket-2b_sps.zo"
+}
+cfg_run_racket_2b() {
+    echo "env PLT_COMPILED_FILE_CHECK=exists racket -I r6rs $BUILD/racket-2b.sps $1"
 }
 
 # --- configuration 2c: predicate-guarded at optimize-level 2 ---------------
