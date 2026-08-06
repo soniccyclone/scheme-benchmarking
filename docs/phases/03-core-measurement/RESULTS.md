@@ -274,12 +274,57 @@ Racket. That is well inside the effects being reported here, but it means Racket
 under about 10% are not resolvable by instruction count alone and need the wall-clock
 protocol.
 
+## Wall clock, with bootstrap intervals
+
+`harness/bench.sh` plus `harness/bootstrap.awk`. Two N values per repetition so startup
+cancels *inside* each sample, nanosecond timing, serial-only enforced by rejecting any
+sample whose cpu-over-elapsed exceeds 1.3, and the D13 bootstrap on the ratio of medians.
+The awk implementation was validated against three synthetic cases first: identical
+distributions give an interval spanning 1.0, a 2x difference brackets 2.0, and a 3%
+difference is flagged as real but inside the noise band.
+
+11 reps, N=1,000,000 to 2,000,000, baseline `c-scalar`:
+
+| configuration | ns/step | wall ratio (95% CI) | instr ratio |
+|---|---|---|---|
+| `c-native` | 33.92 | 0.91 [0.88, 0.94] | 0.51x |
+| `c-scalar` | 37.41 | 1.00 baseline | 1.00x |
+| `ada-8-all` | 41.51 | 1.11 [1.08, 1.14] | 1.22x |
+| `ada-8-named` | 42.33 | 1.13 [1.08, 1.18] | 1.22x |
+| `racket-4` | 69.80 | **1.87** [1.65, 1.96] | 2.28x |
+| `chez-4` | 82.98 | **2.22** [2.16, 2.29] | 2.73x |
+| `sbcl-5` | 221.87 | **5.93** [5.86, 6.07] | 3.08x |
+| `racket-2a` | 269.41 | 7.20 [6.30, 8.16] | 14.32x |
+| `chez-2a` | 288.82 | 7.72 [7.63, 8.03] | 14.60x |
+| `chez-1` (R5RS floor) | 826.33 | 22.09 [21.61, 22.89] | — |
+
+Every interval excludes 1.0, so every delta here is real. Three things diverge from the
+instruction counts, and each one is the reason the second instrument exists.
+
+**Finding 1 gets much stronger.** By instruction count `racket-4` beat `sbcl-5` 2.28x to
+3.08x, a 1.35x margin. By wall clock it is 1.87x to 5.93x, a **3.2x margin**, and the
+intervals are nowhere near touching. SBCL retires only 35% more instructions than
+`racket-4` but takes 3.2 times as long, so its IPC on this workload is far worse. Tuned
+Scheme does not merely edge out tuned Common Lisp here; it is three times faster.
+
+**`c-native` halves the instruction count and buys 9%.** 0.51x instructions, 0.91x time.
+nbody's inner loop is a dependency chain through `sqrt`, so it is latency-bound rather than
+throughput-bound and removing work does not remove time. This is the clearest possible
+argument against reporting instruction counts alone, and it tempers finding 4: the
+vectorization headroom SonicScheme's stage 10 targets is worth 2x in work and about 1.1x in
+time *on this program*. Other programs in the matrix would show more.
+
+**The portable configurations look better in time than in work.** `chez-2a` is 14.60x by
+instruction and 7.72x by clock, so the generic path sustains roughly double the IPC of the
+tuned path. Boxing costs instructions that pipeline well.
+
+**Ada corroborates itself.** `ada-8-named` at 1.13 [1.08, 1.18] and `ada-8-all` at 1.11
+[1.08, 1.14] have heavily overlapping intervals, which is the wall-clock form of the
+instruction-count result that they are identical. D5's ratification survives the second
+instrument.
+
 ## What is not here
 
-- **Wall-clock time and bootstrap confidence intervals.** Instruction count is
-  deterministic and needs no interval, but it is not the whole story: it says nothing about
-  IPC, cache behaviour or branch misprediction, and a configuration can retire fewer
-  instructions while running slower. Every time-based delta still owes the D13 protocol.
 - **Configurations 1, 2b, 2c, 7, 8, 9.** Config 1's floor must be written in R5RS rather
   than R7RS-small, per phase 1. 2b needs the SRFI 144/160 shim. 2c is the experiment that
   splits boxing from checks and is the most valuable of the three.
