@@ -9,15 +9,17 @@ Shared setup for every phase. Establishing all of this is phase 1's job
 ## Reference
 
 **Machine.** AMD Ryzen AI Max+ PRO 395, 16 Zen 5 cores, 32 threads, homogeneous so
-no P/E-core trap. AVX-512 present. 15 GiB in the VM. Under WSL2 kernel
+no P/E-core trap. AVX-512 present. 31 GiB in the VM. Under WSL2 kernel
 6.18.33.2-microsoft, which costs us two things: `cpufreq` sysfs is absent so we
 cannot pin the governor or disable boost, making absolute timings drift and
 ratios-measured-close-together the only trustworthy output; and L3 sibling lists
 read `0-31` for every CPU so the real 2-CCD split is invisible. SMT siblings are
 adjacent pairs, so `taskset -c 0,2,4,6,8,10,12,14` gives one thread per physical
 core. A `cpu` PMU node exists (type 4) and `perf_event_paranoid` is 2, so hardware
-counters are a maybe worth a 30-second test. If they fail, read the emitted code
-instead, which is the ground truth for this kind of question anyway:
+counters work: `perf` is installed unprivileged at `~/.local/bin/perf`, extracted from
+`linux-perf` into `~/.local/opt/perf` (**not** the scratchpad, which does not survive a
+`wsl --shutdown`). Emitted code remains the ground truth for questions counters cannot
+answer:
 `sb-disassem:disassemble`, Chez's `#%$assembly-output`, `raco decompile`,
 `objdump`.
 
@@ -81,11 +83,11 @@ obligations enter the tree at all.
 Every configuration must be proven correct before any timing from it is trusted. We do
 that without a downloaded fixture, and the result is a stronger test than the fixture was.
 
-nbody integrates the Jovian planets plus the Sun with a symplectic (velocity-Verlet)
-integrator at a fixed timestep. The initial conditions are physical constants, masses and
-orbital state vectors at JD 2451545.0, and the program prints total system energy before
-and after N steps to nine decimal places. None of that is anyone's intellectual property;
-it is the problem statement.
+nbody integrates the Jovian planets plus the Sun with **symplectic Euler** at a fixed
+timestep: all velocities update from the pairwise forces at the current positions, then all
+positions update from the new velocities. The program prints total system energy before and
+after N steps to nine decimal places. The constants and the exact expression order are
+pinned in `bench/nbody/SPEC.md`, and `bench/nbody/ref.c` is that spec in executable form.
 
 Three independent checks, in increasing strength:
 
@@ -97,14 +99,23 @@ Three independent checks, in increasing strength:
    expression order and must agree to nine decimals with each other. Eleven independent
    implementations converging is far better evidence than one implementation matching one
    downloaded string, which is satisfiable by copying the string.
-3. **Published-value cross-check.** The step-0 and step-N energies for the standard
-   initial conditions are published; cite them and compare once. This catches a shared
-   misreading of the specification that check 2 cannot, since a common misreading produces
-   consistent agreement on a wrong answer.
+3. **Published-value cross-check.** The step-0 and step-N energies for these initial
+   conditions are published. Compare once. This catches a shared misreading of the
+   specification that check 2 cannot, since a common misreading produces consistent
+   agreement on a wrong answer. **Done, and it passed:** `ref.c` reproduces
+   `-0.169075164` at step 0 and `-0.169059907` at 50,000,000 steps.
+
+4. **Instruction count**, which is not a correctness check but belongs with them. `perf
+   stat -e instructions:u` on the reference gives 654.00002 retired instructions per step,
+   stable to five significant figures across an 8x range in N. See D17.
 
 Expression order is load-bearing for checks 1 and 2. Floating-point addition is not
 associative, so a reordered accumulation changes the low digits. Every variant keeps the
 same order, and any variant that cannot (Stalin's R4RS port, the Ada version) is noted.
+
+The failure mode worth naming: fusing the position update into the pair loop makes the
+integrator non-symplectic, and its energy error then accumulates monotonically instead of
+oscillating. Check 1 catches that; an eyeball on the output does not.
 
 ---
 
