@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/nbody"
 
-CONFIGS="c-scalar c-native chez-2a racket-2a chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9"
+CONFIGS="c-scalar c-native chez-2a racket-2a chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
 
 mkdir -p "$BUILD"
 
@@ -167,6 +167,42 @@ cfg_compile_clisp_9() {
 cfg_run_clisp_9() {
     echo "env NBODY_N=$1 clisp -q -norc -i $BUILD/clisp-9.fas -x (main)"
 }
+
+# --- configuration 8: Ada, three check policies ----------------------------
+# RESEARCH.md section 2 ranks Ada above Common Lisp because it names each check
+# and lets you suppress it at any scope, where CL bundles every risk into one
+# 0-3 dial. LEDGER.md D5 adopts that design and is status:draft pending exactly
+# this measurement: if All_Checks beats named suppression meaningfully, then
+# granularity has a price and the proposal needs rewriting.
+#
+# One source, three builds. The only difference is the pragmas.
+
+_ada_build() {  # $1 = config name, $2 = pragma block, $3 = extra gnat flags
+    local d="$BUILD/$1"
+    mkdir -p "$d"
+    awk -v repl="$2" '/@SUPPRESS@/{print repl; next} {print}' \
+        "$BENCH/nbody.adb" > "$d/nbody.adb"
+    ( cd "$d" && gnatmake-15 -O2 $3 nbody.adb -o nbody >/dev/null 2>&1 )
+    test -x "$d/nbody"
+}
+
+NAMED_PRAGMAS='   pragma Suppress (Index_Check);\n   pragma Suppress (Range_Check);\n   pragma Suppress (Overflow_Check);\n   pragma Suppress (Division_Check);'
+
+# Ada's DEFAULT is stronger than C's: Index_Check, Range_Check and
+# Overflow_Check are all on unless suppressed. This row is the honest baseline.
+cfg_src_ada_8_checked() { echo "nbody.adb"; }
+cfg_compile_ada_8_checked() { _ada_build ada-8-checked "" ""; }
+cfg_run_ada_8_checked() { echo "$BUILD/ada-8-checked/nbody $1"; }
+
+# The design we are copying: each check suppressed by name.
+cfg_src_ada_8_named() { echo "nbody.adb"; }
+cfg_compile_ada_8_named() { _ada_build ada-8-named "$(printf "$NAMED_PRAGMAS")" ""; }
+cfg_run_ada_8_named() { echo "$BUILD/ada-8-named/nbody $1"; }
+
+# The blunt instrument: -gnatp is pragma Suppress (All_Checks) program-wide.
+cfg_src_ada_8_all() { echo "nbody.adb"; }
+cfg_compile_ada_8_all() { _ada_build ada-8-all "" "-gnatp"; }
+cfg_run_ada_8_all() { echo "$BUILD/ada-8-all/nbody $1"; }
 
 # --- dispatch --------------------------------------------------------------
 # Config names carry hyphens for readability; shell function names cannot.
