@@ -129,8 +129,8 @@ N2, and that is worth knowing before phase 3 runs.
 
 ## Step 5: internal timing instrumentation
 
-One pattern per language, reporting to stderr so it does not corrupt the output being
-checked against the fixture.
+One pattern per language, reporting to stderr so it does not corrupt the energy output
+being checked.
 
 ```scheme
 ;; Scheme, portable R7RS

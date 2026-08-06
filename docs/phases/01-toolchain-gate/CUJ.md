@@ -22,14 +22,14 @@ answer on `sb-simd` and `perf`.
 - Ubuntu 26.04 on WSL2, kernel 6.18.33.2-microsoft.
 - `gcc` 15.2.0 present.
 - Repo checked out, `docs/` populated.
-- Benchmarks Game corpus available. Already fetched to the session scratchpad; if
-  absent, re-clone from `salsa.debian.org/benchmarksgame-team/benchmarksgame`.
+- No external benchmark corpus needed. Every variant is written here from the problem
+  specification; see `../../METHOD.md`'s correctness oracle.
 
 ## Step 1: install
 
 ```
 sudo apt-get install --no-install-recommends \
-    sbcl chezscheme racket hyperfine unzip \
+    sbcl chezscheme racket hyperfine \
     gnat-15 ecl clisp
 ```
 
@@ -192,29 +192,30 @@ lowering that to 1 may be required.
 Do not block on this. If hardware counters fail, the fallback is reading emitted code,
 which is the ground truth for this investigation regardless.
 
-## Step 8: extract the nbody sources
+## Step 8: write the nbody reference variant
 
-```
-python3 -c "
-import zipfile
-z = zipfile.ZipFile('<corpus>/public/download/benchmarksgame-sourcecode.zip')
-for n in z.namelist():
-    if n.startswith('nbody/'):
-        print(n)
-"
-```
+No upstream sources are vendored. Write the reference implementation from the problem
+specification, in whichever language is most convenient to check by hand, and use it to
+pin the constants every other variant will share:
 
-Extract the SBCL, Racket, gcc and Rust nbody entries plus the output fixture into
-`vendor/bgame/nbody/`, preserving the per-program `LICENSE` and the attribution
-headers. Per-entry compiler flags are not in the zip; they live in
-`public/program/nbody-<lang>-<n>.html` and need a small extraction step.
+- The five bodies' masses and state vectors at JD 2451545.0.
+- The expected total energy at step 0 and after N steps, to nine decimal places.
+- The exact arithmetic expression order, which is load-bearing because floating-point
+  addition is not associative and every variant has to reproduce the same low digits.
+
+Land those in `bench/nbody/SPEC.md` so each configuration is written against one written
+specification rather than by porting from whichever variant happened to exist first.
+Porting is how expression order silently diverges.
+
+The correctness checks are in `../../METHOD.md`: energy conservation, eleven-way
+cross-agreement, and a one-time comparison against the published energies.
 
 ## Artifacts produced
 
 ```
 harness/compile.sh                  per-implementation AOT recipes
 harness/probe/                       the Tangerine and assume probes
-vendor/bgame/nbody/                  upstream sources, licenses preserved
+bench/nbody/SPEC.md                  constants, expected energies, expression order
 docs/phases/01-toolchain-gate/RESULTS.md   support matrix and verdicts
 ```
 

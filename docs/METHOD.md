@@ -37,7 +37,7 @@ intervals) stays explicitly out of scope so the dev harness does not grow into i
 
 | packages | for | size |
 |---|---|---|
-| `sbcl chezscheme racket hyperfine unzip` | configs 1 to 5 | ~872 MB, 13 pkgs |
+| `sbcl chezscheme racket hyperfine` | configs 1 to 5 | ~872 MB, 13 pkgs |
 | `ecl clisp` | config 9, the CL controls | ~199 MB |
 | `gnat-15` | config 8, Ada | check at install |
 | `stalin` | config 7, optional | small, 0.11-11build1 |
@@ -67,12 +67,44 @@ Chez and Racket source; see `phases/01-toolchain-gate/RESULTS.md`. Chez ships no
 Racket's SRFI package stops at SRFI 98. Configuration 2 therefore split into 2a, the
 R6RS path that actually exists, and 2b, Tangerine over a shim we ship ourselves.
 
-**Corpora already fetched**, parked in the scratchpad so nothing refetches: the
-Benchmarks Game clone (60 MB, program sources in
-`public/download/benchmarksgame-sourcecode.zip` as 1106 files with output
-fixtures, per-entry flags only in `public/program/*.html`), `r7rs-benchmarks`, and
-`plb`. Upstream programs carry per-program BSD-style licenses with attribution
-requirements, so preserve headers.
+**We vendor no upstream benchmark sources.** All eleven nbody variants are written here,
+from the problem specification and the numerical-methods literature. The Benchmarks Game,
+`r7rs-benchmarks` and `plb` are cited where their *published numbers* inform an argument,
+and that is the whole of the relationship. See `LEDGER.md` D16.
+
+A side benefit: upstream programs carry per-program BSD-style licenses with attribution
+requirements, and this repository is public. Writing our own means no third-party license
+obligations enter the tree at all.
+
+## The correctness oracle
+
+Every configuration must be proven correct before any timing from it is trusted. We do
+that without a downloaded fixture, and the result is a stronger test than the fixture was.
+
+nbody integrates the Jovian planets plus the Sun with a symplectic (velocity-Verlet)
+integrator at a fixed timestep. The initial conditions are physical constants, masses and
+orbital state vectors at JD 2451545.0, and the program prints total system energy before
+and after N steps to nine decimal places. None of that is anyone's intellectual property;
+it is the problem statement.
+
+Three independent checks, in increasing strength:
+
+1. **Energy conservation.** Total energy is a conserved quantity of the physical system
+   and a symplectic integrator bounds its drift rather than accumulating it. A variant
+   whose energy drifts monotonically has a bug in the integrator regardless of what its
+   final digits look like. This check needs no reference value at all.
+2. **Cross-agreement.** All eleven variants implement the same algorithm in the same
+   expression order and must agree to nine decimals with each other. Eleven independent
+   implementations converging is far better evidence than one implementation matching one
+   downloaded string, which is satisfiable by copying the string.
+3. **Published-value cross-check.** The step-0 and step-N energies for the standard
+   initial conditions are published; cite them and compare once. This catches a shared
+   misreading of the specification that check 2 cannot, since a common misreading produces
+   consistent agreement on a wrong answer.
+
+Expression order is load-bearing for checks 1 and 2. Floating-point addition is not
+associative, so a reordered accumulation changes the low digits. Every variant keeps the
+same order, and any variant that cannot (Stalin's R4RS port, the Ada version) is noted.
 
 ---
 

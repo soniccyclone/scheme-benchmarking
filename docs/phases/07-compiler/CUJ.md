@@ -338,7 +338,7 @@ for i in [n - n mod 8, n):        ; scalar remainder
 **The floating point trap, decided per loop and not discovered later.** Element-wise
 operations like the above are safe: each lane computes exactly what the scalar loop
 computed for that index. Reductions are not. Vectorizing a sum reassociates the additions
-and changes the result, and nbody's output is diffed against a fixture to nine decimal
+and changes the result, and nbody's energy output is checked to nine decimal
 places. So: vectorize element-wise loops freely, and for reductions either keep them scalar
 or use an ordered reduction. Never silently reassociate.
 
@@ -424,7 +424,7 @@ dangerous failure mode in this project.
    testable, so test it per primitive rather than trusting the lattice laws to imply it.
 2. **Pass tests.** Each pass on fixtures, asserting the output core language.
 3. **End-to-end differential testing.** Compile each benchmark, diff output against the
-   Benchmarks Game fixture. Compile the same program with all optimization disabled and
+   correctness oracle. Compile the same program with all optimization disabled and
    diff the two outputs against each other. Any divergence is an unsound analysis.
 4. **Disassembly assertions.** Milestones are verified in emitted code, not by timing.
    Assert no bounds-check branch remains in nbody's inner loop (milestone 2) and that
@@ -442,7 +442,7 @@ shows nothing on nbody, that is the expected result rather than evidence of a br
 
 | milestone | check |
 |---|---|
-| 1 | nbody compiles to native code, runs, matches the fixture |
+| 1 | nbody compiles to native code, runs, passes the correctness oracle |
 | 2 | no bounds-check branch in the inner loop, verified in disassembly. **Not independently valuable**, see below |
 | 3 | beats phase 3 configuration 5, tuned scalar SBCL |
 | 4 | packed AVX-512 in the inner loop, verified in disassembly |

@@ -23,8 +23,8 @@ Nothing. This is the first phase.
 
 ## Work items
 
-1. Install the measurement and Scheme toolchains: `sbcl chezscheme racket hyperfine
-   unzip`. Roughly 872 MB across 13 packages with `--no-install-recommends`.
+1. Install the measurement and Scheme toolchains: `sbcl chezscheme racket hyperfine`.
+   Roughly 872 MB across 13 packages with `--no-install-recommends`.
 2. Install the reference-point toolchains: `gnat-15` for Ada, `ecl` and `clisp` for
    the Common Lisp controls, `stalin` as optional.
 3. Determine Tangerine support per implementation. For Chez and Racket, check whether
@@ -42,8 +42,8 @@ Nothing. This is the first phase.
    a saved core or a fasl, GNAT needs `gnatmake`, Stalin compiles through C.
 7. Test whether `perf` hardware counters work under this WSL2 kernel. A `cpu` PMU node
    exists and `perf_event_paranoid` is 2, so it may. Do not block on it.
-8. Extract the nbody sources for SBCL and Racket from the Benchmarks Game zip, and the
-   per-entry compiler flags from `public/program/*.html`.
+8. Write the nbody reference variant and pin the initial conditions and expected
+   energies. We vendor no upstream sources; see `../../METHOD.md`'s correctness oracle.
 
 ## Acceptance criteria
 

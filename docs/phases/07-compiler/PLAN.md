@@ -266,7 +266,7 @@ decision. The mitigation is differential testing: compile every program twice, o
 analysis disabled, and diff the outputs. Any divergence is a soundness bug.
 
 **Vectorization has correctness traps beyond legality.** Reassociating floating point
-changes results, and nbody's output is checked to nine decimal places against a fixture. A
+changes results, and nbody's energy output is checked to nine decimal places. A
 reduction cannot be vectorized without either accepting a different answer or using an
 ordered reduction. Decide this explicitly per loop rather than discovering it as a failing
 diff.

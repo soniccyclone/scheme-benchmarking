@@ -198,5 +198,6 @@ asks.
 - The AOT recipes, one per implementation.
 - The recompilation trap test, which is the acceptance criterion that catches the single
   most common failure mode for a benchmark of this kind.
-- The Benchmarks Game corpus is not on this machine. Item 8 needs the zip re-fetched
-  before the nbody sources and per-entry compiler flags can be extracted.
+- `bench/nbody/SPEC.md`: the initial conditions, expected energies and expression order
+  that every variant is written against. **Not** an extraction from the Benchmarks Game
+  zip, which per `LEDGER.md` D16 we no longer depend on in any form.

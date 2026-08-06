@@ -40,8 +40,9 @@ complete, so N values and the noise floor are known.
    generation," and the published ratios hide that distinction.
 7. Run configurations 1 through 4 on both Chez and Racket. `RESEARCH.md` section 4 says
    they are within 15% on numeric code, so any large divergence here is a finding.
-8. Verify every configuration produces identical output against the Benchmarks Game
-   fixture before trusting any timing from it.
+8. Verify every configuration passes `../../METHOD.md`'s correctness oracle before
+   trusting any timing from it: energy conservation, cross-agreement to nine decimals,
+   and the one-time check against the published energies.
 
 ## Acceptance criteria
 
@@ -68,7 +69,7 @@ answer. Fallback is native unboxed vectors with a portability caveat attached to
 resulting number.
 
 **Entry-quality contamination.** We are writing all nine variants ourselves, which is
-the whole reason for not reusing the frozen Benchmarks Game entries. Guard against
+the whole reason for writing every variant ourselves. Guard against
 accidentally tuning one configuration harder than another: each should be the best
 honest expression of its own constraint, not a demonstration of a preferred
 conclusion.

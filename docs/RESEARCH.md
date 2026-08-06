@@ -346,8 +346,7 @@ small file and we only want the number.
 
 `stalin` 0.11-11build1 is packaged for Ubuntu 26.04. Porting nbody to its R4RS dialect is
 mechanical: no `import`, no `define-record-type`, no bytevectors, `exact->inexact` instead of
-`inexact`. The arithmetic expression order has to stay identical so the output still matches
-the fixture.
+`inexact`. The arithmetic expression order has to stay identical, or the low digits diverge.
 
 ---
 

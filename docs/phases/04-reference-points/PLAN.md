@@ -53,8 +53,8 @@ inference and this project is aimed at the wrong target.
 Last because it is the least dependent on the other two, not because it matters least.
 Stalin 0.11 targets R4RS and predates R7RS by seven years, so the port is a rewrite into
 R4RS: no `import`, no `define-record-type`, no bytevectors, `exact->inexact` instead of
-`inexact`. Keep the arithmetic expression order identical so the output still matches the
-fixture.
+`inexact`. Keep the arithmetic expression order identical, or the low digits diverge and
+cross-agreement fails for a reason that has nothing to do with Stalin.
 
 `RESEARCH.md` section 3 already extracted Stalin's profile from the `r7rs-benchmarks` data:
 bimodal, 2x to 4x faster than Chez on float and array code, 5x to 16x slower where lifetime
@@ -66,7 +66,7 @@ What it adds is Stalin on the same program and machine as everything else.
 1. nbody in Ada, three check configurations, built with `gnatmake`.
 2. Configuration 5's Common Lisp source run under ECL and CLISP unchanged.
 3. Optional: nbody ported to Stalin's R4RS dialect, compiled through C.
-4. Output verification against the fixture for each, same as phase 3.
+4. Correctness oracle for each, same as phase 3.
 
 ## Acceptance criteria
 
