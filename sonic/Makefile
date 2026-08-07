@@ -70,6 +70,8 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/reloc-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/pipeline-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss
