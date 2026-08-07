@@ -204,7 +204,7 @@
                          [else (Expr rhs)]))
                      x* e*)
            (Expr body)]
-          [(declare ([,x* ,pn*] ...) ,body) (use*! x*) (Expr body)]
+          [(declare ([,x* ,prem*] ...) ,body) (use*! x*) (Expr body)]
           ;; declare-distinct's variables are REFERENCES, like declare's. Missing
           ;; this clause did not merely lose the premise, it lost the BODY: an
           ;; unhandled form falls to `else` and the subtree under it was never
@@ -333,7 +333,7 @@
                          [else (walk rhs escaping?)]))
                      x* e*)
            (walk body escaping?)]
-          [(declare ([,x* ,pn*] ...) ,body)
+          [(declare ([,x* ,prem*] ...) ,body)
            (for-each (lambda (x) (ref! x escaping?)) x*)
            (walk body escaping?)]
           ;; The premise. Recorded, not checked: see the header note on

@@ -368,7 +368,7 @@
 
         [(seq ,e0 ,e1) (walk e0 fn guards facts) (walk e1 fn guards facts)]
         [(policy ([,pn* ,b*] ...) ,body) (walk body fn guards facts)]
-        [(declare ([,x* ,pn*] ...) ,body) (walk body fn guards facts)]
+        [(declare ([,x* ,prem*] ...) ,body) (walk body fn guards facts)]
         [(declare-distinct (,x* ...) ,body) (walk body fn guards facts)]
         ;; Lssa should be free of set! by assignment conversion, but if one
         ;; survives the assigned name is not single-valued and must never be

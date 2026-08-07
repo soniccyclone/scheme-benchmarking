@@ -54,7 +54,7 @@
         [(let ([,x ,se0]) ,body) (loop body (se se0 acc))]
         [(lambda (,x* ...) ,body) acc]
         [(letrec ([,x* ,e*] ...) ,body) (loop body acc)]
-        [(declare ([,x* ,pn*] ...) ,body) (loop body acc)]
+        [(declare ([,x* ,prem*] ...) ,body) (loop body acc)]
         [(policy ([,pn* ,b*] ...) ,body) (loop body acc)]
         [else acc]))))
 
@@ -99,7 +99,7 @@
       [(lambda (,x* ...) ,body) (loop body (append x* acc))]
       [(letrec ([,x* ,e*] ...) ,body)
        (loop body (fold-left (lambda (a r) (loop r a)) (append x* acc) e*))]
-      [(declare ([,x* ,pn*] ...) ,body) (loop body acc)]
+      [(declare ([,x* ,prem*] ...) ,body) (loop body acc)]
       [(policy ([,pn* ,b*] ...) ,body) (loop body acc)]
       [else acc])))
 
@@ -133,7 +133,7 @@
       [(lambda (,x* ...) ,body) (rm x* (fv body))]
       [(letrec ([,x* ,e*] ...) ,body)
        (rm x* (fold-left (lambda (s r) (u s (fv r))) (fv body) e*))]
-      [(declare ([,x* ,pn*] ...) ,body) (u x* (fv body))]
+      [(declare ([,x* ,prem*] ...) ,body) (u x* (fv body))]
       [(policy ([,pn* ,b*] ...) ,body) (fv body)]
       [else '()])))
 

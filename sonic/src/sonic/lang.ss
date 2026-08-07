@@ -18,6 +18,7 @@
           storage-class? vreg? mach-op?
           primitive? control? policy-name? datum?
           check-name? all-check-names
+          premise-name? all-premise-names
           prim-checks prim-arity default-controls)
   (import (chezscheme) (nanopass))
 
@@ -117,7 +118,24 @@
     '(bounds-check type-check overflow-check div-check fp-contract))
   (define (check-name? x) (and (memq x check-names) #t))
   (define (all-check-names) check-names)
+
+  ;; POLICY names a check to suppress. PREMISE asserts a fact for the
+  ;; inferencer to propagate. They were the same vocabulary, which meant
+  ;; `declare` could only ever say "this check may be omitted" and could not say
+  ;; anything about the VALUE -- no way to assert non-aliasing (which got its
+  ;; own production) and no way to assert non-NaN.
+  ;;
+  ;; non-nan is why this split had to happen now. A negated flonum comparison
+  ;; licenses nothing, because NaN makes every comparison false, so
+  ;; (not (fl< a b)) is true for NaN while (fl>= a b) is false. With a non-NaN
+  ;; premise in scope the negation becomes usable again, and without one the
+  ;; false edge of every float guard is dead to the analysis forever.
   (define (policy-name? x) (check-name? x))
+
+  (define premise-names
+    (append check-names '(non-nan fixnum flonum flvector vector)))
+  (define (premise-name? x) (and (memq x premise-names) #t))
+  (define (all-premise-names) premise-names)
 
   ;; --- storage classes, for Lrepr -------------------------------------------
   ;; SBCL's IR2 is the reference: values get assigned to a specific storage
@@ -175,6 +193,7 @@
       (primitive   (pr))
       (control     (c))
       (policy-name (pn))
+      (premise-name (prem))
       (boolean     (b))
       (datum       (d)))
     (Expr (e body)
@@ -215,7 +234,7 @@
       ;; expander boundary silently drops a guarantee that let*-heavy code
       ;; leans on.
       (letrec* ([x* e*] ...) body)
-      (declare ([x* pn*] ...) body)
+      (declare ([x* prem*] ...) body)
       ;; DISTINCTNESS as a premise. `declare` can only assert check names, so
       ;; there was no way to write "these arrays do not alias each other" and
       ;; alias analysis had to answer `may` for every kernel that receives its

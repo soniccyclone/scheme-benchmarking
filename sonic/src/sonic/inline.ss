@@ -123,7 +123,7 @@
       [(lambda (,x* ...) ,body) (+ 1 (length x*) (expr-size body))]
       [(letrec ([,x* ,e*] ...) ,body)
        (+ 1 (apply + (map expr-size e*)) (expr-size body))]
-      [(declare ([,x* ,pn*] ...) ,body) (+ 1 (expr-size body))]
+      [(declare ([,x* ,prem*] ...) ,body) (+ 1 (expr-size body))]
       [(policy ([,pn* ,b*] ...) ,body) (+ 1 (expr-size body))]
       [else 1]))
 
@@ -144,7 +144,7 @@
       [(seq ,e0 ,e1) (tail-count e1)]
       [(let ([,x ,se]) ,body) (tail-count body)]
       [(letrec ([,x* ,e*] ...) ,body) (tail-count body)]
-      [(declare ([,x* ,pn*] ...) ,body) (tail-count body)]
+      [(declare ([,x* ,prem*] ...) ,body) (tail-count body)]
       [(policy ([,pn* ,b*] ...) ,body) (tail-count body)]
       [else 1]))
 
@@ -190,7 +190,7 @@
                          [else (Expr rhs from)]))
                      x* e*)
            (Expr body from)]
-          [(declare ([,x* ,pn*] ...) ,body) (for-each use! x*) (Expr body from)]
+          [(declare ([,x* ,prem*] ...) ,body) (for-each use! x*) (Expr body from)]
           [(policy ([,pn* ,b*] ...) ,body) (Expr body from)]
           [else (void)]))
       (define (SimpleExpr se from)
@@ -263,9 +263,9 @@
                 [sub1 (append (map cons x* x1*) sub)]
                 [e1* (map (lambda (r) (freshen r sub1)) e*)])
            `(letrec ([,x1* ,e1*] ...) ,(freshen body sub1)))]
-        [(declare ([,x* ,pn*] ...) ,body)
+        [(declare ([,x* ,prem*] ...) ,body)
          (let ([x1* (map (lambda (a) (rn a sub)) x*)])
-           `(declare ([,x1* ,pn*] ...) ,(freshen body sub)))]
+           `(declare ([,x1* ,prem*] ...) ,(freshen body sub)))]
         [(policy ([,pn* ,b*] ...) ,body)
          `(policy ([,pn* ,b*] ...) ,(freshen body sub))]
         [else e])))
@@ -310,7 +310,7 @@
         [(let ([,x ,se]) ,body) `(let ([,x ,se]) ,(splice body r k))]
         [(seq ,e0 ,e1) `(seq ,e0 ,(splice e1 r k))]
         [(letrec ([,x* ,e*] ...) ,body) `(letrec ([,x* ,e*] ...) ,(splice body r k))]
-        [(declare ([,x* ,pn*] ...) ,body) `(declare ([,x* ,pn*] ...) ,(splice body r k))]
+        [(declare ([,x* ,prem*] ...) ,body) `(declare ([,x* ,prem*] ...) ,(splice body r k))]
         [(policy ([,pn* ,b*] ...) ,body) `(policy ([,pn* ,b*] ...) ,(splice body r k))]
         ;; Unreachable: rule 5 checked tail-count = 1 before we got here. If it
         ;; fires, the check and this walk have drifted apart.
@@ -366,8 +366,8 @@
               [(letrec ([,x* ,e*] ...) ,body)
                (let ([e1* (map (lambda (r) (Expr r stack)) e*)])
                  `(letrec ([,x* ,e1*] ...) ,(Expr body stack)))]
-              [(declare ([,x* ,pn*] ...) ,body)
-               `(declare ([,x* ,pn*] ...) ,(Expr body stack))]
+              [(declare ([,x* ,prem*] ...) ,body)
+               `(declare ([,x* ,prem*] ...) ,(Expr body stack))]
               [(policy ([,pn* ,b*] ...) ,body)
                `(policy ([,pn* ,b*] ...) ,(Expr body stack))]
               [else e])))

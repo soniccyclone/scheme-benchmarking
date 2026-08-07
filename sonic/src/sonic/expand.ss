@@ -7,6 +7,7 @@
 ;;;   (quote d)   (if e0 e1 e2)   (lambda (x ...) e)   (let ([x e] ...) e)
 ;;;   (letrec ([x e] ...) e)      (begin e e ...)      (set! x e)
 ;;;   (declare ([x pn] ...) e)    (policy ([pn b] ...) e)
+;;;   (declare-distinct (x ...) e)
 ;;;   (define x e)                                  -- top level only
 ;;;   (e0 e1 ...)                                   -- an application
 ;;;
@@ -219,7 +220,7 @@
     '(quote if lambda let let* letrec letrec* begin set!
       define define-syntax let-syntax letrec-syntax
       syntax-rules when unless cond and or else =>
-      declare policy import))
+      declare declare-distinct policy import))
 
   ;; --- syntax-rules transformers --------------------------------------------
   ;;
@@ -863,6 +864,7 @@
       ((cond) (expand-cond form env))
 
       ((declare) (expand-declare form env))
+      ((declare-distinct) (expand-declare-distinct form env))
       ((policy) (expand-policy form env))
 
       ((let-syntax letrec-syntax)
@@ -984,6 +986,45 @@
                    (list (expand-reference (car p) env) (id-name (cadr p))))
                  prems)
             (expand-body (cddr form) env))))
+
+  ;; (declare-distinct (a b ...) body ...)
+  ;;
+  ;; THE SPELLING, and why it is this one. C99 writes `restrict` as a qualifier
+  ;; on a pointer DECLARATOR, which Scheme has nowhere to hang: there is no
+  ;; declarator, and a formal parameter list is a list of bare identifiers.
+  ;; Ada writes it as a pragma, which is the same shape as this. So the premise
+  ;; goes where every other premise in this language goes, in a `declare`-family
+  ;; form over a body, and it keeps the name the core language already uses.
+  ;;
+  ;; NOT `assert-distinct`, and the difference is not cosmetic: `assert` in
+  ;; every Scheme that has one names something CHECKED at run time, and this is
+  ;; never checked anywhere. It is asserted by the programmer and believed by
+  ;; the compiler, and if it is false the program computes wrong numbers with no
+  ;; diagnostic. `declare` is the R7RS-adjacent word for a premise the compiler
+  ;; takes on faith, and (sonic alias) documents the undefined behaviour.
+  ;;
+  ;; A GROUP OF ONE IS REFUSED, and so is a repeated name. `alias-query` will
+  ;; not answer `must-not` for a name against itself, so a one-name group asserts
+  ;; nothing and is a typo every time; a repeated name is a premise the
+  ;; programmer has already violated in the act of writing it. This is the one
+  ;; place either mistake can be caught cheaply, so it is caught here.
+  (define (expand-declare-distinct form env)
+    (unless (and (list? form) (>= (length form) 3))
+      (ex-error "malformed declare-distinct" (strip form)))
+    (let ((names (cadr form)))
+      (unless (and (list? names) (for-all symbol? names))
+        (ex-error "declare-distinct takes a list of identifiers" (strip form)))
+      (unless (>= (length names) 2)
+        (ex-error "declare-distinct needs at least two names to be about"
+                  (strip form)))
+      (let ((out (map (lambda (n) (expand-reference n env)) names)))
+        (let loop ((ns out) (seen '()))
+          (cond ((null? ns) 'ok)
+                ((memq (car ns) seen)
+                 (ex-error "declare-distinct names one variable twice; nothing is distinct from itself"
+                           (id-name (car ns))))
+                (else (loop (cdr ns) (cons (car ns) seen)))))
+        (list 'declare-distinct out (expand-body (cddr form) env)))))
 
   (define (expand-policy form env)
     (unless (and (list? form) (>= (length form) 3))

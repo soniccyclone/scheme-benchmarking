@@ -226,9 +226,32 @@
 
   ;; The comparison the domain may assume on this edge, as one of < <= > >= =,
   ;; or #f for "this edge licenses no conclusion".
-  (define (iv-edge-cmp cmp negated?)
-    (let ((row (assq cmp cmp-table)))
-      (and row (if negated? (caddr row) (cadr row)))))
+  ;; `non-nan?` is the premise that unlocks negated flonum comparisons.
+  ;;
+  ;; Without it, (not (fl< a b)) licenses nothing, because NaN makes every
+  ;; comparison false so the negation is TRUE for NaN while (fl>= a b) is FALSE.
+  ;; With a non-NaN premise in scope for both operands, the ordering is total
+  ;; again and the flonum rows behave exactly like the fixnum ones.
+  ;;
+  ;; Defaults to #f, so the safe answer is what you get for free and the
+  ;; permissive one has to be asked for.
+  (define iv-edge-cmp
+    (case-lambda
+      ((cmp negated?) (iv-edge-cmp cmp negated? #f))
+      ((cmp negated? non-nan?)
+       (let ((row (assq cmp cmp-table)))
+         (cond
+          ((not row) #f)
+          ((not negated?) (cadr row))
+          ;; a negated flonum comparison, under a non-NaN premise, gets the
+          ;; ordering the fixnum spelling would have given.
+          ((and non-nan? (flonum-cmp? cmp)) (caddr (assq (fx-twin cmp) cmp-table)))
+          (else (caddr row)))))))
+
+  (define (flonum-cmp? c) (and (memq c '(fl< fl<= fl> fl>= fl=)) #t))
+  (define (fx-twin c)
+    (cond ((eq? c 'fl<) 'fx<) ((eq? c 'fl<=) 'fx<=) ((eq? c 'fl>) 'fx>)
+          ((eq? c 'fl>=) 'fx>=) (else 'fx=)))
 
   ;; Refine BOTH operands of a comparison on one of its edges. Returns
   ;; (values a' b'), and returns them unchanged when the edge licenses nothing,
@@ -237,8 +260,13 @@
   ;; Both operands, because the edge constrains both: the true edge of a < b
   ;; says as much about b as it does about a, and ABCD's constraint graph wants
   ;; the vertex either way.
-  (define (iv-refine cmp negated? a b)
-    (let ((c (iv-edge-cmp cmp negated?)))
+  (define iv-refine
+    (case-lambda
+      ((cmp negated? a b) (iv-refine cmp negated? a b #f))
+      ((cmp negated? a b non-nan?) (iv-refine* cmp negated? a b non-nan?))))
+
+  (define (iv-refine* cmp negated? a b non-nan?)
+    (let ((c (iv-edge-cmp cmp negated? non-nan?)))
       (cond
        ((not c) (values a b))
        ((eq? c '<)  (values (iv-lt-refine a b)

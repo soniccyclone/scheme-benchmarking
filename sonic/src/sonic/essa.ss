@@ -341,9 +341,9 @@
 
       ;; declare's variables are REFERENCES, not binders: the form states a
       ;; premise about a variable already in scope.
-      [(declare ([,x* ,pn*] ...) ,body)
+      [(declare ([,x* ,prem*] ...) ,body)
        (let ([x^* (map (lambda (x) (env-lookup env x)) x*)])
-         `(declare ([,x^* ,pn*] ...) ,(Expr body env facts val?)))]
+         `(declare ([,x^* ,prem*] ...) ,(Expr body env facts val?)))]
 
       [(policy ([,pn* ,b*] ...) ,body)
        `(policy ([,pn* ,b*] ...) ,(Expr body env facts val?))]
