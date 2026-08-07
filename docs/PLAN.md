@@ -195,7 +195,7 @@ noted.
 | 4 | `phases/04-reference-points/` | configurations 7, 8, 9 | **done**: D5 ratified, Stalin closed as not measurable |
 | 5 | `phases/05-portable-library/` | the compatibility layer | optional, and now unattractive: config 2b shows the portable spelling can cost 6.35x |
 | 6 | `phases/06-writeup/` | the standards timeline with measured deltas attached | ready to write |
-| **7** | **`phases/07-compiler/`** | **SonicScheme: an optimizing Scheme that reaches and beats CL-level optimization** | **in progress** |
+| **7** | **`phases/07-compiler/`** | **SonicScheme: an optimizing Scheme that reaches and beats CL-level optimization** | **in progress**: 11 stages compose on real nbody, 50 checks proved, both back ends emit verified objects. See `RESULTS.md` |
 
 Phase 1 could have invalidated the premise of phases 3 and 5; phase 3 could have
 invalidated the proposal. Neither did, and the measurements sharpened the target
