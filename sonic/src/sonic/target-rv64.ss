@@ -70,6 +70,7 @@
           rv64-trap-label rv64-call-emitter)
   (import (chezscheme)
           (sonic litpool)
+          (sonic numeric)
           (sonic lang)
           (sonic regs)
           (sonic callconv)
@@ -251,15 +252,17 @@
   ;; walks. One load at a constant offset.
   (define (r:vlen dst sc srcs)
     (arity-check! 'rv64-select 1 srcs)
-    `((ld ,dst ,(car srcs) -8)))
+    ;; The length word. The displacement absorbs both the header offset and the
+    ;; pointer tag (numeric.ss): a pointer is tagged and nothing strips it.
+    `((ld ,dst ,(car srcs) ,heap-length-disp)))
 
   (define (r:load dst sc srcs)
     (arity-check! 'rv64-select 2 srcs)
     (let ((t (rv64-addr-scratch)) (base (car srcs)) (idx (cadr srcs)))
       (append (address-into t base idx sc)
               (if (float? sc)
-                  `((fld ,dst ,t 0))
-                  `((ld ,dst ,t 0))))))
+                  `((fld ,dst ,t ,heap-element-disp))
+                  `((ld ,dst ,t ,heap-element-disp))))))
 
   ;; (store <unused> sc base idx val). Lmach's `(op v sc v* ...)` makes the
   ;; destination slot mandatory even for an op with no result, and `store-mach`
@@ -278,8 +281,8 @@
           (base (car srcs)) (idx (cadr srcs)) (val (caddr srcs)))
       (append (address-into t base idx sc)
               (if (float? sc)
-                  `((fsd ,val ,t 0))
-                  `((sd ,val ,t 0))))))
+                  `((fsd ,val ,t ,heap-element-disp))
+                  `((sd ,val ,t ,heap-element-disp))))))
 
   ;; --- control --------------------------------------------------------------
   ;; Reached from `select-block` with dst and sc both #f.

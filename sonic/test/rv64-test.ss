@@ -10,7 +10,7 @@
 
 (import (chezscheme) (rnrs io simple)
         (sonic lang) (sonic fixtures) (sonic select)
-        (sonic regs) (sonic target-rv64) (sonic encode-rv64) (sonic litpool))
+        (sonic regs) (sonic target-rv64) (sonic encode-rv64) (sonic litpool) (sonic numeric))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -48,12 +48,15 @@
 ;; an add and an fld here, because RISC-V has no indexed addressing mode.
 (ck! "the fixture selects to exactly the rv64gc sequence it should"
      (equal? entry-instrs
-             '((addi v-seven zero 7)
+             `((addi v-seven zero 7)
                (mul v-off v-i v-seven)
                (add v-idx v-off v-k)
                (slli t0 v-idx 3)
                (add t0 v-b t0)
-               (fld v-val t0 0)
+               ;; -1, not 0: the displacement absorbs the heap pointer tag,
+               ;; because a pointer is tagged and nothing strips it before the
+               ;; load. See numeric.ss `heap-element-disp`.
+               (fld v-val t0 ,heap-element-disp)
                (jalr zero ra 0))))
 
 (define (mnemonics-of instrs) (map car instrs))

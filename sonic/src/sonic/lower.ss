@@ -92,7 +92,18 @@
 
   ;; numeric.ss fixes a 3-bit tag scheme with fixnum at 000. A type check needs
   ;; to name which tag it expects; the other checks have no such constant.
-  (define (expected-tag name) (if (eq? name 'type-check) 1 0))
+  ;; The tag a surviving type check compares against.
+  ;;
+  ;; `heap-tag` for a type check, and it is the same for every heap type on
+  ;; purpose: numeric.ss puts the TYPE in the object header rather than in the
+  ;; pointer tag, so a load's displacement is one constant instead of one per
+  ;; type. A type check here therefore asks "is this a heap object", and the
+  ;; predicates that need more than that pay a header load.
+  ;;
+  ;; The other checks have no tag to compare -- there is no such thing as the
+  ;; expected tag of a bounds check -- and pass 0, which is why the mach-op
+  ;; spelling that could not distinguish "no tag" from "tag 0" had to go (D27).
+  (define (expected-tag name) (if (eq? name 'type-check) heap-tag 0))
 
   ;; A literal's storage class follows its TYPE, and hardcoding raw-word was a
   ;; real bug: (define days-per-year 365.24) lowered to (const t raw-word

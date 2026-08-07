@@ -191,6 +191,12 @@
           imm-tag imm-tag-bits imm-sec-bits make-immediate sonic-immediate?
           sonic-false sonic-true sonic-null sonic-unspecified sonic-eof
           sonic-boolean-tag
+          ;; heap objects
+          heap-tag heap-pointer?
+          heap-type-vector heap-type-flvector heap-type-pair
+          heap-type-string heap-type-procedure
+          heap-header-words heap-header-bytes
+          heap-element-disp heap-length-disp heap-type-disp
           fx-least fx-greatest
           sonic-fixnum? sonic-flonum?
           fx-fits? fx-wrap
@@ -274,6 +280,51 @@
     (= (bitwise-and w #b111) imm-tag))
 
   (define (sonic-boolean-tag b) (if b sonic-true sonic-false))
+
+  ;; --- heap objects ---------------------------------------------------------
+  ;;
+  ;; One pointer tag for every heap type, with the type in the object's HEADER
+  ;; rather than in the tag.
+  ;;
+  ;; The alternative -- a tag per heap type, which the three spare tags would
+  ;; almost afford -- looks cheaper and is not, because of what a LOAD then
+  ;; costs. `flvector-ref` and `vector-ref` lower to the same Lmach `load`, and
+  ;; a load's displacement has to absorb the tag: element i sits at
+  ;; [ptr + 8i - tag]. With one tag that displacement is a constant the selector
+  ;; already emits for free. With a tag per type, Lmach's `load` would have to
+  ;; carry the base's heap type so the selector could pick the right constant --
+  ;; an IR change, on the instruction in the hot loop, to answer a question only
+  ;; `vector?` and `flvector?` ever ask.
+  ;;
+  ;; So: tag 001 is a heap pointer, and the type is a word in the header. The
+  ;; predicates pay one load; the loop pays nothing.
+  ;;
+  ;;   [raw +  0]  type word
+  ;;   [raw +  8]  length, a RAW count (what `vlen` yields, used directly as a
+  ;;               bounds limit -- so it is not a fixnum)
+  ;;   [raw + 16]  element 0
+  ;;
+  ;;   pointer = raw + 16 + heap-tag
+  ;;
+  ;; The pointer aims at ELEMENT ZERO, not at the header, so indexing needs no
+  ;; addition beyond the tag adjustment the displacement already carries.
+  (define heap-tag 1)
+
+  (define heap-type-vector    0)
+  (define heap-type-flvector  1)
+  (define heap-type-pair      2)
+  (define heap-type-string    3)
+  (define heap-type-procedure 4)
+
+  (define heap-header-words 2)
+  (define heap-header-bytes (* 8 heap-header-words))
+
+  ;; Displacements, stated once so the two selectors cannot drift apart.
+  (define heap-element-disp (- heap-tag))                 ; [ptr + 8i - 1]
+  (define heap-length-disp  (- (- 8) heap-tag))           ; [ptr - 9]
+  (define heap-type-disp    (- (- 16) heap-tag))          ; [ptr - 17]
+
+  (define (heap-pointer? w) (= (bitwise-and w #b111) heap-tag))
 
   (define fx-tag-bits    3)
   (define fx-value-bits (- fx-word-bits fx-tag-bits))       ; 61, sign included

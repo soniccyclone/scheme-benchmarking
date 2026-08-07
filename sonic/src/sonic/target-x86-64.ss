@@ -55,6 +55,7 @@
   (import (chezscheme)
           (sonic select)
           (sonic litpool)
+          (sonic numeric)
           (sonic callconv)
           (sonic callseq)
           (sonic regs))
@@ -73,6 +74,7 @@
   ;; Same addressing mode with a constant displacement and no index, for header
   ;; fields at a fixed negative offset from the element data.
   (define (mem-disp base disp) `(mem ,base #f ,word-scale ,disp))
+  (define (mem/disp base index disp) `(mem ,base ,index ,word-scale ,disp))
 
   ;; --- the three-address to two-address rewrite -----------------------------
 
@@ -285,13 +287,16 @@
            (lambda (dst sc srcs)
              (unless (= (length srcs) 1)
                (error 'x86-64-selector "vlen expects one vector" srcs))
-             `((mov ,dst ,(mem-disp (car srcs) -8)))))
+             ;; The length word, at a displacement that absorbs BOTH the header
+             ;; offset and the pointer tag (numeric.ss). A pointer is tagged and
+             ;; nothing strips it, so the displacement has to.
+             `((mov ,dst ,(mem-disp (car srcs) heap-length-disp)))))
 
      (cons 'load
            (lambda (dst sc srcs)
              (let ((addr (case (length srcs)
-                           ((1) (mem (car srcs) #f))
-                           ((2) (mem (car srcs) (cadr srcs)))
+                           ((1) (mem/disp (car srcs) #f heap-element-disp))
+                           ((2) (mem/disp (car srcs) (cadr srcs) heap-element-disp))
                            (else (error 'x86-64-selector
                                         "load expects a base and an optional index" srcs)))))
                `((,(mov-for sc) ,dst ,addr)))))
@@ -306,7 +311,9 @@
              (unless (= (length srcs) 3)
                (error 'x86-64-selector
                       "store expects (store <unused> sc base index value)" dst srcs))
-             `((,(mov-for sc) ,(mem (car srcs) (cadr srcs)) ,(caddr srcs)))))
+             `((,(mov-for sc)
+                ,(mem/disp (car srcs) (cadr srcs) heap-element-disp)
+                ,(caddr srcs)))))
 
      (cons 'move
            (lambda (dst sc srcs) `((,(mov-for sc) ,dst ,(car srcs)))))
