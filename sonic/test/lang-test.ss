@@ -98,6 +98,22 @@
 (reject! "primcall with non-atomic operands is refused in ANF"
   '(with-output-language (Lanf Expr) `(primcall fl+ ([fp-contract unchecked]) (primcall fl* ([fp-contract unchecked]) a b) c)))
 
+;; --- the gaps the expander agent found -------------------------------------
+
+(ok! "void is a distinct value, not (quote ())"
+     (lambda () (with-output-language (Lcore Expr) `(if (void) (void) (void)))))
+
+(ok! "set! exists, so the expander has somewhere to put assignment"
+     (lambda () (with-output-language (Lcore Expr) `(set! x (quote 1)))))
+
+(ok! "letrec* is distinct from letrec, so sequential init survives"
+     (lambda () (with-output-language (Lcore Expr)
+                  `(letrec* ([a (quote 1)] [b (quote 2)]) b))))
+
+(ok! "there is a top-level Program production"
+     (lambda () (with-output-language (Lcore Program)
+                  `(top ([f (lambda (x) x)]) (call f (quote 1))))))
+
 ;; --- the downstream IR contracts -------------------------------------------
 ;; The contract is that a pass author can CONSTRUCT valid input for their own
 ;; stage with no upstream pass in existence. That is what converts the pipeline

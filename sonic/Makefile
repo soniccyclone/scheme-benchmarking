@@ -32,6 +32,8 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/emit-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/expand-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss

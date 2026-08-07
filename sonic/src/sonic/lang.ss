@@ -184,11 +184,32 @@
       ;; PREMISES. (declare ((x pn) ...) body) asserts facts the inferencer may
       ;; propagate. This is what SRFI 145 would have been if anyone shipped it,
       ;; and phase 1 found nobody does.
+      ;; The unspecified value. NOT (quote ()) and not any other datum: a
+      ;; one-armed `if`, a `when` that does not fire, a falling-off `cond` and
+      ;; an empty `begin` all need a value that is not confusable with a real
+      ;; one. Spelling it as the empty list makes it TRUTHY, so
+      ;; (if (when #f 1) 'a 'b) would give 'a, which is wrong.
+      (void)
+      ;; Assignment. `letrec` alone cannot express it, and every benchmark past
+      ;; config1 mutates a vector, so the expander had nowhere to put `set!`.
+      ;; Assignment conversion (boxing a mutated variable into a one-slot cell)
+      ;; is a later pass and needs this production to consume.
+      (set! x e)
+      ;; letrec* as well as letrec. R7RS gives letrec* SEQUENTIAL initialization
+      ;; and internal defines expand to it, so collapsing the two at the
+      ;; expander boundary silently drops a guarantee that let*-heavy code
+      ;; leans on.
+      (letrec* ([x* e*] ...) body)
       (declare ([x* pn*] ...) body)
       ;; LEXICAL check policy. The thing no Scheme standard has ever had.
       ;; (policy ((pn on?) ...) body)
       (policy ([pn* b*] ...) body)
-      (begin e* ... e)))
+      (begin e* ... e))
+    ;; A top-level program. Lmach had a `program` production and Lcore did not,
+    ;; so the expander had nowhere to put top-level definitions and stage 03
+    ;; would have had to invent the shape.
+    (Program (prog)
+      (top ([x* e*] ...) body)))
 
   ;; --- Lanf -----------------------------------------------------------------
   ;; A-normal form. Every intermediate is named.
@@ -205,6 +226,7 @@
          (let ([x* e*] ...) body)
          (call e0 e* ...)
          (primcall pr ([pn* c*] ...) e* ...)
+         (letrec* ([x* e*] ...) body)
          (begin e* ... e))
       ;; Operands are now atoms only.
       ;;
