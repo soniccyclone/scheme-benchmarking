@@ -34,6 +34,7 @@
           (sonic lang) (sonic read) (sonic expand) (sonic parse) (sonic policy)
           (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide)
           (sonic repr) (sonic lift) (sonic lower) (sonic globals)
+          (sonic shapes)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
           (sonic order)
@@ -49,7 +50,15 @@
                   (resolve-policy-program
                    (parse-program (expand-program (read-all-from-file path))
                                   externs)))))))
-      (let*-values (((p1 elide-st) (elide-program (essa-program p0)))
+      ;; SHAPES BEFORE ELISION. The interval domain can discharge nbody's inner
+      ;; loop arithmetically and never had the premises: a vector's length was
+      ;; never connected to the `make-flvector` that produced it, and a
+      ;; top-level `(define n-bodies 5)` read as unknown. shapes.ss derives both
+      ;; and propagates them across call sites, which is required rather than
+      ;; nice -- the kernels take their vectors as PARAMETERS, so a fact that
+      ;; stops at the allocation never reaches the loop that needs it.
+      (let*-values (((ssa) (essa-program p0))
+                    ((p1 elide-st) (elide-program ssa (shape-facts (unparse-Lssa ssa))))
                     ((p2 rp) (select-representations-program p1))
                     ((lifted lrep) (lift-program (unparse-Lrepr p2))))
         (let*-values (((prog0 lower-st) (lower-toplevel lifted 'main

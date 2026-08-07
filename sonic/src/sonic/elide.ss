@@ -184,6 +184,37 @@
                      (filter (lambda (ob) (memq x1 ob)) (eenv-proved env)))])
       (with-obligations e3 obs)))
 
+  ;; What a SimpleExpr teaches about the binding it initializes, beyond its
+  ;; interval: its kind, and for a vector its LENGTH.
+  ;;
+  ;; Without this, `(define pos (make-flvector 15 0.0))` says nothing about
+  ;; pos, so `flvector-length pos` is `[0, +inf)` and every index against it is
+  ;; unprovable. That is why nbody's inner loop kept 18 bounds checks while the
+  ;; interval domain was perfectly capable of discharging them: it had the
+  ;; arithmetic and not the premise.
+  ;;
+  ;; The length is taken from the allocation's own argument, so it is a fact
+  ;; about this program rather than an assumption -- `make-flvector` returns a
+  ;; vector of exactly the length it was asked for, and the ARGUMENT's interval
+  ;; is used rather than requiring a literal, so a size computed from constants
+  ;; works too.
+  (define (se-shape-facts env x se)
+    (nanopass-case (Lssa SimpleExpr) se
+      [(primcall ,pr ([,pn* ,c*] ...) ,x* ...)
+       (case pr
+         [(make-flvector make-vector)
+          (let* ([kind (if (eq? pr 'make-flvector) 'flvector 'vector)]
+                 [iv (and (pair? x*) (iv-of env (car x*)))]
+                 ;; Only a SINGLETON interval gives a length. A range would be
+                 ;; an upper bound at best, and a bounds proof built on "at
+                 ;; most this long" is not a proof.
+                 [lo (and iv (interval-lo iv))]
+                 [hi (and iv (interval-hi iv))]
+                 [n (and lo hi (integer? lo) (integer? hi) (= lo hi) lo)])
+            (with-len (with-kind env x kind) x n))]
+         [else env])]
+      [else env]))
+
   ;; --- facts the caller supplies --------------------------------------------
   ;;
   ;; A real pipeline gets these from the enclosing scope. A fixture has no
@@ -385,7 +416,8 @@
                   [ali (se-alias se)]
                   [env1 (with-iv env x v)]
                   [env2 (if ali (alias-facts env1 x ali) env1)]
-                  [env3 (with-obligations env2 obs)])
+                  [env2b (se-shape-facts env2 x se)]
+                  [env3 (with-obligations env2b obs)])
              (let-values ([(b^ envb) (rw body env3 stats)])
                (values `(let ([,x ,se^]) ,b^) envb))))]
 
