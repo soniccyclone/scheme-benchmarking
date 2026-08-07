@@ -34,8 +34,9 @@ compiler/
     12-regalloc.ss        linear scan register allocation
     13-assemble.ss        x86-64 + AVX-512 encoding, emit an object file
   runtime/
-    gc.c gc.h             precise generational copying collector
-    rt.c rt.h             entry point, foreign boundary
+    gc.ss                 collector, a SCHEME library that emits instruction
+                          lists at compile time. No C. See the note below.
+    entry.ss              the straight-line entry sequence, emitted by us
   tests/
     pass/                 one test per pass, on core-language fixtures
     programs/             end-to-end: nbody, fannkuchredux, spectralnorm
@@ -377,6 +378,31 @@ to frame descriptors rather than assuming the original trick works.
 **Precise GC roots are why this is worth the work.** At every call site the allocator knows
 which registers and stack slots hold live references, so emit a stack map. That is what a
 precise generational collector needs and what a C back end cannot provide.
+
+**The runtime is not C either, and that is not purism.** An earlier version of this
+layout had `gc.c` and `rt.c`. The `compare-operating-systems` bundle's
+`lessons/metacircular-bootstrap.md` settles it with a worked example: Loko's collector is a
+Scheme library exporting two procedures that return lists of assembler instructions, and it
+runs **at compile time**, so at run time there is no Scheme collector to bootstrap, only a
+label in the text segment. What must be written in something else is not a runtime, not a
+library and not a memory manager: it is a straight-line instruction sequence that discovers
+nothing, and on Loko's amd64 it is about sixty emitted instructions that set the stack
+pointer to a constant, fake a vector at a constant address, and point the allocator past it.
+
+We emit those instructions ourselves, so there is no C and no libc anywhere in the running
+system. That matters beyond taste, because SonicScheme is meant to carry CIVICS, and a C
+runtime under a Scheme kernel drags a C toolchain and a libc into the kernel, which is
+precisely what that OS exists not to be.
+
+**Build-time bootstrapping is a separate question and it costs nothing.** The same lesson:
+no system in that bundle contains a seed interpreter written in another language; every one
+uses an existing implementation as the seed and walks away. Chez is our seed, `sonic/`
+already runs on it, and *the seed is a build dependency, not a component* — it does not
+ship, does not run on the target, and is not in the trust base.
+
+**A licensing note that is not optional politeness.** Loko is copyleft-encumbered. We take
+the *shape* of this design from a published description of it; we do not copy Loko code.
+Mezzano (MIT) and Chez (Apache 2.0) are the trees to read for implementation detail.
 
 ## A measured pass budget
 
