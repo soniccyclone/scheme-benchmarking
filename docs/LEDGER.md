@@ -153,6 +153,14 @@ reversal attached, never edited away.
 
 ## Errors found *in the sources*
 
+- **ABCD's neutral-cycle rule is unsound as textbooks state it.** "Revisit an active vertex
+  at the same slack, conclude true" assumes the cycle you closed was a loop iteration. It
+  need not be: an equality edge pair, such as a length and its alias, is a zero-weight
+  two-cycle with no phi on it, and reading that as an iteration proves **every** inequality
+  about that length, including the false ones. Caught by a test rather than by reading. The
+  fix is to count meet vertices on the active path and refuse a cycle that crossed none —
+  the coinduction needs a merge point to induct over.
+
 Kept because they are implementation hazards, not trivia.
 
 - **Kildall's Theorem 2 is false** for his own constant propagation. The proof needs distributivity, not monotonicity; his function fails it. Algorithm A computes MFP, not MOP. Kam & Ullman 1977 corrected it.
