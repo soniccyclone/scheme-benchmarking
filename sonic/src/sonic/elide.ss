@@ -51,7 +51,7 @@
 
 (library (sonic elide)
   (export elide elide-program elide-facts?
-          elide-stats? elide-stats-sites
+          elide-stats? elide-stats-sites elide-stats-argivs
           elide-proved elide-kept elide-unchecked
           elide-proved-by elide-report
           elide-site? elide-site-prim elide-site-check
@@ -71,7 +71,17 @@
     (fields prim check verdict why args))
 
   (define-record-type (elide-stats make-elide-stats elide-stats?)
-    (fields (mutable sites)))
+    (fields (mutable sites)
+            ;; Every call site's ARGUMENT INTERVALS, as (callee iv ...).
+            ;;
+            ;; This is what makes an interprocedural fixpoint possible without a
+            ;; second analyzer. A loop variable's range is derived HERE, by the
+            ;; sigma refinement on the loop guard -- and it dies here too,
+            ;; because the loop body is a separate procedure after lifting and
+            ;; its parameters arrive with no facts. Reporting the intervals the
+            ;; caller already knew lets the driver feed them back in as
+            ;; premises and run the whole thing again.
+            (mutable argivs)))
 
   (define (count-verdict st v)
     (length (filter (lambda (s) (eq? (elide-site-verdict s) v)) (elide-stats-sites st))))
@@ -385,8 +395,22 @@
   ;; Everything else returns env unchanged, which is how a fact discovered
   ;; inside one arm of an `if` is prevented from escaping to the other.
 
+  ;; A parameter starts UNKNOWN -- unless a premise says otherwise.
+  ;;
+  ;; Clearing unconditionally is what it used to do, and it silently threw away
+  ;; every interprocedural fact: the driver derives a parameter's range by
+  ;; joining what the call sites pass, hands it in, and this overwrote it with
+  ;; top on the way into the lambda. The fixpoint then converged in one round on
+  ;; the entry site alone -- every loop variable [0,0] -- and no loop ever got a
+  ;; bound.
+  ;;
+  ;; Keeping a supplied fact is safe because essa.ss makes every binding unique
+  ;; program-wide, so a parameter cannot be shadowing a caller's variable of the
+  ;; same name. That uniqueness is what the clearing was guarding against.
   (define (bind-params env x*)
-    (fold-left (lambda (en p) (with-iv en p iv-top)) env x*))
+    (fold-left (lambda (en p)
+                 (if (iv-top? (iv-of en p)) (with-iv en p iv-top) en))
+               env x*))
 
   (define (rw-se se env stats)
     (with-output-language (Lssa SimpleExpr)
@@ -396,7 +420,11 @@
         [(lambda (,x* ...) ,body)
          (let-values ([(b^ _) (rw body (bind-params env x*) stats)])
            (values `(lambda (,x* ...) ,b^) '()))]
-        [(call ,x1 ,x* ...) (values `(call ,x1 ,x* ...) '())]
+        [(call ,x1 ,x* ...)
+         (elide-stats-argivs-set!
+          stats (cons (cons x1 (map (lambda (a) (iv-of env a)) x*))
+                      (elide-stats-argivs stats)))
+         (values `(call ,x1 ,x* ...) '())]
         [(primcall ,pr ([,pn* ,c*] ...) ,x* ...)
          (let ([c^* (map (lambda (pn c) (decide-one pr pn c x* env stats)) pn* c*)])
            (values `(primcall ,pr ([,pn* ,c^*] ...) ,x* ...)
@@ -470,7 +498,14 @@
          (let-values ([(b^ _) (rw body (bind-params env x*) stats)])
            (values `(lambda (,x* ...) ,b^) env))]
 
-        [(tailcall ,x ,x* ...) (values `(tailcall ,x ,x* ...) env)]
+        ;; A tail call is a call for this purpose -- and it is the important
+        ;; one, since a loop's back edge is a tail call and that is precisely
+        ;; where the loop variable's refined range lives.
+        [(tailcall ,x ,x* ...)
+         (elide-stats-argivs-set!
+          stats (cons (cons x (map (lambda (a) (iv-of env a)) x*))
+                      (elide-stats-argivs stats)))
+         (values `(tailcall ,x ,x* ...) env)]
 
         ;; The first arm dominates the second, so its facts DO propagate. This
         ;; is the only form other than `let` where they do.
@@ -520,7 +555,7 @@
       [(e facts)
        (let* ([g (build-inequality-graph e (fact-lengths facts))]
               [env (facts->env facts g)]
-              [stats (make-elide-stats '())])
+              [stats (make-elide-stats '() '())])
          (let-values ([(e^ _) (rw e env stats)])
            (elide-stats-sites-set! stats (reverse (elide-stats-sites stats)))
            (values e^ stats)))]))
@@ -542,11 +577,13 @@
       [(p facts)
        (nanopass-case (Lssa Program) p
          [(top ([,x* ,e*] ...) (,x2* ...) ,body)
-          (let ([all (make-elide-stats '())])
+          (let ([all (make-elide-stats '() '())])
             (define (one e)
               (let-values ([(e^ st) (elide e facts)])
                 (elide-stats-sites-set!
                  all (append (elide-stats-sites all) (elide-stats-sites st)))
+                (elide-stats-argivs-set!
+                 all (append (elide-stats-argivs all) (elide-stats-argivs st)))
                 e^))
             (with-output-language (Lssa Program)
               (let* ([v* (map one e*)]

@@ -34,7 +34,7 @@
           (sonic lang) (sonic read) (sonic expand) (sonic parse) (sonic policy)
           (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide)
           (sonic repr) (sonic lift) (sonic lower) (sonic globals)
-          (sonic shapes)
+          (sonic shapes) (sonic interval)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
           (sonic order)
@@ -58,7 +58,7 @@
       ;; nice -- the kernels take their vectors as PARAMETERS, so a fact that
       ;; stops at the allocation never reaches the loop that needs it.
       (let*-values (((ssa) (essa-program p0))
-                    ((p1 elide-st) (elide-program ssa (shape-facts (unparse-Lssa ssa))))
+                    ((p1 elide-st) (elide-to-fixpoint ssa))
                     ((p2 rp) (select-representations-program p1))
                     ((lifted lrep) (lift-program (unparse-Lrepr p2))))
         (let*-values (((prog0 lower-st) (lower-toplevel lifted 'main
@@ -101,6 +101,64 @@
                 (make-compiled img (function-object-code o) pool
                                (+ elf-text-vaddr start) listing fns
                                gnames lrep))))))))
+
+  ;; Run the elision analysis until the parameter intervals stop improving.
+  ;;
+  ;; One pass is not enough and the reason is structural. A loop's variable gets
+  ;; its range from the sigma refinement on the loop guard -- and after lambda
+  ;; lifting the loop body is a SEPARATE procedure, so that range dies at the
+  ;; call boundary and the body sees an unbounded index. nbody's inner loop kept
+  ;; 18 bounds checks for exactly this: the length of `p` was known, the range
+  ;; of `i` was not, and `p[3i+2]` needs both.
+  ;;
+  ;; Each round feeds the previous round's call-site argument intervals back as
+  ;; premises on the callees' parameters. Facts only ever get added, and each is
+  ;; a bounded integer range over a finite lattice, so it settles; the bound is
+  ;; there because an argument for termination is not a guard.
+  (define (elide-to-fixpoint ssa)
+    (let* ((datum (unparse-Lssa ssa))
+           (base (shape-facts datum))
+           (params (procedure-params datum)))
+      ;; WIDENING, without which this does not terminate.
+      ;;
+      ;; A parameter bounded by its loop guard settles fast -- `i < n-bodies`
+      ;; gives [0,5] in three rounds. A parameter whose bound is not a known
+      ;; constant ascends forever, one integer per round: [0,7] at round 7,
+      ;; [0,41] at round 41. That is the classic infinite ascending chain, and
+      ;; Cousot's answer is to widen.
+      ;;
+      ;; Widening here is to DROP the fact. Dropping is always sound -- it
+      ;; claims less -- and for this purpose it is also the right answer: a
+      ;; range that is still growing has no bound to state, and the whole point
+      ;; of the fact is to bound an index. So after a few rounds of ascent, any
+      ;; interval that is still widening is abandoned and the ones that settled
+      ;; are kept.
+      (define ascent-rounds 4)
+      (define (widen prev cand)
+        (if (null? prev)
+            cand
+            (filter (lambda (f)
+                      (let ((old (assq (car f) prev)))
+                        (or (not old) (equal? old f))))
+                    cand)))
+      (let loop ((facts base) (round 0))
+        (let-values (((p1 st) (elide-program ssa facts)))
+          (let* ((argivs (elide-stats-argivs st))
+                 (raw (interval-facts-from argivs params))
+                 (prev (filter (lambda (f) (eq? (cadr f) 'interval)) facts))
+                 (more (if (< round ascent-rounds) raw (widen prev raw)))
+                 (next (append base more)))
+            (cond
+             ((or (> round 12) (equal? next facts))
+              ;; The ascent ignored unbounded sites to get moving, so the result
+              ;; is a claim until checked. Anything a caller escapes is dropped
+              ;; and the analysis re-run without it.
+              (let ((bad (facts-cover? facts argivs params)))
+                (if (null? bad)
+                    (values p1 st)
+                    (let ((kept (filter (lambda (f) (not (memq (car f) bad))) facts)))
+                      (elide-program ssa kept)))))
+             (else (loop next (+ round 1)))))))))
 
   (define (listing-size listing)
     (let loop ((xs listing) (pc 0))

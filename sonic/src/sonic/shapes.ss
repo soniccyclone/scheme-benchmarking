@@ -37,8 +37,8 @@
 ;;; anyway, because an argument for termination is not a guard.
 
 (library (sonic shapes)
-  (export shape-facts)
-  (import (chezscheme) (sonic order))
+  (export shape-facts procedure-params interval-facts-from facts-cover?)
+  (import (chezscheme) (sonic order) (sonic interval))
 
   ;; -> a list of facts in `elide-program`'s vocabulary:
   ;;      (x flvector LEN) | (x vector LEN) | (x interval LO HI)
@@ -180,4 +180,95 @@
               (let ((n (hashtable-ref consts x #f)))
                 (list x 'interval n n)))
             (sorted-key-list consts)))))
+
+  ;; THE SOUNDNESS CHECK on the ascent above.
+  ;;
+  ;; A parameter's interval must contain what EVERY caller passes. The ascent
+  ;; deliberately ignores unbounded sites to get started, so the result is only
+  ;; a claim until this confirms it. Any fact a site escapes is dropped -- a
+  ;; bounds proof resting on "holds for most callers" is not a proof, and this
+  ;; is the one place in the pass where being wrong means removing a check that
+  ;; was doing something.
+  (define (facts-cover? facts argivs params)
+    (let ((tbl (make-eq-hashtable)))
+      (for-each (lambda (f)
+                  (when (eq? (cadr f) 'interval)
+                    (hashtable-set! tbl (car f) (make-interval (caddr f) (cadddr f)))))
+                facts)
+      (let ((bad '()))
+        (for-each
+         (lambda (site)
+           (let ((ps (hashtable-ref params (car site) #f)) (ivs (cdr site)))
+             (when (and ps (= (length ps) (length ivs)))
+               (for-each
+                (lambda (p iv)
+                  (let ((claim (hashtable-ref tbl p #f)))
+                    (when (and claim (not (iv-leq iv claim)))
+                      (set! bad (cons p bad)))))
+                ps ivs))))
+         argivs)
+        bad)))
+
+  ;; procedure -> (param ...), for the interprocedural interval fixpoint.
+  (define (procedure-params form)
+    (let ((tbl (make-eq-hashtable)))
+      (let walk ((x form))
+        (when (pair? x)
+          (when (memq (car x) '(top letrec))
+            (for-each (lambda (b)
+                        (let ((v (cadr b)))
+                          (when (and (pair? v) (eq? (car v) 'lambda))
+                            (hashtable-set! tbl (car b) (cadr v)))))
+                      (cadr x)))
+          (for-each walk x)))
+      tbl))
+
+  ;; Turn one analysis round's call-site argument intervals into premises on the
+  ;; callees' parameters, JOINING across sites.
+  ;;
+  ;; Join, not intersect: a parameter has to hold for every call, so its range
+  ;; is the union of what the callers pass. Intersecting would "prove" bounds
+  ;; that only hold on one path, which is the one mistake a bounds analysis is
+  ;; not allowed to make.
+  ;;
+  ;; A parameter reached by any site with an unknown argument gets nothing --
+  ;; joining with top is top, and a fact of top is not a fact.
+  ;; ASCENDING, which is the only way a loop's parameter ever gets a bound.
+  ;;
+  ;; Joining every site on the first round cannot work: the recursive site is
+  ;; evaluated with the parameter still unknown, so `(outer (fx+ i 1))` yields
+  ;; [-inf, 5], and joining that with the entry site's [0,0] is [-inf, 5]
+  ;; forever. The fixpoint stalls on its own first guess.
+  ;;
+  ;; So a round joins only the sites that came back BOUNDED, which on the first
+  ;; round is the entry `(outer 0)` and nothing else. With `i` then known to be
+  ;; [0,0], the next round evaluates the recursive site as [1,5] and the join
+  ;; becomes [0,5]; the round after that reproduces it and it settles.
+  ;;
+  ;; That ascent is not itself sound -- a partial join is a claim about some
+  ;; callers, and a parameter must hold for all of them -- which is what
+  ;; `facts-cover?` below is for. It is checked at the end rather than assumed.
+  (define (interval-facts-from argivs params)
+    (let ((acc (make-eq-hashtable)))
+      (for-each
+       (lambda (site)
+         (let ((ps (hashtable-ref params (car site) #f)) (ivs (cdr site)))
+           (when (and ps (= (length ps) (length ivs)))
+             (for-each
+              (lambda (p iv)
+                (when (and (integer? (interval-lo iv)) (integer? (interval-hi iv)))
+                  (let ((old (hashtable-ref acc p #f)))
+                    (hashtable-set! acc p (if old (iv-join old iv) iv)))))
+              ps ivs))))
+       argivs)
+      (let loop ((ks (sorted-key-list acc)) (out '()))
+        (if (null? ks)
+            (reverse out)
+            (let* ((iv (hashtable-ref acc (car ks) #f))
+                   (lo (interval-lo iv)) (hi (interval-hi iv)))
+              (loop (cdr ks)
+                    ;; Only a bounded range is worth stating.
+                    (if (and (integer? lo) (integer? hi))
+                        (cons (list (car ks) 'interval lo hi) out)
+                        out)))))))
   )
