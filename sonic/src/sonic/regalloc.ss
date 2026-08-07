@@ -17,7 +17,7 @@
 ;;; here than usual.
 
 (library (sonic regalloc)
-  (export allocate live-intervals
+  (export allocate live-intervals live-intervals/arch physical?
           make-alloc-result alloc-result? alloc-result-map
           alloc-result-spills alloc-result-arch)
   (import (chezscheme)
@@ -32,7 +32,9 @@
   ;; a whole CFG is a later bead and needs the loop structure from E4-LOOP so a
   ;; vreg live across a back edge stays live to the end of the loop.
 
-  (define (live-intervals instrs)
+  (define (live-intervals instrs) (live-intervals/arch instrs #f))
+
+  (define (live-intervals/arch instrs arch)
     ;; instrs: list of (op dst sc src ...) with dst possibly #f
     (let ([tbl (make-eq-hashtable)])
       (let loop ([is instrs] [i 0])
@@ -40,14 +42,14 @@
           (let* ([ins (car is)]
                  [dst (cadr ins)]
                  [srcs (cdddr ins)])
-            (when (symbol? dst)
+            (when (and (symbol? dst) (not (and arch (physical? arch dst))))
               (let ([e (hashtable-ref tbl dst #f)])
                 (if e
                     (set-cdr! e (max (cdr e) i))
                     (hashtable-set! tbl dst (cons i i)))))
             (for-each
              (lambda (s)
-               (when (symbol? s)
+               (when (and (symbol? s) (not (and arch (physical? arch s))))
                  (let ([e (hashtable-ref tbl s #f)])
                    (if e
                        (set-cdr! e (max (cdr e) i))
@@ -73,9 +75,25 @@
       ((raw-f64)  (arch-float arch))
       (else (error 'pool-for "unknown storage class" sc))))
 
+  ;; A PHYSICAL register name in an operand slot is not a vreg, and the
+  ;; allocator has to know the difference.
+  ;;
+  ;; The two-address fixup puts a scratch register (xmm15, t0) directly into an
+  ;; operand, because the allocator runs over Lmach and never sees selected
+  ;; output, so there is no vreg to request. Without this check `live-intervals`
+  ;; treats that symbol as a virtual register and `allocate` either dies on
+  ;; "vreg has no storage class" or -- far worse -- renames the scratch to an
+  ;; allocatable register and silently emits wrong code for exactly the case the
+  ;; fixup exists to handle.
+  ;;
+  ;; So: a name in ANY register class is skipped, not allocated. That subsumes
+  ;; the adapter twoaddr.ss had to carry.
+  (define (physical? arch r)
+    (and (symbol? r) (reg-class arch r) #t))
+
   ;; `classes` maps vreg -> storage class, which is what Lrepr carries.
   (define (allocate arch instrs classes)
-    (let* ([ivals (live-intervals instrs)]
+    (let* ([ivals (live-intervals/arch instrs arch)]
            [assign (make-eq-hashtable)]
            [spills '()]
            ;; free pools, one per storage class, kept disjoint by construction

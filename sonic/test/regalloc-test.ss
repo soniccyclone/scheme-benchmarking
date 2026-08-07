@@ -123,6 +123,34 @@
     (ck! "RV64 does NOT spill the same program: 8 words plus a sink fit in 9"
          (null? (alloc-result-spills r)))))
 
+;; --- a physical name in an operand slot is NOT a vreg ----------------------
+;; The two-address fixup puts a scratch register directly into an operand,
+;; because the allocator runs over Lmach and never sees selected output, so
+;; there is no vreg to request. Without this the allocator would treat it as a
+;; virtual register and rename it to an allocatable one -- silently emitting
+;; wrong code for exactly the case the fixup exists to handle.
+(let* ([instrs '((move xmm15 raw-f64 v-a)
+                 (sub  xmm15 raw-f64 xmm15 v-b)
+                 (move v-c   raw-f64 xmm15))]
+       [cls (make-eq-hashtable)])
+  (hashtable-set! cls 'v-a 'raw-f64)
+  (hashtable-set! cls 'v-b 'raw-f64)
+  (hashtable-set! cls 'v-c 'raw-f64)
+  (ck! "a scratch name in an operand slot gets no live interval"
+       (not (assq 'xmm15 (live-intervals/arch instrs arch-x86-64))))
+  (let* ([r (allocate arch-x86-64 instrs cls)]
+         [m (alloc-result-map r)])
+    (ck! "and the allocator does not rename it"
+         (not (hashtable-ref m 'xmm15 #f)))
+    (ck! "while the real vregs are still allocated"
+         (and (hashtable-ref m 'v-a #f) (hashtable-ref m 'v-c #f)))))
+
+(ck! "physical? recognises every class, and rejects a vreg"
+     (and (physical? arch-x86-64 'rax) (physical? arch-x86-64 'rbx)
+          (physical? arch-x86-64 'xmm0) (physical? arch-rv64 't0)
+          (not (physical? arch-x86-64 'v-idx))))
+
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))

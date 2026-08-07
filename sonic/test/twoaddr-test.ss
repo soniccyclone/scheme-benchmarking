@@ -184,10 +184,16 @@
 (let ((classes (make-eq-hashtable)))
   (for-each (lambda (p) (hashtable-set! classes (car p) (cdr p)))
             '((v-a . raw-f64) (v-x . raw-f64) (v-r . raw-f64)))
+  ;; UPDATED: the allocator now recognises physical names itself (regalloc.ss's
+  ;; `physical?`), so a raw scratch operand is SKIPPED rather than crashing or,
+  ;; worse, being renamed to an allocatable register. strip-scratch is therefore
+  ;; no longer load-bearing, and this asserts the property directly instead of
+  ;; asserting that the unadapted call blows up.
   (set! checks (+ checks 1))
-  (let ((crashed (raises? (lambda () (allocate arch-x86-64 fixed-instrs classes)))))
-    (if crashed
-        (display "  ok   the allocator refuses a raw scratch name: it is not a vreg\n")
+  (let* ((r (allocate arch-x86-64 fixed-instrs classes))
+         (m (alloc-result-map r)))
+    (if (not (hashtable-ref m 'xmm15 #f))
+        (display "  ok   the allocator skips a physical scratch name rather than renaming it\n")
         (begin (set! failures (+ failures 1))
                (display "  FAIL a physical scratch name was allocated as a vreg\n"))))
   (let ((r (allocate arch-x86-64 (strip-scratch arch-x86-64 fixed-instrs) classes)))
