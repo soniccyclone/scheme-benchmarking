@@ -253,11 +253,34 @@
   ;; straight-line expression and supply their own label.
 
   (define (lower-expr e stats)
-    (let-values (((is v lbl) (lower-into e stats (fresh! "L.b"))))
+    (let-values (((is v lbl) (lower-into e stats (fresh! "L.b") #f)))
       (values is v)))
 
-  (define (lower-into e stats start-label)
-    (let walk ((e (if (pair? e) e (unparse-Lrepr e))) (acc '()) (lbl start-label))
+  ;; `tail?` says the expression's value is the function's return value.
+  ;;
+  ;; It exists so a TAIL CALL stays one. essa.ss wraps an `if` in value
+  ;; position in a phi, so a loop's recursive call came out as
+  ;;
+  ;;     (call t raw-word loop args...)     ; in an arm
+  ;;     (move if60 raw-word t)             ; the phi copy
+  ;;     -> (jump L.join)                   ; and the block ends in a jump
+  ;;
+  ;; which is a plain call: `tail-call-instr` in select.ss recognises a call
+  ;; that is the block's LAST instruction and whose result the block's `ret`
+  ;; returns, and the copy plus the jump destroy both halves of that. Every
+  ;; iteration of every loop in nbody pushed a frame.
+  ;;
+  ;; In tail position an `if` needs neither the copies nor the join: each arm
+  ;; ends in its own `ret`, so the arm's call is last, its result is what the
+  ;; ret returns, and the shape is recognised. This is the R5RS guarantee that
+  ;; ANSI CL never made, and it is the reason this compiler can express a loop
+  ;; as a procedure at all.
+  ;;
+  ;; An exit label of #f means the walk already emitted terminated blocks and
+  ;; nothing falls through -- the caller must NOT emit another block.
+  (define (lower-into e stats start-label tail?)
+    (let walk ((e (if (pair? e) e (unparse-Lrepr e))) (acc '()) (lbl start-label)
+               (tail? tail?))
       (cond
        ((symbol? e) (values (reverse acc) e lbl))
        ((not (pair? e)) (error 'lower "not an expression" e))
@@ -271,7 +294,7 @@
              (note-class! x sc)
              (let-values (((is v) (lower-simple se x sc stats)))
                (record-classes! is)
-               (walk body (append (reverse is) acc) lbl))))
+               (walk body (append (reverse is) acc) lbl tail?))))
           ((quote) (let ((v (fresh! "k")))
                      (values (reverse (cons `(const ,v ,(const-class (cadr e)) ,(cadr e)) acc))
                              v lbl)))
@@ -323,27 +346,33 @@
              ;; label the caller is building, so the predecessor's edge into it
              ;; is preserved.
              (emit-block! lbl acc (list 'branch-if test then-lbl else-lbl))
-             (let-values (((t-is t-v t-lbl) (walk (caddr e) '() then-lbl)))
-               (record-classes! t-is)
-               (let ((sc (vreg-class-of t-v)))
-                 (note-class! dst sc)
-                 ;; emit-block! takes its instructions REVERSED (it is fed the
-                 ;; walk's accumulator). Handing it an ordered list reverses
-                 ;; the block, which puts every use before its def -- so every
-                 ;; vreg looked live-in from position 0 and the allocator
-                 ;; spilled half the inner loop.
-                 (emit-block! t-lbl
-                              (cons `(move ,dst ,sc ,t-v) (reverse t-is))
-                              (list 'jump join-lbl))))
-             (let-values (((e-is e-v e-lbl) (walk (cadddr e) '() else-lbl)))
-               (record-classes! e-is)
-               (let ((sc (vreg-class-of e-v)))
-                 (emit-block! e-lbl
-                              (cons `(move ,dst ,sc ,e-v) (reverse e-is))
-                              (list 'jump join-lbl))))
-             ;; Everything after the conditional belongs to the JOIN block, so
-             ;; that is the label the walk continues under.
-             (values '() dst join-lbl)))
+             ;; emit-block! takes its instructions REVERSED (it is fed the
+             ;; walk's accumulator). Handing it an ordered list reverses the
+             ;; block, which puts every use before its def -- so every vreg
+             ;; looked live-in from position 0 and the allocator spilled half
+             ;; the inner loop.
+             (let ((arm
+                    (lambda (sub arm-lbl)
+                      (let-values (((is v xl) (walk sub '() arm-lbl tail?)))
+                        (when xl
+                          (record-classes! is)
+                          (if tail?
+                              ;; Tail position: the arm returns directly, so a
+                              ;; call at the end of it stays a TAIL call.
+                              (emit-block! xl (reverse is) (list 'ret v))
+                              (let ((sc (vreg-class-of v)))
+                                (note-class! dst sc)
+                                (emit-block! xl
+                                             (cons `(move ,dst ,sc ,v) (reverse is))
+                                             (list 'jump join-lbl)))))))))
+               (arm (caddr e) then-lbl)
+               (arm (cadddr e) else-lbl))
+             (if tail?
+                 ;; Both arms returned. Nothing follows and there is no join.
+                 (values '() dst #f)
+                 ;; Everything after the conditional belongs to the JOIN block,
+                 ;; so that is the label the walk continues under.
+                 (values '() dst join-lbl))))
           ;; Premises and policies carry no code. They constrained the ANALYSIS,
           ;; which has already run and left its answers in the controls, so by
           ;; here they are annotation and the body is the program. Dropping them
@@ -352,7 +381,7 @@
           ;; how a wrong assumption gets reused.
           ;; All three are (form <annotation> body), so the body is caddr.
           ((declare declare-distinct policy)
-           (walk (caddr e) acc lbl))
+           (walk (caddr e) acc lbl tail?))
           ;; phi and sigma are SSA bookkeeping, not code.
           ;;
           ;; A phi says "this name is the merge of these values". Lmach has no
@@ -380,9 +409,17 @@
            ;; the body went on referring to it. essa.ss produces exactly that
            ;; shape for an `if` in value position, so `main` ended in
            ;; `(ret join.35)` -- a return of a name nothing ever wrote.
+           ;; A phi whose body is exactly the name it binds, with one binding,
+           ;; is essa.ss's wrapper around an `if` in value position. When the
+           ;; phi is in tail position, so is that `if`: the phi's whole meaning
+           ;; is "the operand's value is the result". Passing `tail?` through is
+           ;; what lets the arms keep their tail calls.
+           (let* ((one-binding? (and (= (length (cadr e)) 1)
+                                     (eq? (caddr e) (car (car (cadr e))))))
+                  (op-tail? (and tail? one-binding?)))
            (let loop ((bs (cadr e)) (out acc) (lbl lbl))
              (if (null? bs)
-                 (walk (caddr e) out lbl)
+                 (walk (caddr e) out lbl tail?)
                  (let* ((b (car bs)) (x (car b)) (ops (cdr b)))
                    ;; One operand is the only case essa.ss currently produces,
                    ;; and it is the only one that can be handled HERE. A real
@@ -407,13 +444,17 @@
                          ;; An expression operand: lower it in the CURRENT
                          ;; block, carrying what has accumulated so far, so an
                          ;; `if` inside it splits at the right place.
-                         (let-values (((is v lbl2) (walk val out lbl)))
-                           (record-classes! is)
-                           (let ((sc (vreg-class-of v)))
-                             (note-class! x sc)
-                             (loop (cdr bs)
-                                   (cons `(move ,x ,sc ,v) (reverse is))
-                                   lbl2)))))))))
+                         (let-values (((is v lbl2) (walk val out lbl op-tail?)))
+                           (if (not lbl2)
+                               ;; The operand terminated every path itself.
+                               (values '() v #f)
+                               (begin
+                                 (record-classes! is)
+                                 (let ((sc (vreg-class-of v)))
+                                   (note-class! x sc)
+                                   (loop (cdr bs)
+                                         (cons `(move ,x ,sc ,v) (reverse is))
+                                         lbl2))))))))))))
           ((sigma)
            ;; (sigma x-out x-in cmp x-other negated? body). A refinement of a
            ;; name, so the same representation -- the class comes from the
@@ -421,7 +462,7 @@
            ;; refined DOUBLE through an integer register.
            (let ((sc (vreg-class-of (caddr e))))
              (note-class! (cadr e) sc)
-             (walk (list-ref e 6) (cons `(move ,(cadr e) ,sc ,(caddr e)) acc) lbl)))
+             (walk (list-ref e 6) (cons `(move ,(cadr e) ,sc ,(caddr e)) acc) lbl tail?)))
           ((letrec)
            ;; Each binding becomes its own labelled block, then the body runs.
            (for-each
@@ -429,23 +470,26 @@
               (let ((x (car b)) (v (cadr b)))
                 (let-values (((is r xl) (walk (if (and (pair? v) (eq? (car v) 'lambda))
                                                   (caddr v) v)
-                                              '() x)))
-                  (record-classes! is)
-                  (emit-block! xl (reverse is) (list 'ret r)))))
+                                              '() x #t)))
+                  ;; xl = #f means every path already returned.
+                  (when xl
+                    (record-classes! is)
+                    (emit-block! xl (reverse is) (list 'ret r))))))
             (cadr e))
-           (walk (caddr e) acc lbl))
+           (walk (caddr e) acc lbl tail?))
           ((lambda)
            ;; A lambda in value position: its own block, and the value is the
            ;; label. Closures are a later bead; this is enough for a program
            ;; whose procedures are all top-level or letrec-bound.
            (let ((fn (fresh! "L.fn")))
-             (let-values (((is r xl) (walk (caddr e) '() fn)))
-               (record-classes! is)
-               (emit-block! xl (reverse is) (list 'ret r)))
+             (let-values (((is r xl) (walk (caddr e) '() fn #t)))
+               (when xl
+                 (record-classes! is)
+                 (emit-block! xl (reverse is) (list 'ret r))))
              (values (reverse acc) fn lbl)))
           ((seq)
-           (let-values (((a av a-lbl) (walk (cadr e) acc lbl)))
-             (walk (caddr e) (reverse a) a-lbl)))
+           (let-values (((a av a-lbl) (walk (cadr e) acc lbl #f)))
+             (walk (caddr e) (reverse a) a-lbl tail?)))
           ;; Lmach has no `tailcall` production, so the name is lost here. The
           ;; SHAPE is not: the call is the block's last instruction and its
           ;; result is what the block's `(ret v)` returns, and nothing else has
@@ -507,7 +551,10 @@
     (let ((stats (make-lower-stats 0 0 0)))
       (reset-blocks!)
       (reset-classes!)
-      (let-values (((instrs result exit) (lower-into e stats name)))
+      (let-values (((instrs result exit) (lower-into e stats name #t)))
+        (unless exit
+          (error 'lower-program
+                 "the expression returned on every path, so there is no entry block to build"))
         (record-classes! instrs)
         ;; The block emitted here is the one the walk ENDED in, which is not
         ;; `name` when control flow split. Emitting under `name` regardless
@@ -551,14 +598,15 @@
              (let ((x (car b)) (v (cadr b)))
                (if (and (pair? v) (eq? (car v) 'lambda))
                    ;; A defined procedure: its own block, named for the binding.
-                   (let-values (((is r xl) (lower-into (caddr v) stats x)))
-                     (record-classes! is)
-                     (emit-block! xl (reverse is) (list 'ret r)))
+                   (let-values (((is r xl) (lower-into (caddr v) stats x #t)))
+                     (when xl
+                       (record-classes! is)
+                       (emit-block! xl (reverse is) (list 'ret r))))
                    ;; A value: initialization, in source order.
                    (let-values (((is r) (lower-simple-or-expr v x stats)))
                      (set! init (append init is))))))
            binds)
-          (let-values (((bis bres exit) (lower-into body stats entry)))
+          (let-values (((bis bres exit) (lower-into body stats entry #t)))
             ;; The entry block is built here rather than through `emit-block!`,
             ;; so its instructions have to be recorded explicitly -- otherwise
             ;; every vreg the program's own body defines is missing from the

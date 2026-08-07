@@ -1,7 +1,7 @@
 ;;; How far does a real program get? Reported as a number, not an impression.
 (import (chezscheme) (nanopass) (sonic lang) (sonic pipeline)
         (sonic read) (sonic expand) (sonic parse) (sonic policy)
-        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide) (sonic repr) (sonic lower) (sonic regalloc) (sonic regs))
+        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide) (sonic repr) (sonic lower) (sonic regalloc) (sonic regs) (sonic select))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -137,6 +137,30 @@
      (cadr lowered))
     (ck! "within a block, no vreg is used before the instruction that defines it"
          (null? bad)))
+
+  ;; TAIL CALLS.
+  ;;
+  ;; This is the guarantee R5RS made that ANSI CL never did, and it is why this
+  ;; compiler can express a loop as a procedure at all. It was silently absent:
+  ;; essa.ss wraps an `if` in value position in a phi, so a loop's recursive
+  ;; call came out as the call, then the phi's copy, then a jump to the join --
+  ;; and `tail-call-instr` recognises a call that is the block's LAST
+  ;; instruction and whose result the block's `ret` returns. The copy and the
+  ;; jump destroyed both halves of that, so every iteration of every loop in
+  ;; nbody pushed a frame.
+  ;;
+  ;; Lowering now tracks tail position, and in tail position an `if` needs
+  ;; neither the copies nor a join: each arm ends in its own `ret`.
+  (let ([tails (filter (lambda (b) (tail-call-instr (cadr b))) (cadr lowered))])
+    (display "       tail calls=") (display (length tails)) (newline)
+    (ck! "the loops' recursive calls are recognised as TAIL calls"
+         (> (length tails) 10))
+    ;; Named individually, because "some tail calls exist" would still pass
+    ;; with every loop back edge stacking a frame.
+    (let ([callees (map (lambda (b) (cadddr (tail-call-instr (cadr b)))) tails)])
+      (ck! "every loop in nbody tail-calls itself"
+           (for-all (lambda (l) (memq l callees))
+                    '(loop%12.139 loop%35.293 inner%24.201 outer%22.193)))))
 
   ;; REGISTER PRESSURE, PER TARGET.
   ;;
