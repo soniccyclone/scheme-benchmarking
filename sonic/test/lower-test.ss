@@ -39,8 +39,12 @@
                                            b i)])
                   v)
                'entry)])
-  (ck! "a checked primcall emits chk instructions before the op"
-       (equal? (ops prog) '(chk chk load)))
+  ;; A bounds check needs a LIMIT, and the primcall carries the vector rather
+  ;; than its length, so lowering materialises the length with `vlen` first.
+  ;; Before this the check was handed the whole operand list and the limit was
+  ;; simply absent from the IR.
+  (ck! "a checked primcall emits its checks, materialising the bounds limit"
+       (equal? (ops prog) '(chk vlen chk load)))
   (ck! "and they are counted as emitted, not proved"
        (and (= (lower-stats-emitted stats) 2)
             (= (lower-stats-proved stats) 0))))

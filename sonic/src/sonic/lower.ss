@@ -77,6 +77,23 @@
   ;; --- checks ---------------------------------------------------------------
   ;; Returns the chk instructions that must be emitted for this primcall, and
   ;; records why each one was or was not.
+  ;; Which operands a check actually wants, and where the limit comes from.
+  ;;
+  ;; `lower` used to hand every check the WHOLE primcall's operand list, so a
+  ;; bounds check on (flvector-set! v i x) arrived with three operands where
+  ;; both targets read two -- and the limit it wanted, the vector's length, was
+  ;; not in the IR at all. The primcall carries the vector, not its length.
+  ;;
+  ;; So a bounds check emits a `vlen` first to materialise the limit, then
+  ;; compares the index against it. A type check wants only the value. Overflow
+  ;; and division checks want the operands they guard.
+  (define (check-operands name srcs)
+    (case name
+      ;; (vector-ref v i) / (vector-set! v i x): index is operand 2, vector is 1
+      ((bounds-check) (list (cadr srcs) (car srcs)))
+      ((type-check)   (list (car srcs)))
+      (else srcs)))
+
   (define (checks->instrs controls srcs stats)
     (let loop ((cs controls) (out '()))
       (if (null? cs)
@@ -101,8 +118,16 @@
                ;; The expected tag rides on the instruction. Only type-check
                ;; uses it; everything else passes 0, because there is no
                ;; constant a bounds or overflow check compares against.
-               (loop (cdr cs)
-                     (cons `(chk ,name checked ,(expected-tag name) ,@srcs) out)))
+               (let ((ops (check-operands name srcs)))
+                 (if (eq? name 'bounds-check)
+                     ;; Materialise the limit, then check the index against it.
+                     (let ((lim (fresh! "len")))
+                       (loop (cdr cs)
+                             (cons `(chk bounds-check checked 0 ,(car ops) ,lim)
+                                   (cons `(vlen ,lim raw-word ,(cadr ops)) out))))
+                     (loop (cdr cs)
+                           (cons `(chk ,name checked ,(expected-tag name) ,@ops)
+                                 out)))))
               (else (error 'lower "unknown control" ctl)))))))
 
   ;; --- blocks ---------------------------------------------------------------

@@ -86,6 +86,8 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/repr-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/callseq-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss

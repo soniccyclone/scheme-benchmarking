@@ -227,6 +227,13 @@
   ;; (load dst sc base idx). idx is an ELEMENT index; the scale is implied by
   ;; the class, per fixtures.ss: "The scale on the load is 8 because an f64 is 8
   ;; bytes, and that is a machine-independent fact both ISAs share."
+  ;; A vector's length lives in its header, one word before the element data,
+  ;; which is the layout numeric.ss's tagging implies and gc.ss's collector
+  ;; walks. One load at a constant offset.
+  (define (r:vlen dst sc srcs)
+    (arity-check! 'rv64-select 1 srcs)
+    `((ld ,dst ,(car srcs) -8)))
+
   (define (r:load dst sc srcs)
     (arity-check! 'rv64-select 2 srcs)
     (let ((t (rv64-addr-scratch)) (base (car srcs)) (idx (cadr srcs)))
@@ -382,6 +389,7 @@
      (cons 'cmp-eq r:cmp-eq)
      (cons 'cmp-ge r:cmp-ge)
      (cons 'cmp-gt r:cmp-gt)
+     (cons 'vlen   r:vlen)
      (cons 'load   r:load)
      (cons 'store  r:store)
      (cons 'move   r:move)

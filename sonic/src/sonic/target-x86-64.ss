@@ -69,6 +69,9 @@
   (define (mov-for sc) (if (fp? sc) 'movsd 'mov))
 
   (define (mem base index) `(mem ,base ,index ,word-scale 0))
+  ;; Same addressing mode with a constant displacement and no index, for header
+  ;; fields at a fixed negative offset from the element data.
+  (define (mem-disp base disp) `(mem ,base #f ,word-scale ,disp))
 
   ;; --- the three-address to two-address rewrite -----------------------------
 
@@ -229,6 +232,15 @@
      ;; `(load dst sc base index)` reads `base[index]`, or `(load dst sc base)`
      ;; reads `base[0]`. The scale is 8 because every storage class is a machine
      ;; word wide, and it folds into the addressing mode for free.
+     ;; A vector's length lives in its header, one word before the element
+     ;; data, which is the layout numeric.ss's tagging implies and gc.ss's
+     ;; collector walks. One load at a constant displacement.
+     (cons 'vlen
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 1)
+               (error 'x86-64-selector "vlen expects one vector" srcs))
+             `((mov ,dst ,(mem-disp (car srcs) -8)))))
+
      (cons 'load
            (lambda (dst sc srcs)
              (let ((addr (case (length srcs)

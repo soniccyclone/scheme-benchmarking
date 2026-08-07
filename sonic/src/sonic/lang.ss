@@ -170,6 +170,12 @@
       ;; with no mach op to select from, so fcvt.d.l was encodable and
       ;; unreachable.
       cvt-f64-from-int cvt-int-from-f64
+      ;; Load a vector's length field. A bounds check needs a LIMIT, and the
+      ;; limit is not in the IR anywhere: the primcall carries the vector, not
+      ;; its length. Without this op, lowering a bounds check has nothing to
+      ;; compare the index against, and both targets read the check's second
+      ;; operand as an already-materialised limit.
+      vlen
       branch branch-if jump                         ; control
       call ret                                      ; calls
       check-bounds check-type check-overflow))      ; checks not yet elided
