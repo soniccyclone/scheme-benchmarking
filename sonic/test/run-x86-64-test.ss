@@ -147,9 +147,17 @@
                             (loop (cons (string-append l "\n") acc)))))))
                 "")
                nbody-externs)))
-  (ck! "nbody's INITIAL energy is bit-exact against Chez on the same source"
-       (and (pair? out) (= (car out) -0.16907516382852447)))
-  (unless (and (pair? out) (= (car out) -0.16907516382852447))
+  ;; BOTH energies, so the whole program is covered: init!, offset-momentum!,
+  ;; energy AND advance! over 1000 steps. The second value is the one that
+  ;; exercises the pairwise force loop and the position update, and getting it
+  ;; bit-exact means every rounding decision matched Chez's for 1000 iterations
+  ;; -- which no tolerance-based check would have told us.
+  ;;
+  ;; -0.169059907 in the Benchmarks Game is for a much larger N; the oracle here
+  ;; is cross-agreement with Chez on the same source, per docs/METHOD.md.
+  (ck! "nbody is bit-exact against Chez on the same source, both energies"
+       (equal? out '(-0.16907516382852447 -0.16908760523460614)))
+  (unless (equal? out '(-0.16907516382852447 -0.16908760523460614))
     (display "       got=") (write out) (newline)))
 
 ;; DETERMINISM. The same source must produce the same bytes.

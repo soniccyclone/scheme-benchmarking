@@ -282,8 +282,53 @@
       ;; x86-64 reads memory directly, which is the whole reason it gets away
       ;; with four raw registers; RV64 is load/store and every spilled operand
       ;; costs a scratch, which is why it reserves two.
+      ;; A plain MOVE whose source is spilled folds the reload into itself:
+      ;; `mov dst, [rsp+N]` rather than `mov rax, [rsp+N]` then `mov dst, rax`.
+      ;;
+      ;; This is not just one instruction saved. Going through the scratch is
+      ;; what broke nbody's inner loop. Argument setup for a tail call emits a
+      ;; run of moves that must be resolved as a PARALLEL copy, and routing a
+      ;; spilled source through the scratch turns `mov rcx, <spilled>` into a
+      ;; pair whose second half reads the scratch -- which `mov-of` correctly
+      ;; refuses to treat as part of a parallel copy, since the scratch has to
+      ;; stay free to break cycles. So those moves were never resolved, and
+      ;; they clobbered each other:
+      ;;
+      ;;     mov rcx, [rsp+24] ; add rcx, 1   -> rcx = j+1
+      ;;     mov rax, [rsp+0]  ; mov rcx, rax -> rcx overwritten, j+1 gone
+      ;;
+      ;; The loop then passed a stale index and ran exactly one iteration,
+      ;; whatever its bound: nbody visited pair (0,1) and (1,2) but never (0,2).
+      ;;
+      ;; A memory source cannot be clobbered by a register write, so folding it
+      ;; in makes the move safe to reorder and keeps the scratch free.
+      (define (fold-reload i)
+        (and (memq (car i) '(mov movsd))
+             (= (length i) 3)
+             (spiller-mem-operand sp)
+             (let ((dst (cadr i)) (src (caddr i)))
+               ;; The destination may ALREADY be physical -- argument setup
+               ;; moves into a convention register, and those are exactly the
+               ;; ones that were clobbering each other, so missing this case
+               ;; missed the bug entirely.
+               (let ((dst-phys (if (reg-class arch dst)
+                                   dst
+                                   (hashtable-ref assign dst #f))))
+               (and (symbol? src) (spilled? src)
+                    (symbol? dst) (not (spilled? dst))
+                    dst-phys
+                    (list '()
+                          (list (car i)
+                                dst-phys
+                                ((spiller-mem-operand sp)
+                                 (frame-slot-offset frame src) (class-of src)))
+                          '()))))))
+
       (define (do-instr i)
         (let ((vs (distinct (apply append (map spilled-in (cdr i))))))
+          (cond
+           ((fold-reload i))
+           (else
           (if (null? vs)
               (list '() (cons (car i) (map (lambda (x) (rewrite-operand arch assign x))
                                            (cdr i)))
@@ -356,7 +401,7 @@
                                                   (frame-slot-offset frame v) r (class-of v))
                                                  '())))
                                          chosen))))
-                  (list pre (cons (car i) ops) post))))))
+                  (list pre (cons (car i) ops) post))))))))
 
       ;; The two-address forms read their destination. Anything that only writes
       ;; it must NOT be reloaded first: the reload would be dead, and worse, it
@@ -401,10 +446,28 @@
              (memq (car i) '(mov movsd addi fsgnj.d))
              (case (car i)
                ((mov movsd)
-                (and (= (length i) 3) (symbol? (cadr i)) (symbol? (caddr i))
-                     (reg-class arch (cadr i)) (reg-class arch (caddr i))
-                     (not (scratchy? (cadr i))) (not (scratchy? (caddr i)))
-                     (cons (cadr i) (caddr i))))
+                (and (= (length i) 3) (symbol? (cadr i))
+                     (reg-class arch (cadr i)) (not (scratchy? (cadr i)))
+                     ;; The SOURCE may be a memory operand, and admitting those
+                     ;; is what fixes argument setup.
+                     ;;
+                     ;; A spilled argument folds to `mov <argreg>, [rsp+N]`, and
+                     ;; rejecting it broke the run -- so a live value sitting in
+                     ;; a register that is ALSO a convention argument register
+                     ;; got overwritten before the move that read it. rcx held
+                     ;; j+1 and is raw-word argument 0, so the loop passed a
+                     ;; stale index and ran exactly one iteration.
+                     ;;
+                     ;; A memory source has no register to be clobbered, so it
+                     ;; never participates in a cycle; it only has to be ordered
+                     ;; after anything that reads its destination, which is
+                     ;; exactly what the ready rule already enforces.
+                     (let ((src (caddr i)))
+                       (cond
+                        ((and (symbol? src) (reg-class arch src) (not (scratchy? src)))
+                         (cons (cadr i) src))
+                        ((and (pair? src) (eq? (car src) 'mem)) (cons (cadr i) src))
+                        (else #f)))))
                ;; RV64 spells a register move `addi rd, rs, 0` and a float one
                ;; `fsgnj.d rd, rs, rs`.
                ((addi)
