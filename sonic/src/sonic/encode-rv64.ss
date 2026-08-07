@@ -246,7 +246,12 @@
       (czero.eqz . Zicond) (czero.nez . Zicond)
       (vsetvli . V) (vsetivli . V) (vsetvl . V)
       (vle64.v . V) (vse64.v . V) (vfadd.vv . V) (vfmul.vv . V)
-      (vadd.vv . V) (vfmacc.vv . V) (vfredusum.vs . V)))
+      (vadd.vv . V) (vfmacc.vv . V) (vfredusum.vs . V)
+      ;; The rest of what sonic/src/sonic/vec-rv64.ss emits. Listed so the base
+      ;; encoder names the EXTENSION rather than reporting "no such instruction"
+      ;; for a correctly spelled RVV mnemonic that reached the wrong encoder.
+      (vfsub.vv . V) (vfdiv.vv . V) (vfsqrt.v . V)
+      (vfmv.v.f . V) (vmv.v.v . V)))
 
   (define (above-baseline-extension mn)
     (let ((p (assq mn above-baseline))) (and p (cdr p))))
