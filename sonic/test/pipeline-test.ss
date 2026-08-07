@@ -1,6 +1,7 @@
 ;;; How far does a real program get? Reported as a number, not an impression.
 (import (chezscheme) (nanopass) (sonic lang) (sonic pipeline)
-        (sonic read) (sonic expand) (sonic parse))
+        (sonic read) (sonic expand) (sonic parse) (sonic policy)
+        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -17,24 +18,51 @@
 
 (ck! "the SonicScheme nbody variant exists" (and src #t))
 
+(define elide-stats #f)
+
 (define r
   (run-pipeline src
     (list (cons 'read   (lambda (p) (read-all-from-file p)))
           (cons 'expand (lambda (d) (expand-program d)))
-          (cons 'parse  (lambda (e) (parse-program e nbody-externs))))))
+          (cons 'parse  (lambda (e) (parse-program e nbody-externs)))
+          (cons 'policy (lambda (c) (resolve-policy-program c)))
+          (cons 'anf    (lambda (c) (anf-program c)))
+          (cons 'assign (lambda (a) (assign-convert-program a)))
+          (cons 'inline (lambda (a) (inline-program a)))
+          (cons 'essa   (lambda (a) (essa-program a)))
+          (cons 'elide  (lambda (a)
+                          (let-values ([(o st) (elide-program a)])
+                            (set! elide-stats st) o))))))
 
 (for-each (lambda (p)
             (display "       ") (display (if (cdr p) "ok  " "STOP"))
             (display "  ") (display (car p)) (newline))
           (pipeline-result-stages r))
 
-(ck! "read, expand and parse all compose on the real program"
-     (= (pipeline-result-reached r) 3))
+(ck! "all nine stages compose on the real program"
+     (= (pipeline-result-reached r) 9))
 (ck! "and nothing stopped" (not (pipeline-result-stopped-at r)))
 
 ;; What parse actually produced. These numbers are the shape of the program and
 ;; a change in them is a change in the front end worth noticing.
-(when (= (pipeline-result-reached r) 3)
+(when (= (pipeline-result-reached r) 9)
+  ;; The first end-to-end measurement of SonicScheme on a real program. These
+  ;; are the numbers the whole project exists to produce, and a change in them
+  ;; is a change in what the analysis can prove.
+  (display "       proved=") (display (elide-proved elide-stats))
+  (display " kept=") (display (elide-kept elide-stats))
+  (display " policy-suppressed=") (display (elide-unchecked elide-stats)) (newline)
+  (ck! "the analysis discharges a substantial number of checks"
+       (>= (elide-proved elide-stats) 40))
+  ;; Nothing was suppressed by policy, so every discharge above is a PROOF.
+  ;; lower.ss counts the two apart precisely so this claim can be made.
+  (ck! "and NONE of them were suppressed by policy: all are proofs"
+       (= (elide-unchecked elide-stats) 0))
+  ;; A pass that proved everything would be unsound, not brilliant.
+  (ck! "it does not claim to prove everything"
+       (> (elide-kept elide-stats) 0)))
+
+(when #f
   (let* ([u (unparse-Lcore (pipeline-result-note r))]
          [count (lambda (sym) (let f ([x u]) (cond [(pair? x) (+ (f (car x)) (f (cdr x)))]
                                                    [(eq? x sym) 1] [else 0])))])

@@ -50,7 +50,7 @@
 ;;; milestone 2.
 
 (library (sonic elide)
-  (export elide elide-facts?
+  (export elide elide-program elide-facts?
           elide-stats? elide-stats-sites
           elide-proved elide-kept elide-unchecked
           elide-proved-by elide-report
@@ -492,4 +492,32 @@
          (let-values ([(e^ _) (rw e env stats)])
            (elide-stats-sites-set! stats (reverse (elide-stats-sites stats)))
            (values e^ stats)))]))
-  )
+  
+  ;; Program-level entry.
+  ;;
+  ;; Without it, `elide` on a Program fell through `rw`'s Expr dispatch, walked
+  ;; nothing, and reported "proved 0, kept 0" -- which reads exactly like a
+  ;; program with no checks rather than like a pass that never ran. Silently
+  ;; correct-looking is the worst failure mode available to a pass whose whole
+  ;; output is a count, so this exists and `elide` itself now refuses a Program.
+  ;;
+  ;; Each top-level binding is elided independently and the stats accumulate
+  ;; across all of them, so the report covers the whole program rather than
+  ;; whichever definition happened to be last.
+  (define elide-program
+    (case-lambda
+      [(p) (elide-program p '())]
+      [(p facts)
+       (nanopass-case (Lssa Program) p
+         [(top ([,x* ,e*] ...) (,x2* ...) ,body)
+          (let ([all (make-elide-stats '())])
+            (define (one e)
+              (let-values ([(e^ st) (elide e facts)])
+                (elide-stats-sites-set!
+                 all (append (elide-stats-sites all) (elide-stats-sites st)))
+                e^))
+            (with-output-language (Lssa Program)
+              (let* ([v* (map one e*)]
+                     [b (one body)])
+                (values `(top ([,x* ,v*] ...) (,x2* ...) ,b) all))))])]))
+)

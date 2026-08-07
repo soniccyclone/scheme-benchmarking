@@ -61,7 +61,7 @@
 ;;; only place the NaN rule appears.
 
 (library (sonic essa)
-  (export essa comparison-prim? cmp-swap)
+  (export essa essa-program comparison-prim? cmp-swap)
   (import (chezscheme) (nanopass) (sonic lang))
 
   ;; --- the comparison algebra -----------------------------------------------
@@ -396,4 +396,20 @@
                   ,(map (lambda (a) (env-lookup env a)) x*) ...)])
 
     (begin (reset-names!) (Expr e '() '() #t)))
-  )
+  
+  ;; Program-level entry. Every other pass in the pipeline has one; this did
+  ;; not, so a whole-program run stopped here with "unexpected Expr" and the
+  ;; caller had to reach inside the Program itself.
+  ;;
+  ;; Each top-level binding is converted independently, which is right: they are
+  ;; separate definitions and a name defined at top level is not an SSA
+  ;; assignment. The extern list passes through untouched, since an external
+  ;; name has no definition here to rename.
+  (define (essa-program p)
+    (nanopass-case (Lanf Program) p
+      [(top ([,x* ,e*] ...) (,x2* ...) ,body)
+       (with-output-language (Lssa Program)
+         (let* ([v* (map essa e*)]
+                [b (essa body)])
+           `(top ([,x* ,v*] ...) (,x2* ...) ,b)))]))
+)
