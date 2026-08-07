@@ -42,6 +42,8 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/x86-64-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/lower-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss

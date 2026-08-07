@@ -1,0 +1,81 @@
+(import (chezscheme) (nanopass) (sonic lang) (sonic fixtures) (sonic lower))
+
+(define failures 0) (define checks 0)
+(define (ck! name ok)
+  (set! checks (+ checks 1))
+  (if ok (begin (display "  ok   ") (display name) (newline))
+         (begin (set! failures (+ failures 1))
+                (display "  FAIL ") (display name) (newline))))
+
+(define (ops prog)          ; the instruction opcodes of the entry block, in order
+  (map car (cadr (cadr (car (cadr prog))))))
+(define (transfer prog) (car (caddr (cadr (car (cadr prog))))))
+
+;; --- nbody's inner loop -----------------------------------------------------
+(let-values ([(prog stats) (lower-program (unparse-Lrepr (nbody-inner-repr)) 'entry)])
+  ;; The acceptance criterion: same op sequence as the hand-written fixture.
+  ;; Compared on OPS rather than on the whole datum, because the fixture names
+  ;; its vregs v-off and lowering names them after the source variables, and
+  ;; that difference is naming, not structure.
+  (ck! "lowers to mul, add, load in that order"
+       (equal? (ops prog) '(mul add load)))
+  (ck! "and returns" (eq? (transfer prog) 'ret))
+  (ck! "no chk instruction survives: every check was discharged or suppressed"
+       (not (memq 'chk (ops prog))))
+
+  ;; The number the project exists to produce, separated from the one it does not.
+  (ck! "2 checks PROVED away by the analysis" (= (lower-stats-proved stats) 2))
+  (ck! "2 checks suppressed by policy, counted APART from the proofs"
+       (= (lower-stats-unchecked stats) 2))
+  (ck! "0 checks emitted" (= (lower-stats-emitted stats) 0)))
+
+;; --- a check that survives --------------------------------------------------
+;; If the analysis cannot discharge it and no policy suppressed it, the check
+;; MUST reach codegen. Silently dropping it would be a memory-safety hole.
+(let-values ([(prog stats)
+              (lower-program
+               '(let ([v raw-f64 (primcall flvector-ref
+                                           ([type-check checked] [bounds-check checked])
+                                           b i)])
+                  v)
+               'entry)])
+  (ck! "a checked primcall emits chk instructions before the op"
+       (equal? (ops prog) '(chk chk load)))
+  (ck! "and they are counted as emitted, not proved"
+       (and (= (lower-stats-emitted stats) 2)
+            (= (lower-stats-proved stats) 0))))
+
+;; --- proved and unchecked emit the SAME code and mean different things ------
+(let-values ([(p1 s1) (lower-program
+                       '(let ([v raw-f64 (primcall flvector-ref
+                                                   ([bounds-check proved]) b i)]) v)
+                       'entry)]
+             [(p2 s2) (lower-program
+                       '(let ([v raw-f64 (primcall flvector-ref
+                                                   ([bounds-check unchecked]) b i)]) v)
+                       'entry)])
+  (ck! "proved and unchecked produce identical instructions"
+       (equal? (ops p1) (ops p2)))
+  (ck! "but are reported separately, which is the whole point"
+       (and (= (lower-stats-proved s1) 1) (= (lower-stats-unchecked s1) 0)
+            (= (lower-stats-proved s2) 0) (= (lower-stats-unchecked s2) 1))))
+
+;; --- primitives with no machine op are refused, not silently dropped --------
+(set! checks (+ checks 1))
+(let ([caught #f])
+  (guard (e (#t (set! caught #t)))
+    (lower-program '(let ([v raw-word (primcall cons () a b)]) v) 'entry))
+  (if caught
+      (display "  ok   a primitive with no machine op RAISES\n")
+      (begin (set! failures (+ failures 1))
+             (display "  FAIL unlowerable primitive silently dropped\n"))))
+
+;; --- comparisons lower by operand type -------------------------------------
+(let-values ([(pi si) (lower-program '(let ([t raw-word (primcall fx< () a b)]) t) 'entry)]
+             [(pf sf) (lower-program '(let ([t raw-word (primcall fl< () a b)]) t) 'entry)])
+  (ck! "fx< lowers to cmp-lt and fl< to fcmp-lt, not the same op"
+       (and (equal? (ops pi) '(cmp-lt)) (equal? (ops pf) '(fcmp-lt)))))
+
+(newline)
+(display checks) (display " checks, ") (display failures) (display " failures") (newline)
+(if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))
