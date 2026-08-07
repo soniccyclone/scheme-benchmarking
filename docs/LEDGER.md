@@ -54,6 +54,17 @@ reversal attached, never edited away.
 
 ## Corrections to our own claims
 
+- **The tagged-cell hazard in assignment conversion does not fire on nbody, and the reason
+  is structural rather than lucky.** Boxing a mutated variable makes the cell tagged even
+  when the value is a `raw-f64`, which would push every mutated flonum local out of the
+  float registers and destroy exactly what this project measures. Measured on
+  `bench/nbody/config-sonic.sps`: 18 top-level definitions, 187 primcalls, **zero `set!`
+  forms**, so nothing is boxed. That is what idiomatic Scheme does — every loop carries its
+  state in the parameters of a tail call, and every array update is `flvector-set!`, a
+  store to a heap object rather than an assignment to a variable. The hazard is real for
+  other programs and the mitigation is in place (a variable provably flonum gets a one-slot
+  `flvector`, not a `vector`, so the value stays unboxed even though the cell is tagged).
+
 - **Nanopass's generated fallthrough clause is the dangerous kind of default.** `essa.ss`
   had no `tailcall` clause, so nanopass generated one that copies operands verbatim with no
   environment lookup. It typechecks, it round-trips, and it is wrong: a back edge emitted

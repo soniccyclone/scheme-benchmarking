@@ -62,6 +62,12 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/litpool-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/assign-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/distinct-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/parse-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss
