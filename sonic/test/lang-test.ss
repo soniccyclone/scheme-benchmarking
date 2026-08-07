@@ -116,9 +116,13 @@
      (lambda () (with-output-language (Lcore Expr)
                   `(letrec* ([a (quote 1)] [b (quote 2)]) b))))
 
-(ok! "there is a top-level Program production"
+(ok! "there is a top-level Program production, with an extern list"
      (lambda () (with-output-language (Lcore Program)
-                  `(top ([f (lambda (x) x)]) (call f (quote 1))))))
+                  `(top ([f (lambda (x) x)]) (write-string sqrt) (call f (quote 1))))))
+
+(ok! "an empty extern list means the unit is closed"
+     (lambda () (with-output-language (Lcore Program)
+                  `(top ([f (lambda (x) x)]) () (call f (quote 1))))))
 
 ;; --- the downstream IR contracts -------------------------------------------
 ;; The contract is that a pass author can CONSTRUCT valid input for their own

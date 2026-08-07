@@ -236,8 +236,20 @@
     ;; A top-level program. Lmach had a `program` production and Lcore did not,
     ;; so the expander had nowhere to put top-level definitions and stage 03
     ;; would have had to invent the shape.
+    ;;
+    ;; The second list names what is OUTSIDE this compilation unit.
+    ;;
+    ;; Without it, "opaque, I cannot see this" had to be spelled as an unbound
+    ;; free variable in operator position. That works, and it is
+    ;; indistinguishable from a misspelling, so a genuine typo read as a
+    ;; deliberate external reference and silently got the conservative answer
+    ;; instead of an error. Naming externs explicitly makes an unbound variable
+    ;; a bug again.
+    ;;
+    ;; (nanopass will not take a keyword inside a production, so this is
+    ;; positional: bindings, then externs, then the body.)
     (Program (prog)
-      (top ([x* e*] ...) body)))
+      (top ([x* e*] ...) (x2* ...) body)))
 
   ;; --- Lanf -----------------------------------------------------------------
   ;; A-normal form. Every intermediate is named.
