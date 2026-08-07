@@ -64,7 +64,11 @@
 (set! checks (+ checks 1))
 (let ([caught #f])
   (guard (e (#t (set! caught #t)))
-    (lower-program '(let ([v raw-word (primcall cons () a b)]) v) 'entry))
+    ;; `cons` used to be the example here and now lowers to a runtime call, so
+    ;; the assertion moved to one that genuinely has no machine op. That is not
+    ;; the test weakening: an unlowerable primitive must still raise rather than
+    ;; being dropped, because a dropped primcall is a silently wrong program.
+    (lower-program '(let ([v raw-word (primcall fxremainder () a b)]) v) 'entry))
   (if caught
       (display "  ok   a primitive with no machine op RAISES\n")
       (begin (set! failures (+ failures 1))

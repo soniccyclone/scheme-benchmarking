@@ -43,8 +43,13 @@
   ;; port in progress can report what it still owes instead of dying on the
   ;; first gap. `select-program` still refuses to run on an uncovered program.
 
+  ;; Accepts either a nanopass record or the datum `lower.ss` produces, because
+  ;; both are legitimate inputs: fixtures are built through the grammar and the
+  ;; lowering pass emits a datum for the reason its header gives.
+  (define (as-datum prog) (if (pair? prog) prog (unparse-Lmach prog)))
+
   (define (program-ops prog)
-    (let walk ((x (unparse-Lmach prog)) (acc '()))
+    (let walk ((x (as-datum prog)) (acc '()))
       (cond ((and (pair? x) (symbol? (car x)))
              (walk (cdr x) (cons (car x) acc)))
             ((pair? x) (walk (car x) (walk (cdr x) acc)))
@@ -123,7 +128,7 @@
       (unless (null? missing)
         (error 'select-program "target cannot select these ops"
                (selector-name sel) missing)))
-    (let* ((p (unparse-Lmach prog))
+    (let* ((p (as-datum prog))
            (blocks (cadr p))
            (entry (caddr p)))
       (list 'selected (selector-name sel) entry

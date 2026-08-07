@@ -27,7 +27,7 @@
 ;;; number as "how many did the programmer switch off".
 
 (library (sonic lower)
-  (export lower-program lower-expr
+  (export lower-program lower-expr lower-toplevel
           make-lower-stats lower-stats? lower-stats-proved
           lower-stats-unchecked lower-stats-emitted)
   (import (chezscheme)
@@ -49,7 +49,16 @@
       (fl>= . fcmp-ge) (fl> . fcmp-gt)
       (fx->fl . cvt-f64-from-int) (fl->fx . cvt-int-from-f64)
       (flvector-ref . load) (flvector-set! . store)
-      (vector-ref . load) (vector-set! . store)))
+      (vector-ref . load) (vector-set! . store)
+      ;; Allocation and anything else with no single machine op becomes a call
+      ;; into the runtime. `alloc.ss` owns the fast path and `gc.ss` the slow
+      ;; one, and neither is expressible as one Lmach instruction: the claim,
+      ;; the fill and the restart region are a sequence, and inlining that here
+      ;; would duplicate a decision those files already made.
+      (make-flvector . call) (make-vector . call)
+      (cons . call) (car . call) (cdr . call) (error . call)
+      (null? . call) (pair? . call) (eq? . call)
+      (fixnum? . call) (flonum? . call) (vector? . call) (flvector? . call)))
 
   ;; numeric.ss fixes a 3-bit tag scheme with fixnum at 000. A type check needs
   ;; to name which tag it expects; the other checks have no such constant.
@@ -96,10 +105,24 @@
                      (cons `(chk ,name checked ,(expected-tag name) ,@srcs) out)))
               (else (error 'lower "unknown control" ctl)))))))
 
+  ;; --- blocks ---------------------------------------------------------------
+  ;;
+  ;; Lrepr is a tree and Lmach is a CFG, so `if` is where the shape actually
+  ;; changes. Each arm becomes its own labelled block and the test becomes a
+  ;; `branch-if` transfer; the join is a third block both arms jump to.
+  ;;
+  ;; Blocks accumulate in a mutable list rather than being threaded, because the
+  ;; alternative is passing a block list through every return and the walk
+  ;; already returns two values.
+
+  (define blocks '())
+  (define (emit-block! lbl instrs transfer)
+    (set! blocks (cons (list lbl (list 'block (reverse instrs) transfer)) blocks)))
+  (define (reset-blocks!) (set! blocks '()))
+
   ;; --- the walk -------------------------------------------------------------
-  ;; Returns (values instrs result-vreg). Straight-line only for now: an `if`
-  ;; needs block splitting, which is the next increment and is why `lower-expr`
-  ;; is exported separately.
+  ;; Returns (values instrs result-vreg) for straight-line code, and emits
+  ;; blocks as a side effect where control flow forces a split.
 
   (define (lower-expr e stats)
     (let walk ((e (if (pair? e) e (unparse-Lrepr e))) (acc '()))
@@ -119,6 +142,84 @@
                      (values (reverse (cons `(const ,v raw-word ,(cadr e)) acc)) v)))
           ((void)  (let ((v (fresh! "k")))
                      (values (reverse (cons `(const ,v raw-word ()) acc)) v)))
+          ;; Control flow. The accumulated straight-line instructions become the
+          ;; current block, ending in a branch; each arm gets a label; both
+          ;; converge on a join block whose only job is to be the continuation.
+          ((if)
+           (let* ((test (cadr e))
+                  (then-lbl (fresh! "L.then"))
+                  (else-lbl (fresh! "L.else"))
+                  (join-lbl (fresh! "L.join"))
+                  (cur (fresh! "L.cur")))
+             (emit-block! cur acc (list 'branch-if test then-lbl else-lbl))
+             (let-values (((t-is t-v) (lower-expr (caddr e) stats)))
+               (emit-block! then-lbl (reverse t-is) (list 'jump join-lbl)))
+             (let-values (((e-is e-v) (lower-expr (cadddr e) stats)))
+               (emit-block! else-lbl (reverse e-is) (list 'jump join-lbl)))
+             ;; The join carries no instructions of its own. A phi would live
+             ;; here; Lmach has none, so the arms' results are already in the
+             ;; vregs the analysis named and nothing needs merging.
+             (values '() join-lbl)))
+          ;; Premises and policies carry no code. They constrained the ANALYSIS,
+          ;; which has already run and left its answers in the controls, so by
+          ;; here they are annotation and the body is the program. Dropping them
+          ;; is not losing information -- keeping them would be, since nothing
+          ;; downstream reads them and a stale premise outliving its analysis is
+          ;; how a wrong assumption gets reused.
+          ;; All three are (form <annotation> body), so the body is caddr.
+          ((declare declare-distinct policy)
+           (walk (caddr e) acc))
+          ;; phi and sigma are SSA bookkeeping, not code.
+          ;;
+          ;; A phi says "this name is the merge of these values". Lmach has no
+          ;; phi, and it does not need one here: the arms already wrote their
+          ;; results into the vregs the analysis named, so the merge is a
+          ;; register that is already correct on both paths. Emitting moves for
+          ;; it would be out-of-SSA translation, which matters once the
+          ;; allocator can split live ranges and does not yet.
+          ;;
+          ;; sigma is pure annotation -- a name for a fact on one edge -- so it
+          ;; becomes a move from the refined name to the original, which the
+          ;; allocator then coalesces away.
+          ((phi)
+           (let loop ((bs (cadr e)) (out acc))
+             (if (null? bs)
+                 (walk (caddr e) out)
+                 (let* ((b (car bs)) (x (car b))
+                        (first-val (cadr (cadr b))))   ; (x (pred val) ...)
+                   (loop (cdr bs)
+                         (if (symbol? first-val)
+                             (cons `(move ,x raw-word ,first-val) out)
+                             out))))))
+          ((sigma)
+           ;; (sigma x-out x-in cmp x-other negated? body)
+           (walk (list-ref e 6) (cons `(move ,(cadr e) raw-word ,(caddr e)) acc)))
+          ((letrec)
+           ;; Each binding becomes its own labelled block, then the body runs.
+           (for-each
+            (lambda (b)
+              (let ((x (car b)) (v (cadr b)))
+                (let-values (((is r) (lower-expr (if (and (pair? v) (eq? (car v) 'lambda))
+                                                     (caddr v) v)
+                                                 stats)))
+                  (emit-block! x (reverse is) (list 'ret r)))))
+            (cadr e))
+           (walk (caddr e) acc))
+          ((lambda)
+           ;; A lambda in value position: its own block, and the value is the
+           ;; label. Closures are a later bead; this is enough for a program
+           ;; whose procedures are all top-level or letrec-bound.
+           (let ((lbl (fresh! "L.fn")))
+             (let-values (((is r) (lower-expr (caddr e) stats)))
+               (emit-block! lbl (reverse is) (list 'ret r)))
+             (values (reverse acc) lbl)))
+          ((seq)
+           (let-values (((a av) (lower-expr (cadr e) stats)))
+             (let-values (((b bv) (lower-expr (caddr e) stats)))
+               (values (append (reverse acc) a b) bv))))
+          ((tailcall)
+           (let ((v (fresh! "t")))
+             (values (reverse (cons `(call ,v raw-word ,@(cdr e)) acc)) v)))
           (else
            ;; a bare simple expression in tail position
            (let ((v (fresh! "t")))
@@ -157,7 +258,55 @@
   ;; drifts, the comparison fails.
   (define (lower-program e name)
     (let ((stats (make-lower-stats 0 0 0)))
+      (reset-blocks!)
       (let-values (((instrs result) (lower-expr e stats)))
-        (values `(program ((,name (block ,instrs (ret ,result)))) ,name)
+        (values `(program ((,name (block ,instrs (ret ,result))) ,@blocks) ,name)
                 stats))))
+
+  ;; Whole program. Each top-level binding whose value is a lambda becomes its
+  ;; own labelled function; everything else is initialization that runs before
+  ;; the body, in source order, because a later definition may read an earlier
+  ;; one.
+  (define (lower-toplevel p name)
+    ;; The entry block gets a FRESH label, not `name`. A top-level binding may
+    ;; itself be called `main`, and two blocks with one label make the program
+    ;; ambiguous in a way nothing downstream can detect: selection walks both
+    ;; and the second silently wins.
+    (let ((stats (make-lower-stats 0 0 0))
+          (entry (fresh! (string-append (symbol->string name) ".entry"))))
+      (reset-blocks!)
+      (let* ((form (if (pair? p) p (unparse-Lrepr p))))
+        (unless (eq? (car form) 'top)
+          (error 'lower-toplevel "not a top-level program" form))
+        (let ((binds (cadr form)) (body (cadddr form)) (init '()))
+          (for-each
+           (lambda (b)
+             (let ((x (car b)) (v (cadr b)))
+               (if (and (pair? v) (eq? (car v) 'lambda))
+                   ;; A defined procedure: its own block, named for the binding.
+                   (let-values (((is r) (lower-expr (caddr v) stats)))
+                     (emit-block! x (reverse is) (list 'ret r)))
+                   ;; A value: initialization, in source order.
+                   (let-values (((is r) (lower-simple-or-expr v x stats)))
+                     (set! init (append init is))))))
+           binds)
+          (let-values (((bis bres) (lower-expr body stats)))
+            (let ((prog `(program ((,entry (block ,(append init bis) (ret ,bres)))
+                                   ,@blocks)
+                                  ,entry)))
+              ;; Duplicate labels are a wrong-code bug, so say so here rather
+              ;; than letting selection pick one arbitrarily.
+              (let dup ((ls (map car (cadr prog))) (seen '()))
+                (cond ((null? ls) 'ok)
+                      ((memq (car ls) seen)
+                       (error 'lower-toplevel "duplicate block label" (car ls)))
+                      (else (dup (cdr ls) (cons (car ls) seen)))))
+              (values prog stats)))))))
+
+  (define (lower-simple-or-expr v x stats)
+    (if (and (pair? v)
+             (memq (car v) '(let if seq tailcall letrec lambda phi sigma
+                             declare declare-distinct policy)))
+        (lower-expr v stats)
+        (lower-simple v x 'raw-word stats)))
   )
