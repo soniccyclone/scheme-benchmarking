@@ -66,8 +66,10 @@
 
 (library (sonic target-rv64)
   (export rv64-selector rv64-rules rv64-addr-scratch rv64-overflow-scratch
+          current-litpool
           rv64-trap-label rv64-call-emitter)
   (import (chezscheme)
+          (sonic litpool)
           (sonic lang)
           (sonic regs)
           (sonic callconv)
@@ -124,20 +126,30 @@
 
   ;; --- rules ----------------------------------------------------------------
 
+  ;; The pool a pooled constant is interned into. A parameter rather than an
+  ;; argument because the rule signature (dst sc srcs) is the contract both
+  ;; targets and the framework's toy target implement, and widening it for one
+  ;; case would break all three.
+  ;;
+  ;; Defaults to a fresh pool so a rule can be exercised standalone; a real
+  ;; compilation parameterizes it to the function's own pool, which object.ss
+  ;; then emits into .rodata with the relocations reloc.ss builds.
   (define (r:const dst sc srcs)
     (let ((d (car srcs)))
       (cond
        ((float? sc)
-        ;; Two routes exist and both need something selection cannot produce.
-        ;; A literal pool plus `fld` needs a pool and a pc-relative `auipc`
-        ;; anchor; `fmv.d.x` needs the 64-bit pattern materialized in an
-        ;; integer register first, which is a second destination register. Both
-        ;; are decisions above this file's pay grade, so we refuse rather than
-        ;; guess. `fmv.d.x` and `fcvt.d.l` are encodable regardless, because
-        ;; the encoder's job is the ISA and not the calling sequence.
-        (error 'rv64-select
-               "a flonum constant needs a literal pool or a second (integer) destination register, and an Lmach `const` gives selection neither"
-               dst d))
+        ;; RESOLVED (bead 6gk.13/6gk.17). litpool.ss interns it and reloc.ss builds the two
+        ;; relocations RV64 needs, because it has no PC-relative load: the
+        ;; address is built in two instructions and BOTH relocate, with the
+        ;; LO12 naming the HI20's label rather than the symbol.
+        ;;
+        ;; The immediates are the pool offset; the linker overwrites both via
+        ;; the relocations, and emitting the offset rather than zero keeps the
+        ;; disassembly readable when nothing has linked it yet.
+        (let* ((off (pool-intern-f64! (current-litpool) d))   ; returns the offset
+               (t (rv64-addr-scratch)))
+          `((auipc ,t ,off)
+            (fld ,dst ,t ,off))))
        ((not (and (integer? d) (exact? d)))
         (error 'rv64-select "RV64 const rule takes an exact integer" d))
        ((<= -2048 d 2047)

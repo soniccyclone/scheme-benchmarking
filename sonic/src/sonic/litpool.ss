@@ -88,7 +88,8 @@
 ;;; constant has a home the moment `chk` can name one.
 
 (library (sonic litpool)
-  (export make-pool pool?
+  (export current-litpool
+          make-pool pool?
           pool-intern! pool-intern-f64! pool-intern-i64!
           pool-intern-sign-mask! pool-intern-tag!
           pool-entries pool-size pool-align pool-bytes
@@ -185,6 +186,18 @@
   ;; returns the same offset and adds no bytes, which is the whole reason this
   ;; is a table rather than an append: a loop body that reads `0.5` in four
   ;; places should cost one slot and four identical PC-relative displacements.
+
+  ;; The pool a selector is currently interning into.
+  ;;
+  ;; It lives here rather than in either target because BOTH need it and a
+  ;; program has exactly one pool: a parameter owned by one back end would
+  ;; leave the other silently interning into a different, unemitted pool.
+  ;;
+  ;; The default is a fresh pool so a unit test can select an instruction
+  ;; without standing up an object file, but a real compilation parameterizes
+  ;; it -- the pool has to be the same object `object.ss` later asks for the
+  ;; bytes of, or the offsets the relocations carry name nothing.
+  (define current-litpool (make-parameter (make-pool)))
 
   (define (pool-intern! p kind key datum)
     (let ((k (cons kind key)))

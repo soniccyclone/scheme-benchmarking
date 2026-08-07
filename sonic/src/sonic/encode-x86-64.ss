@@ -144,7 +144,22 @@
                (index (list-ref parts 1))
                (scale (list-ref parts 2))
                (disp  (list-ref parts 3)))
-          (when (and base (not (gpr? base)))
+          ;; RIP-relative: mod=00, rm=101, disp32, and NO SIB byte. This is the
+          ;; one addressing form that is not expressible through the general
+          ;; base/index path, because mod=00 rm=101 means "disp32 from RIP" in
+          ;; 64-bit mode and "absolute disp32" in 32-bit mode -- the same
+          ;; encoding, different meaning. It is spelled as a distinct base
+          ;; rather than as base=#f because base=#f already means the absolute
+          ;; form (SIB with base=101), and conflating them would silently turn
+          ;; every pooled constant load into a load from a low absolute
+          ;; address.
+          ;;
+          ;; The displacement is measured from the END of the instruction, so
+          ;; the caller supplies the addend and the linker resolves it; see
+          ;; reloc.ss `pool-load-relocs`, which subtracts 4 for exactly this.
+          (when (eq? base 'rip)
+            (when index (error who "RIP-relative addressing takes no index" rm)))
+          (when (and base (not (eq? base 'rip)) (not (gpr? base)))
             (error who "memory base must be a general-purpose register" base))
           (when (and index (not (gpr? index)))
             (error who "memory index must be a general-purpose register" index))
@@ -153,6 +168,11 @@
           ;; index=1100, but rsp is simply not addressable as an index.
           (when (eq? index 'rsp)
             (error who "rsp cannot be a SIB index register" rm))
+          (if (eq? base 'rip)
+              (values rhi 0 0
+                      (append (list (bitwise-ior #b00000101
+                                                 (bitwise-arithmetic-shift-left rlo 3)))
+                              (imm32-bytes disp)))
           (let* ((bn (and base (reg-number base)))
                  (xn (and index (reg-number index)))
                  (need-sib (or xn (not bn) (= (bitwise-and bn 7) 4)))
@@ -179,7 +199,7 @@
             (values rhi
                     (if xn (bitwise-arithmetic-shift-right xn 3) 0)
                     (if bn (bitwise-arithmetic-shift-right bn 3) 0)
-                    (append (list modrm) (if sib (list sib) '()) disp-bytes)))))
+                    (append (list modrm) (if sib (list sib) '()) disp-bytes))))))
        (else (error who "not an r/m operand" rm)))))
 
   ;; Assemble one instruction from its pieces. Prefix order is fixed by the
@@ -212,6 +232,10 @@
   (define int-alu
     '((add . (#x01 #x03 0))
       (sub . (#x29 #x2B 5))
+      ;; `and` is here for the type check: masking the 3-bit primary tag out of
+      ;; a value is the one place the compiler needs bitwise work on the
+      ;; integer side, and numeric.ss fixes that tag width.
+      (and . (#x21 #x23 4))
       (cmp . (#x39 #x3B 7))))
 
   (define sse-arith

@@ -54,6 +54,7 @@
   (export x86-64-selector x86-64-rules x86-64-call-emitter)
   (import (chezscheme)
           (sonic select)
+          (sonic litpool)
           (sonic callconv)
           (sonic callseq)
           (sonic regs))
@@ -144,9 +145,20 @@
          (error 'x86-64-selector "bounds check expects an index and a limit" srcs))
        `((cmp ,(car srcs) ,(cadr srcs)) (jge (label sonic-bounds-error))))
       ((type-check)
-       (unless (= (length srcs) 2)
-         (error 'x86-64-selector "type check expects a value and a tag" srcs))
-       `((cmp ,(car srcs) ,(cadr srcs)) (jne (label sonic-type-error))))
+       ;; Lmach's `chk` carries the expected tag as a field, so the tag arrives
+       ;; in `tag` and NOT as a second source. This rule used to read it out of
+       ;; srcs, which is the shape from before that field existed; it survived
+       ;; because no test ever selected a type check with the current lowering.
+       ;;
+       ;; `and` is destructive, so the mask goes through the scratch register
+       ;; rather than clobbering the value being checked. rax is reserved
+       ;; outside every allocatable pool for exactly this (regs.ss).
+       (unless (= (length srcs) 1)
+         (error 'x86-64-selector "type check expects one value" srcs))
+       `((mov rax ,(car srcs))
+         (and rax (imm 7))
+         (cmp rax (imm ,tag))
+         (jne (label sonic-type-error))))
       ((div-check)
        (unless (= (length srcs) 1)
          (error 'x86-64-selector "division check expects a divisor" srcs))
@@ -183,13 +195,23 @@
      (cons 'const
            (lambda (dst sc srcs)
              (let ((d (car srcs)))
-               (when (fp? sc)
+               ;; A double has no immediate form on x86-64: there is no
+               ;; `movsd xmm, imm64`. It goes in the constant pool and comes
+               ;; back RIP-relative, which is ONE instruction here against
+               ;; RV64's two, because x86-64 has a PC-relative addressing mode
+               ;; and RV64 does not (reloc.ss, header).
+               ;;
+               ;; The displacement emitted is the pool offset. The linker
+               ;; overwrites it from the relocation; writing the offset rather
+               ;; than zero keeps an unlinked disassembly readable.
+               (cond
+                ((fp? sc)
+                 (let ((off (pool-intern-f64! (current-litpool) d)))
+                   `((movsd ,dst (mem rip #f 1 ,off)))))
+                ((and (integer? d) (exact? d)) `((mov ,dst (imm ,d))))
+                (else
                  (error 'x86-64-selector
-                        "an f64 literal needs a constant pool, which does not exist yet"
-                        dst d))
-               (unless (and (integer? d) (exact? d))
-                 (error 'x86-64-selector "only exact integer literals are selectable" d))
-               `((mov ,dst (imm ,d))))))
+                        "only exact integer and flonum literals are selectable" d))))))
 
      (cons 'add (arith 'x86-64-selector 'add 'addsd #t))
      (cons 'sub (arith 'x86-64-selector 'sub 'subsd #f))

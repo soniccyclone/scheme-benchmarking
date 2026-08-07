@@ -10,7 +10,7 @@
 
 (import (chezscheme) (rnrs io simple)
         (sonic lang) (sonic fixtures) (sonic select)
-        (sonic regs) (sonic target-rv64) (sonic encode-rv64))
+        (sonic regs) (sonic target-rv64) (sonic encode-rv64) (sonic litpool))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -113,9 +113,27 @@
 (ck! "an unchecked check emits nothing, because the policy suppressed it"
      (null? (sel1 '(chk bounds-check unchecked 0 v-i v-n))))
 
-;; The refusals. Each names a thing Lmach does not carry rather than guessing.
-(ck! "a flonum constant is REFUSED: there is no literal pool to put it in"
-     (raises-naming? (lambda () (sel1 '(const v-t raw-f64 1.5))) "literal pool"))
+;; UPDATED (milestone 1): the literal pool now exists, so a flonum constant
+;; SELECTS. RV64 has no PC-relative load, so it is two instructions -- the
+;; address is built with auipc and the load carries the low 12 bits -- and both
+;; relocate (reloc.ss). The immediate emitted is the pool offset; the linker
+;; overwrites it.
+(ck! "a flonum constant interns into the pool and loads via auipc + fld"
+     (parameterize ((current-litpool (make-pool)))
+       (let ((out (sel1 '(const v-t raw-f64 1.5))))
+         (and (= (length out) 2)
+              (eq? (car (car out)) 'auipc)
+              (equal? (cadr out) `(fld v-t ,(cadr (car out)) ,(caddr (car out))))))))
+;; Two references to the SAME constant must intern once. Interning twice would
+;; not be wrong, but the pool is emitted into .rodata and nbody's inner loop
+;; reads the same handful of constants every iteration.
+(ck! "interning is by value, so the same constant gets one pool slot"
+     (parameterize ((current-litpool (make-pool)))
+       (let ((a (sel1 '(const v-t raw-f64 1.5)))
+             (b (sel1 '(const v-u raw-f64 1.5)))
+             (c (sel1 '(const v-w raw-f64 2.5))))
+         (and (= (caddr (car a)) (caddr (car b)))
+              (not (= (caddr (car a)) (caddr (car c))))))))
 ;; UPDATED: Lmach's chk now carries the expected TAG, so a type check is
 ;; selectable. It masks the primary tag out of the value and compares it against
 ;; the constant; numeric.ss fixes a 3-bit primary tag with fixnum = 000.

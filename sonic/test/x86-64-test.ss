@@ -242,6 +242,17 @@
     (mov (mem r13 r8 8 0) rbx)              ; r13 base forces an explicit disp8 0
     (mov rax (mem rsp #f 1 0))              ; rsp base forces a SIB byte
     (mov rcx (mem r12 #f 1 0))              ; r12 base forces a SIB byte too
+    ;; RIP-relative, which every pooled f64 constant load uses. mod=00 rm=101
+    ;; and NO SIB byte; gas takes the displacement literally in Intel syntax,
+    ;; so the bytes are directly comparable.
+    (mov rax (mem rip #f 1 64))
+    (mov r11 (mem rip #f 1 -8))             ; REX.R on a RIP operand
+    (movsd xmm3 (mem rip #f 1 16))
+    (movsd xmm12 (mem rip #f 1 0))          ; REX.R with a zero displacement
+    ;; the type check's tag mask
+    (and rbx (imm 7))
+    (and r13 (imm 7))                       ; REX.B on the immediate form
+    (and r14 r8)
     ;; integer arithmetic
     (add rbx r8)
     (add r14 (imm 7))                       ; imm8 form

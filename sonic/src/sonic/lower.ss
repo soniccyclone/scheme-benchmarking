@@ -108,17 +108,31 @@
       ((type-check)   (list (car srcs)))
       (else srcs)))
 
-  (define (checks->instrs controls srcs stats)
-    (let loop ((cs controls) (out '()))
+  ;; Returns two lists: instructions that must run BEFORE the operation, and
+  ;; instructions that must run after it.
+  ;;
+  ;; Most checks are preconditions -- a bounds check exists precisely so the
+  ;; load never happens with a bad index, and emitting it afterwards would be
+  ;; the out-of-bounds access it was meant to prevent. Overflow is the
+  ;; exception and is inherently a POSTcondition: neither RV64 nor x86-64 can
+  ;; answer "did this add overflow" without the sum, and the sum is the
+  ;; operation's own destination. So it is emitted after, with `dst` appended
+  ;; as the third operand.
+  ;;
+  ;; This is safe in a way a late bounds check would not be: a wrapped add has
+  ;; produced a wrong number but has not touched memory, so trapping one
+  ;; instruction later observes nothing that has escaped.
+  (define (checks->instrs controls srcs dst stats)
+    (let loop ((cs controls) (out '()) (post '()))
       (if (null? cs)
-          (reverse out)
+          (values (reverse out) (reverse post))
           (let* ((pair (car cs)) (name (car pair)) (ctl (cadr pair)))
             (case ctl
               ((proved)
                ;; The analysis discharged it. This is the elision, and it is the
                ;; number the project exists to produce.
                (lower-stats-proved-set! stats (+ 1 (lower-stats-proved stats)))
-               (loop (cdr cs) out))
+               (loop (cdr cs) out post))
               ((unchecked)
                ;; A policy suppressed it. Also no instruction, and deliberately
                ;; counted apart from `proved`: emitting it would reinstate a
@@ -126,22 +140,44 @@
                ;; exists to provide, but it is NOT a proof and must not be
                ;; reported as one.
                (lower-stats-unchecked-set! stats (+ 1 (lower-stats-unchecked stats)))
-               (loop (cdr cs) out))
+               (loop (cdr cs) out post))
               ((checked)
+               ;; fp-contract is a PERMISSION, not a check. `checked` for it
+               ;; means the conservative obligation is in force -- round twice,
+               ;; do not fuse -- which is a constraint on how arithmetic is
+               ;; SELECTED, not an instruction to emit. Emitting a chk for it
+               ;; asks the target for a branch that tests nothing, and both
+               ;; selectors correctly refuse.
+               ;;
+               ;; It is consumed here and counted apart, so the report still
+               ;; says how many operations ran under strict IEEE.
+               (when (eq? name 'fp-contract)
+                 (lower-stats-emitted-set! stats (lower-stats-emitted stats)))
                (lower-stats-emitted-set! stats (+ 1 (lower-stats-emitted stats)))
                ;; The expected tag rides on the instruction. Only type-check
                ;; uses it; everything else passes 0, because there is no
                ;; constant a bounds or overflow check compares against.
                (let ((ops (check-operands name srcs)))
-                 (if (eq? name 'bounds-check)
-                     ;; Materialise the limit, then check the index against it.
-                     (let ((lim (fresh! "len")))
-                       (loop (cdr cs)
-                             (cons `(chk bounds-check checked 0 ,(car ops) ,lim)
-                                   (cons `(vlen ,lim raw-word ,(cadr ops)) out))))
+                 (cond
+                  ;; A permission, not an instruction.
+                  ((eq? name 'fp-contract) (loop (cdr cs) out post))
+                  ((eq? name 'bounds-check)
+                   ;; Materialise the limit, then check the index against it.
+                   (let ((lim (fresh! "len")))
                      (loop (cdr cs)
-                           (cons `(chk ,name checked ,(expected-tag name) ,@ops)
-                                 out)))))
+                           (cons `(chk bounds-check checked 0 ,(car ops) ,lim)
+                                 (cons `(vlen ,lim raw-word ,(cadr ops)) out))
+                           post)))
+                  ((eq? name 'overflow-check)
+                   (loop (cdr cs) out
+                         (cons `(chk overflow-check checked ,(expected-tag name)
+                                     ,@ops ,dst)
+                               post)))
+                  (else
+                   (loop (cdr cs)
+                         (cons `(chk ,name checked ,(expected-tag name) ,@ops)
+                               out)
+                         post)))))
               (else (error 'lower "unknown control" ctl)))))))
 
   ;; --- blocks ---------------------------------------------------------------
@@ -293,9 +329,9 @@
          (let* ((pr (cadr se))
                 (controls (caddr se))
                 (srcs (cdddr se))
-                (chks (checks->instrs controls srcs stats))
                 (op (op-for pr)))
-           (values (append chks (list `(,op ,dst ,sc ,@srcs))) dst)))
+           (let-values (((pre post) (checks->instrs controls srcs dst stats)))
+             (values (append pre (list `(,op ,dst ,sc ,@srcs)) post) dst))))
         ((call) (values `((call ,dst ,sc ,@(cdr se))) dst))
         (else (error 'lower "cannot lower simple expression" se))))))
 
