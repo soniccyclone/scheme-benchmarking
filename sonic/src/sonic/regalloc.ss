@@ -24,7 +24,8 @@
           make-alloc-result alloc-result? alloc-result-map
           alloc-result-spills alloc-result-arch)
   (import (chezscheme)
-          (sonic regs))
+          (sonic regs)
+          (sonic order))
 
   (define-record-type (alloc-result make-alloc-result alloc-result?)
     (fields arch map spills))
@@ -73,7 +74,11 @@
             (map (lambda (k)
                    (let ([e (hashtable-ref tbl k #f)])
                      (list k (car e) (cdr e))))
-                 (vector->list (hashtable-keys tbl))))))
+                 ;; SORTED: `sort` below orders by start point, and ties are
+                 ;; broken by the incoming order -- so two values that become
+                 ;; live at the same instruction swapped places between runs and
+                 ;; were given different registers.
+                 (sorted-key-list tbl)))))
 
   ;; --- CFG-wide liveness ----------------------------------------------------
   ;;
@@ -249,7 +254,11 @@
             (map (lambda (k)
                    (let ((e (hashtable-ref tbl k #f)))
                      (list k (car e) (cdr e))))
-                 (vector->list (hashtable-keys tbl))))))
+                 ;; SORTED: `sort` below orders by start point, and ties are
+                 ;; broken by the incoming order -- so two values that become
+                 ;; live at the same instruction swapped places between runs and
+                 ;; were given different registers.
+                 (sorted-key-list tbl)))))
 
   (define (union a b)
     (fold-left (lambda (acc x) (if (memq x acc) acc (cons x acc))) a b))

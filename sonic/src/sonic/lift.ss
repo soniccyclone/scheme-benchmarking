@@ -49,7 +49,8 @@
 (library (sonic lift)
   (export lift-program free-variables
           lifted-report lifted-report? lifted-report-lifted lifted-report-rounds)
-  (import (chezscheme))
+  (import (chezscheme)
+          (sonic order))
 
   (define-record-type (lifted-report make-lifted-report lifted-report?)
     (fields lifted        ; ((procedure . (added ...)) ...)
@@ -214,7 +215,7 @@
                           (lambda (f)
                             (let ((ps (hashtable-ref added f '())))
                               (unless (null? ps) (set! acc (cons (cons f ps) acc)))))
-                          (hashtable-keys added))
+                          (sorted-keys added))
                          acc)
                        n)))))))
 

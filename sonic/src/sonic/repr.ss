@@ -38,7 +38,8 @@
           prim-result-class datum-class
           parameter-classes
           repr-report repr-report? repr-report-counts repr-report-classes)
-  (import (chezscheme) (nanopass) (sonic lang))
+  (import (chezscheme) (nanopass) (sonic lang)
+          (sonic order))
 
   (define-record-type (repr-report make-repr-report repr-report?)
     (fields counts          ; ((class . n) ...)
@@ -339,7 +340,7 @@
            (lambda (f)
              (when (note-into! results f (tail-class (hashtable-ref bodies f #f)))
                (set! changed #t)))
-           (hashtable-keys bodies))
+           (sorted-keys bodies))
           (for-each
            (lambda (site)
              (let ((ps (hashtable-ref params (car site) #f)))

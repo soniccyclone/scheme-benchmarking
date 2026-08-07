@@ -152,6 +152,44 @@
   (unless (and (pair? out) (= (car out) -0.16907516382852447))
     (display "       got=") (write out) (newline)))
 
+;; DETERMINISM. The same source must produce the same bytes.
+;;
+;; It did not. Three compiles of one program gave three different images,
+;; because `hashtable-keys` has no promised order and that order reached the
+;; global cell ADDRESSES and the register allocator's tie-breaking. The damage
+;; was not just theoretical: D24's oracle is bit-exact cross-agreement, which a
+;; nondeterministic compiler cannot have, and debugging was unsound -- a latent
+;; bug appeared and vanished between runs, so a passing test proved nothing.
+;;
+;; Asserted on bytes rather than on behaviour, because behaviour is exactly what
+;; hid it: two different images computed the same answer often enough to look
+;; fine.
+(let* ((src (string-append tmp "-det.sps"))
+       (a (string-append tmp "-det-a.bin"))
+       (b (string-append tmp "-det-b.bin")))
+  (let ((p (open-file-output-port src (file-options no-fail)
+                                  (buffer-mode block) (native-transcoder))))
+    (put-string p (string-append
+                   "(define n 3)\n"
+                   "(define V (make-flvector 4 0.0))\n"
+                   "(define (go)\n"
+                   "  (let outer ((i 0))\n"
+                   "    (when (fx< i n)\n"
+                   "      (let inner ((j (fx+ i 1)))\n"
+                   "        (when (fx< j n)\n"
+                   "          (flvector-set! V 0 (fl+ (flvector-ref V 0) 1.0))\n"
+                   "          (inner (fx+ j 1))))\n"
+                   "      (outer (fx+ i 1)))))\n"
+                   "(define (main) (go) (display (flvector-ref V 0)) (newline))\n"
+                   "(main)\n"))
+    (close-port p))
+  (compile-sonic-to-file src '(display newline) a)
+  (compile-sonic-to-file src '(display newline) b)
+  (ck! "the same source compiles to the same bytes, twice running"
+       (let ((x (call-with-port (open-file-input-port a) get-bytevector-all))
+             (y (call-with-port (open-file-input-port b) get-bytevector-all)))
+         (equal? x y))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))

@@ -36,6 +36,7 @@
           (sonic repr) (sonic lift) (sonic lower) (sonic globals)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
+          (sonic order)
           (sonic target-x86-64))
 
   (define-record-type (compiled make-compiled compiled?)
@@ -57,8 +58,9 @@
                  (cells (global-cells lifted))
                  (prog (globalize prog0 cells classes))
                  (entry (caddr prog))
-                 (gnames (map global-cell-name
-                              (vector->list (hashtable-keys cells))))
+                 ;; SORTED: this list decides each global's ADDRESS, so an
+                 ;; unstable order moved every global between runs.
+                 (gnames (map global-cell-name (sorted-key-list cells)))
                  (gaddrs (assign-global-cells gnames)))
             (parameterize ((current-litpool (make-pool))
                            (current-vreg-classes classes)

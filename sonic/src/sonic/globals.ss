@@ -36,7 +36,8 @@
   (export globalize global-cells global-roots
           global-cell-name global? )
   (import (chezscheme)
-          (sonic lang))
+          (sonic lang)
+          (sonic order))
 
   ;; The cell's name. Distinct from the binding's own name so that a `gref`
   ;; naming `%g-pos` can never be confused with a vreg called `pos`, and so a
@@ -66,7 +67,7 @@
        (lambda (g)
          (when (eq? (hashtable-ref classes g #f) 'tagged)
            (set! acc (cons g acc))))
-       (hashtable-keys tbl))
+       (sorted-keys tbl))
       acc))
 
   ;; --- the pass -------------------------------------------------------------

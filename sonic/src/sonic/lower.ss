@@ -32,6 +32,7 @@
           lower-stats-unchecked lower-stats-emitted)
   (import (chezscheme)
           (sonic repr)
+          (sonic order)
           (sonic numeric)
           (nanopass)
           (sonic lang))
@@ -660,7 +661,7 @@
         ;; should be and silently classifies nothing.
         (when known
           (vector-for-each (lambda (v) (note-class! v (hashtable-ref known v #f)))
-                           (hashtable-keys known)))
+                           (sorted-keys known)))
         (unless (eq? (car form) 'top)
           (error 'lower-toplevel "not a top-level program" form))
         (let ((binds (cadr form)) (body (cadddr form)) (init '()))
