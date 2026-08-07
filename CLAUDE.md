@@ -2,6 +2,33 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
+## HARD RULE: never push to an upstream you do not own
+
+**Do not push, open a pull request, or otherwise send changes to any third-party
+repository. Ever. Ask Nathan first, every time, without exception.**
+
+This repository vendors `sonic/vendor/nanopass` as a git submodule pointing at
+`github.com/nanopass/nanopass-framework-scheme`. That is somebody else's project. We
+consume it read-only.
+
+**If you find yourself needing to modify nanopass, STOP.** The answer is never "push a fix
+upstream" and never "commit into the submodule and push". The answer is to change *how we
+vendor it* — a fork under Nathan's account, or a plain in-tree copy — and that is Nathan's
+decision to make, not yours. Bring him the problem, not a pull request.
+
+A local guard is in place so an accidental push fails loudly rather than succeeding:
+
+```
+git -C sonic/vendor/nanopass config remote.origin.pushurl \
+    "NO-PUSH-UPSTREAM--ask-Nathan-first--see-CLAUDE.md"
+```
+
+That guard lives in `.git/modules/...`, which is **local config and is not cloned**. After
+any fresh clone or `git submodule update --init`, re-apply it. `make guard` does this.
+
+`git push origin main` on **this** repository is fine and expected; the rule is about
+remotes Nathan does not own.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
 
