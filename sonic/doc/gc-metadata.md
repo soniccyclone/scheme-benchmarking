@@ -48,7 +48,18 @@ vocabularies diverge.
 | `pushed-values` | signed varint | values pushed beyond the frame, for multiple returns |
 
 `scratch-live` exists because rax, rcx and rdx are in the **raw** class but transiently hold
-tagged values during calling-convention sequences. The strict nesting is deliberate: a
+tagged values during calling-convention sequences.
+
+**It turned out to be the multiple-value return convention, exactly.** `none / rax /
+rax+rcx / rax+rcx+rdx`, strictly nesting, is value 1 in rax, value 2 in rcx, value 3 in rdx,
+with the collector told how many are live. So a tagged return riding raw-class registers is
+not a partition violation; it is the case this field was provisioned for. It also means
+**x86-64 caps at three values in registers**, because the field is two bits. RV64 needs none
+of this and returns up to eight, since a0-a7 are value class.
+
+The inverse does not hold and RV64 has to diverge from its host ABI: a raw word cannot
+return in `a0` the way `lp64d` does, because `a0` is value class and the collector would
+scavenge a non-pointer. Raw returns use `t2`. The strict nesting is deliberate: a
 multi-load sequence emits one entry per intermediate state, so an interrupt between any two
 `mov`s still gets a correct map.
 
