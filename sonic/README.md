@@ -117,6 +117,14 @@ analyzer was right; the comment there records it.
 
 ## Notes for whoever touches this next
 
+**Chez does not promise an application order for `map`, or an evaluation order for
+`let` bindings.** A stateful counter threaded through either is order-dependent, and this
+tree is full of `(map fresh-name x*)`. The symptom is not a wrong program — the names are
+fresh either way — it is that the same input compiles to differently-named IR between runs,
+which makes name-asserting tests flaky and breaks the differential harness that diffs two
+builds of one program. `essa.ss` defines `map/lr` for this and uses it wherever the mapped
+function has an effect. Reach for it rather than `map` when the function mutates anything.
+
 **`iv-widen` takes `(old new)`.** Applying it backwards yields a sequence that looks
 convergent whenever the iterates increase monotonically, and is unsound in general. That is
 the bug printed in Figure 3 of the Pentagons paper, in both halves, and it is masked by

@@ -140,6 +140,21 @@
   ;; unsound. Comparing the recorded SSA name against what the source name maps
   ;; to now detects that in one eq? and we drop the sigma for that operand.
 
+  ;; LEFT-TO-RIGHT map, for effectful functions.
+  ;;
+  ;; Chez does not promise an application order for `map`, and every
+  ;; `(map/lr fresh-name x*)` below mutates a counter. Under a different order the
+  ;; same input compiles to differently-named IR: still correct, but not
+  ;; reproducible, and essa-test.ss asserts specific names like i.2 and n.3, so
+  ;; it would be flaky rather than wrong. Deterministic output also matters for
+  ;; the differential harness, which diffs two builds of the same program.
+  (define (map/lr f xs)
+    (let loop ([xs xs] [acc '()])
+      (if (null? xs)
+          (reverse acc)
+          (let ([v (f (car xs))])          ; forced before the recursive call
+            (loop (cdr xs) (cons v acc))))))
+
   (define (env-lookup env x)
     (let ([p (assq x env)]) (if p (cdr p) x)))
 
@@ -286,17 +301,17 @@
       ;; The loop case. Binders first so the RHSs see each other, then each
       ;; lambda in the group gets a header phi if the group is recursive.
       [(letrec ([,x* ,e*] ...) ,body)
-       (let* ([x^* (map fresh-name x*)]
+       (let* ([x^* (map/lr fresh-name x*)]
               [env1 (append (map cons x* x^*) env)]
               [rhs*
                (map (lambda (xs rhs)
                       (let ([header? (occurs-in-any? xs e*)])
                         (nanopass-case (Lanf Expr) rhs
                           [(lambda (,x** ...) ,body2)
-                           (let* ([p* (map fresh-name x**)]
+                           (let* ([p* (map/lr fresh-name x**)]
                                   [env2 (append (map cons x** p*) env1)])
                              (if header?
-                                 (let* ([h* (map fresh-name x**)]
+                                 (let* ([h* (map/lr fresh-name x**)]
                                         [env3 (append (map cons x** h*) env2)]
                                         [in* (map (lambda (p)
                                                     (with-output-language (Lssa Expr) `,p))
@@ -320,7 +335,7 @@
          `(letrec ([,x^* ,rhs*] ...) ,(Expr body env1 facts val?)))]
 
       [(lambda (,x* ...) ,body)
-       (let* ([p* (map fresh-name x*)]
+       (let* ([p* (map/lr fresh-name x*)]
               [env1 (append (map cons x* p*) env)])
          `(lambda (,p* ...) ,(Expr body env1 facts #t)))]
 
@@ -369,7 +384,7 @@
       [(quote ,d) `(quote ,d)]
 
       [(lambda (,x* ...) ,body)
-       (let* ([p* (map fresh-name x*)]
+       (let* ([p* (map/lr fresh-name x*)]
               [env1 (append (map cons x* p*) env)])
          `(lambda (,p* ...) ,(Expr body env1 facts #t)))]
 
