@@ -1,7 +1,7 @@
 # SonicScheme
 
 CHEZ ?= scheme
-LIBS  = --libdirs src
+LIBS  = --libdirs src:vendor/nanopass
 
 .PHONY: help test clean
 
@@ -10,6 +10,8 @@ help:
 	@echo "make clean  remove compiled artifacts"
 
 test:
+	@$(CHEZ) -q $(LIBS) --script test/lang-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss
