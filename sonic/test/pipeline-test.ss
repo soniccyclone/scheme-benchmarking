@@ -1,7 +1,7 @@
 ;;; How far does a real program get? Reported as a number, not an impression.
 (import (chezscheme) (nanopass) (sonic lang) (sonic pipeline)
         (sonic read) (sonic expand) (sonic parse) (sonic policy)
-        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide) (sonic repr) (sonic lower))
+        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide) (sonic repr) (sonic lower) (sonic regalloc) (sonic regs))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -91,6 +91,83 @@
   (display " lower-emitted=") (display (lower-stats-emitted lower-stats)) (newline)
   (ck! "the program lowers to a multi-block CFG, not one straight line"
        (> (length (cadr lowered)) 5))
+  ;; EVERY BLOCK MUST BE REACHABLE.
+  ;;
+  ;; The lowered CFG was disconnected for a long time and nothing noticed. An
+  ;; `if` emitted its three blocks correctly, but the code AFTER the join went
+  ;; on accumulating into a list the caller emitted under its own label, with
+  ;; no edge from the join to it. The program still selected, still allocated,
+  ;; and still reported plausible counts -- 287 of nbody's 551 virtual
+  ;; registers simply lived in blocks nothing could branch to.
+  ;;
+  ;; A block count alone cannot catch that, because the blocks all exist. Only
+  ;; reachability can, so it is asserted as a number.
+  (let* ([fns (partition-into-functions (cadr lowered) (caddr lowered))]
+         [orphans (assq '<unreachable> fns)])
+    (display "       functions=") (display (length fns)) (newline)
+    (ck! "every block is reachable from some function entry"
+         (not orphans))
+    (ck! "and the program is many functions, not one"
+         (> (length fns) 5)))
+
+  ;; INSTRUCTION ORDER WITHIN A BLOCK.
+  ;;
+  ;; `emit-block!` takes its instructions reversed, and two callers handed it
+  ;; an ordered list -- so those blocks came out backwards, with every use
+  ;; before its def. That is invisible to a block count and to a label check,
+  ;; and it made every vreg look live from position 0, so the allocator spilled
+  ;; half the inner loop. Asserted directly: within a block, a vreg's
+  ;; definition precedes its uses.
+  (let ([bad '()])
+    (for-each
+     (lambda (b)
+       (let ([instrs (cadr (cadr b))])
+         (let loop ([is instrs] [defined '()])
+           (unless (null? is)
+             (let* ([i (car is)]
+                    [later (map instr-def (cdr is))])
+               (for-each (lambda (u)
+                           ;; Used here, defined LATER in the same block.
+                           (when (and (not (memq u defined)) (memq u later))
+                             (set! bad (cons (list (car b) (car i) u) bad))))
+                         (instr-uses i))
+               (loop (cdr is)
+                     (let ([d (instr-def i)])
+                       (if d (cons d defined) defined))))))))
+     (cadr lowered))
+    (ck! "within a block, no vreg is used before the instruction that defines it"
+         (null? bad)))
+
+  ;; REGISTER PRESSURE, PER TARGET.
+  ;;
+  ;; The same program, the same allocator, two register partitions:
+  ;;
+  ;;   RV64     14 value / 9 raw / 31 float
+  ;;   x86-64    8 value / 4 raw / 15 float
+  ;;
+  ;; and RV64 places nbody with NO spills while x86-64 spills. That asymmetry
+  ;; is not a bug to fix, it is the measurement -- RISC-V's 31 GPRs are the
+  ;; reason PREEMPTION.md concluded the static partition is free there and
+  ;; costly here -- so it is asserted rather than left to be rediscovered.
+  ;;
+  ;; A regression in liveness shows up here first and loudly: the CFG-wide
+  ;; dataflow replaced a straight-line pass that made every vreg look live from
+  ;; position 0, and under it RV64 spilled 112 times instead of none.
+  (let* ([classes (lowered-classes)]
+         [fns (lambda (arch)
+                (allocate-functions arch (cadr lowered) (caddr lowered) classes))]
+         [spills (lambda (arch)
+                   (apply + (map (lambda (f) (length (alloc-result-spills (cdr f))))
+                                 (fns arch))))]
+         [rv (spills arch-rv64)]
+         [x86 (spills arch-x86-64)])
+    (display "       spills rv64=") (display rv)
+    (display " x86-64=") (display x86) (newline)
+    (ck! "RV64 places the whole program with no spills"
+         (= rv 0))
+    (ck! "x86-64 spills, because eight value registers is not fourteen"
+         (> x86 0)))
+
   ;; Every block label must be unique: two blocks with one label make the
   ;; program ambiguous in a way selection cannot detect, since it walks both
   ;; and the second silently wins.

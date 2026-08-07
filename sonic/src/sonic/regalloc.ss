@@ -18,7 +18,8 @@
 
 (library (sonic regalloc)
   (export allocate live-intervals live-intervals/arch physical? label-operand?
-          allocate-program live-intervals/cfg
+          allocate-program allocate-functions live-intervals/cfg
+          partition-into-functions
           instr-def instr-uses transfer-uses transfer-targets
           make-alloc-result alloc-result? alloc-result-map
           alloc-result-spills alloc-result-arch)
@@ -245,6 +246,76 @@
     (fold-left (lambda (acc x) (if (memq x acc) acc (cons x acc))) a b))
   (define (difference a b)
     (filter (lambda (x) (not (memq x b))) a))
+
+  ;; --- function boundaries --------------------------------------------------
+  ;;
+  ;; Registers are a per-function resource. Running one linear scan over the
+  ;; whole program makes every value in every procedure interfere with every
+  ;; other, so a 41-block nbody spills a third of its virtuals for no reason:
+  ;; two procedures that never run at the same time are told they cannot share
+  ;; a register.
+  ;;
+  ;; Lmach's `(program ([lbl blk] ...) lbl)` is a flat block list and records no
+  ;; function boundaries, but they are derivable and do not need a new IR slot.
+  ;; A block is a function ENTRY exactly when something CALLS it -- as opposed
+  ;; to jumping or branching to it, which are intraprocedural edges -- plus the
+  ;; program's own entry. A function is then the blocks reachable from its entry
+  ;; over jump and branch edges only.
+  ;;
+  ;; Blocks reachable from no entry are unreachable code and are returned as
+  ;; their own group rather than dropped: dropping them here would hide a
+  ;; lowering bug behind a smaller program.
+  (define (call-targets blocks)
+    (let ((acc '()))
+      (for-each
+       (lambda (b)
+         (let walk ((x (cadr b)))
+           (when (pair? x)
+             (when (and (eq? (car x) 'call) (>= (length x) 4))
+               ;; (call dst sc callee arg ...)
+               (let ((callee (list-ref x 3)))
+                 (when (and (symbol? callee) (not (memq callee acc)))
+                   (set! acc (cons callee acc)))))
+             (for-each walk x))))
+       blocks)
+      acc))
+
+  ;; -> ((entry-label (lbl blk) ...) ...)
+  (define (partition-into-functions blocks entry)
+    (let* ((by-label (make-eq-hashtable))
+           (labels (map car blocks))
+           (entries (let ((cs (filter (lambda (l) (memq l labels))
+                                      (call-targets blocks))))
+                      (if (memq entry cs) cs (cons entry cs)))))
+      (for-each (lambda (b) (hashtable-set! by-label (car b) b)) blocks)
+      (let ((claimed (make-eq-hashtable))
+            (out '()))
+        (for-each
+         (lambda (e)
+           (let ((group '()))
+             (let visit ((l e))
+               (when (and (hashtable-ref by-label l #f)
+                          (not (hashtable-ref claimed l #f)))
+                 (hashtable-set! claimed l #t)
+                 (let ((b (hashtable-ref by-label l #f)))
+                   (set! group (cons b group))
+                   (for-each visit (transfer-targets (caddr (cadr b)))))))
+             (unless (null? group)
+               (set! out (cons (cons e (reverse group)) out)))))
+         entries)
+        ;; Anything no entry reached.
+        (let ((orphans (filter (lambda (b) (not (hashtable-ref claimed (car b) #f)))
+                               blocks)))
+          (reverse (if (null? orphans) out (cons (cons '<unreachable> orphans) out)))))))
+
+  ;; Allocate each function independently. Returns
+  ;;   ((entry-label . alloc-result) ...)
+  ;; because two functions legitimately give the same vreg name different
+  ;; registers, and one flat map could not express that.
+  (define (allocate-functions arch blocks entry classes)
+    (map (lambda (fn)
+           (cons (car fn) (allocate-program arch (cdr fn) classes)))
+         (partition-into-functions blocks entry)))
 
   ;; --- the scan -------------------------------------------------------------
 
