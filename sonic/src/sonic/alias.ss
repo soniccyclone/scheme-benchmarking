@@ -56,9 +56,25 @@
 ;;; consulted ahead of the escape test that would otherwise force `may`. The
 ;;; compiler cannot check any of this. The programmer is asserting it.
 ;;;
+;;; PRECONDITION, and it is now load-bearing rather than free. This whole
+;;; analysis is flow-INsensitive, which is sound only while a name denotes one
+;;; object for its entire lifetime. That was free when Lanf had no assignment.
+;;; Lcore gained `set!` (the expander had nowhere to put it), Lanf inherits it,
+;;; and a mutated variable can point at different objects at different program
+;;; points -- which is exactly what flow insensitivity cannot see.
+;;;
+;;; ASSIGNMENT CONVERSION RESTORES THE PROPERTY, by boxing every mutated
+;;; variable into a one-slot cell: the CELL is mutated and the variable is not,
+;;; so single assignment holds again and the mutation becomes a store the
+;;; analysis already models. So `assign.ss` must run before this pass, and
+;;; `alias-analyze` now REFUSES a program still containing `set!` rather than
+;;; silently returning `must-not` for two names that alias at run time. A wrong
+;;; must-not is a miscompile, and it would be invisible.
+;;;
 ;;; SCOPE. The premise is recorded per program, not per program point, which
 ;;; matches the flow-insensitivity above and is sound for the same reason: Lanf
-;;; is single-assignment, so a name denotes one object for its whole lifetime,
+;;; after assignment conversion is single-assignment, so a name denotes one
+;;; object for its whole lifetime,
 ;;; and "these two objects are distinct" is a fact about the objects rather than
 ;;; about where you stand in the program. Binder uniqueness (see below) is what
 ;;; keeps a name from meaning two different things in two scopes.
@@ -230,7 +246,21 @@
 
   (define fixpoint-cap 40)
 
+  ;; Refuse a program that still contains `set!`. See the PRECONDITION note in
+  ;; the header: flow insensitivity is sound only after assignment conversion
+  ;; has boxed mutated variables, and returning `must-not` for two names that
+  ;; alias at run time is a miscompile that nothing downstream could detect.
+  (define (assignment-free? e)
+    (let walk ([x (if (pair? e) e (unparse-Lanf e))])
+      (cond [(and (pair? x) (eq? (car x) 'set!)) #f]
+            [(pair? x) (and (walk (car x)) (walk (cdr x)))]
+            [else #t])))
+
   (define (alias-analyze e)
+    (unless (assignment-free? e)
+      (error 'alias-analyze
+             "program still contains set!; run assignment conversion first, or flow insensitivity is unsound"
+             'see-header-PRECONDITION))
     (let* ([known (scan-procs e)]
            [pt (make-eq-hashtable)]
            [escaped (make-eqv-hashtable)]

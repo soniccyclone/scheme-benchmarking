@@ -235,5 +235,23 @@
                     (not (may-alias? tbl 'a 'b))
                     (may-alias? tbl 'a 'a))))
 
+
+;; --- the precondition, now enforced ---------------------------------------
+;; Flow insensitivity is sound only while a name denotes one object for its
+;; whole lifetime. Lanf inherited set! from Lcore, so that is no longer free: a
+;; mutated variable can point at different objects at different program points,
+;; which is exactly what a flow-insensitive analysis cannot see. Returning
+;; must-not for two names that alias at run time is a miscompile nothing
+;; downstream could detect, so we refuse instead.
+(set! checks (+ checks 1))
+(let ([caught #f])
+  (guard (e (#t (set! caught #t)))
+    (alias-analyze '(let ([a (primcall make-flvector ([type-check checked]) n z)])
+                      (set! a b))))
+  (if caught
+      (printf "  ok   a program still containing set! is REFUSED\n")
+      (begin (set! failures (+ failures 1))
+             (printf "  FAIL analysed an unconverted program; flow insensitivity is unsound there\n"))))
+
 (printf "\n~a cases, ~a failures\n" checks failures)
 (if (> failures 0) (exit 1) (begin (printf "PASS\n") (exit 0)))
