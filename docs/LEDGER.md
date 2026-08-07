@@ -55,6 +55,16 @@ reversal attached, never edited away.
 
 ## Corrections to our own claims
 
+- **The reserve reported success for the one guarantee it exists to make.**
+  `raise-exhausted!` builds the heap-exhaustion condition inside the nursery reserve, which
+  is right: allocating it from the space you just failed to find is the circularity that
+  turns a recoverable error into an abort. But it did so under `(when p ...)`, so if
+  `reserve-claim!` returned `#f` it silently skipped the write and raised `&heap-exhausted`
+  anyway. The condition would have been reported as raised while the reserve had in fact run
+  out. Now a loud, distinct error, with a test that reads the reserve words back and checks
+  for a parseable header above both mutator pointers rather than merely checking the pointer
+  moved.
+
 - **The tagged-cell hazard in assignment conversion does not fire on nbody, and the reason
   is structural rather than lucky.** Boxing a mutated variable makes the cell tagged even
   when the value is a `raw-f64`, which would push every mutated flonum local out of the
