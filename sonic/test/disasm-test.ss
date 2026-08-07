@@ -171,8 +171,14 @@
          (no-bounds-check? d "sum_unchecked"))
     (ck! "x86-64 control: the CHECKED loop does, so the predicate distinguishes them"
          (not (no-bounds-check? d "sum_checked")))
-    (ck! "and it names the branch it found rather than only saying no"
-         (equal? (map insn-mnemonic (bounds-check-branches d "sum_checked")) '("jle")))
+    ;; The point is that the predicate NAMES what it found rather than only
+    ;; answering yes -- not that gcc picks one particular branch. Pinning the
+    ;; mnemonic pinned gcc's instruction selection, which moved between versions
+    ;; and turned a toolchain difference into what looked like a compiler bug.
+    (ck! "and it names the branches it found rather than only saying no"
+         (let ((bs (bounds-check-branches d "sum_checked")))
+           (and (pair? bs)
+                (for-all (lambda (i) (conditional-branch? d i)) bs))))
     (ck! "the loop finder found a real loop in both, with the latch branching backwards"
          (and (< (loop-head (inner-loop d "sum_checked"))
                  (loop-latch (inner-loop d "sum_checked")))
@@ -185,8 +191,10 @@
          (no-bounds-check? d "sum_unchecked"))
     (ck! "RV64 control: the CHECKED loop does"
          (not (no-bounds-check? d "sum_checked")))
-    (ck! "and on RV64 the check is the one unsigned compare the selector documents"
-         (equal? (map insn-mnemonic (bounds-check-branches d "sum_checked")) '("bge")))
+    (ck! "and on RV64 it names them too"
+         (let ((bs (bounds-check-branches d "sum_checked")))
+           (and (pair? bs)
+                (for-all (lambda (i) (conditional-branch? d i)) bs))))
     ;; RISC-V objdump prints a header for every local label in the symbol table,
     ;; which would otherwise split one function into five and hide the loop.
     (ck! "a local .L label is read as part of the function it sits inside, not as a new one"

@@ -548,10 +548,17 @@
 ;; agree with the scalar reference. That is what "length agnostic" means, and it
 ;; is not something a disassembly can show.
 
-(define qemu (or (getenv "QEMU_RISCV")
-                 (string-append (getenv "HOME") "/.local/bin/qemu-riscv64")))
+;; qemu comes from PATH. It used to default to ~/.local/bin/qemu-riscv64 --
+;; a wrapper around a package unpacked by hand, from before there was a
+;; container to install things in properly. Inside the container that path does
+;; not exist, so the whole length-agnostic section silently reported itself
+;; missing.
+(define qemu (or (getenv "QEMU_RISCV") "qemu-riscv64"))
 
-(define qemu-available? (and (file-exists? qemu) (zero? (system (string-append qemu " -version >/dev/null 2>&1")))))
+;; Probed by RUNNING it rather than by `file-exists?`, since a name on PATH has
+;; no path to test.
+(define qemu-available?
+  (zero? (system (string-append qemu " -version >/dev/null 2>&1"))))
 
 (define (write-function! file march name listing)
   (call-with-output-file file

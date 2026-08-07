@@ -19,8 +19,40 @@
 # the only kind of guarantee worth having against a class of bug that recurs.
 # The limits live in docker-compose.yml.
 
-FROM ubuntu:24.04
+# TWO STAGES, and the split is forced by a real incompatibility.
+#
+# The RUNTIME needs Ubuntu 25.10, because it carries gcc 15 for riscv64 and the
+# RISC-V smoke gate pins the RVA23 profile -- whose `zimop` and `zcmop`
+# extensions gcc 14 rejects outright. Weakening the -march string to suit an
+# older compiler would gut the gate, which exists to prove we never depend on
+# something RISC-V does not have. 25.10 also matches the host this was developed
+# against (gcc 15, binutils 2.46), so the gas-verified encodings compare against
+# the same assembler they always did.
+#
+# But CHEZ 10.0.0 DOES NOT BUILD under gcc 15: its bundled `zuo` build tool trips
+# -Wincompatible-pointer-types, which gcc 15 promotes from warning to error.
+# Relaxing that diagnostic would mean compiling our own Scheme with warnings
+# suppressed, and bumping Chez would change the compiler underneath a project
+# whose numbers are all measured against 10.0.0. So Chez is built in a stage
+# that has a compiler it agrees with, and only the installed tree is carried
+# over -- byte-identical to what the measurements were taken with.
 
+FROM ubuntu:24.04 AS chez
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential git ca-certificates \
+        libncurses-dev libx11-dev uuid-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+ARG CHEZ_VERSION=v10.0.0
+RUN git clone --depth 1 --branch ${CHEZ_VERSION} \
+        https://github.com/cisco/ChezScheme.git /tmp/chez \
+    && cd /tmp/chez \
+    && ./configure --threads --installprefix=/usr/local \
+    && make -j"$(nproc)" \
+    && make install \
+    && cd / && rm -rf /tmp/chez
+
+FROM ubuntu:25.10
 ENV DEBIAN_FRONTEND=noninteractive
 
 # gcc/binutils: the differential assembler oracle for x86-64.
@@ -30,6 +62,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         binutils \
         binutils-riscv64-linux-gnu \
+        # gcc 15 here: 13 does not auto-vectorize RVV AT ALL (zero vector
+        # instructions at -march=rv64gcv, and -fno-vect-cost-model does not budge
+        # it), which costs disasm-test its positive control for
+        # `has-packed-arithmetic?` and costs milestone 4 its reference for what
+        # good RVV codegen looks like.
         gcc-riscv64-linux-gnu \
         # STATIC cross-libc, and it is not optional: twoaddr-test links a C
         # main against our own object with `riscv64-linux-gnu-gcc -static` and
@@ -50,17 +87,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Chez Scheme, built from a pinned tag rather than taken from apt, because the
-# distro version drifts and `optimize-level 3` behaviour is load-bearing here:
-# the whole project measures what a Scheme compiler does with checks.
-ARG CHEZ_VERSION=v10.0.0
-RUN git clone --depth 1 --branch ${CHEZ_VERSION} \
-        https://github.com/cisco/ChezScheme.git /tmp/chez \
-    && cd /tmp/chez \
-    && ./configure --threads \
-    && make -j"$(nproc)" \
-    && make install \
-    && cd / && rm -rf /tmp/chez
+# Chez comes from the builder stage, installed under an explicit prefix. Its
+# `make install` defaults to /usr, not /usr/local, so copying /usr/local without
+# setting --installprefix silently carries nothing across and `scheme` is simply
+# absent in the final image.
+COPY --from=chez /usr/local /usr/local
+RUN ldconfig
 
 WORKDIR /work/sonic
 

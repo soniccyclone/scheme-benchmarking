@@ -26,7 +26,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/riscv"
-QEMU="${QEMU_RISCV:-$HOME/.local/bin/qemu-riscv64}"
+# From PATH: the container installs qemu-user properly. The old default
+# pointed at a hand-unpacked tree from before there was a container.
+QEMU="${QEMU_RISCV:-qemu-riscv64}"
 CC=riscv64-linux-gnu-gcc
 # PIN the march explicitly, but pin it to RVA23, not to rv64gc.
 #
@@ -62,7 +64,8 @@ fail=0
 
 need() { command -v "$1" >/dev/null || { echo "MISSING: $1"; fail=1; }; }
 need "$CC"; need riscv64-linux-gnu-objdump
-[ -x "$QEMU" ] || { echo "MISSING: $QEMU"; fail=1; }
+# `command -v`, not `-x`: $QEMU is a name on PATH now, not a path.
+command -v "$QEMU" >/dev/null || { echo "MISSING: $QEMU"; fail=1; }
 [ "$fail" -eq 0 ] || { echo; echo "FAIL: toolchain incomplete"; exit 1; }
 
 echo "RISC-V smoke gate, N=$N, profile=$PROFILE"

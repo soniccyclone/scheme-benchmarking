@@ -10,7 +10,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/configs.sh"
 
 N1=${N1:-1000000}
 N2=${N2:-2000000}
-PERF=${PERF:-$HOME/.local/bin/perf}
+# From PATH inside the `bench` compose service, which carries the
+# seccomp exception perf_event_open needs. See docker-compose.yml.
+PERF=${PERF:-perf}
 
 count() {  # retired user-space instructions for one run
     $PERF stat -x, -e instructions:u $1 2>&1 >/dev/null | cut -d, -f1
