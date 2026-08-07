@@ -168,7 +168,7 @@
            (hashtable-set! assigned x #t)
            (hashtable-update! rhs x (lambda (l) (cons e l)) '())
            (Expr e)]
-          [(declare ([,x* ,pn*] ...) ,body) (Expr body)]
+          [(declare ([,x* ,prem*] ...) ,body) (Expr body)]
           [(declare-distinct (,x* ...) ,body) (Expr body)]
           [(policy ([,pn* ,b*] ...) ,body) (Expr body)]
           [else (void)]))
@@ -283,7 +283,7 @@
 
         (define (store-into x e)
           (nanopass-case (Lanf Expr) e
-            [,y (with-unboxed (list y) (lambda (v*) (emit-store x (car v*))))]
+            [,x1 (with-unboxed (list x1) (lambda (v*) (emit-store x (car v*))))]
             [(quote ,d)
              (let ([t (fresh x "c")]
                    [q (with-output-language (Lanf SimpleExpr) `(quote ,d))])
@@ -316,15 +316,16 @@
             (nanopass-case (Lanf Expr) e
               [,x (if (boxed? x)
                       (with-unboxed (list x)
-                        (lambda (y*) (let ([y (car y*)])
-                                       (with-output-language (Lanf Expr) `,y))))
+                        (lambda (x1*)
+                          (let ([x (car x1*)])
+                            (with-output-language (Lanf Expr) `,x))))
                       e)]
               [(quote ,d) e]
               [(if ,x ,e0 ,e1)
                (with-unboxed (list x)
-                 (lambda (y*)
-                   (let ([y (car y*)] [a (Expr e0)] [b (Expr e1)])
-                     (with-output-language (Lanf Expr) `(if ,y ,a ,b)))))]
+                 (lambda (x1*)
+                   (let ([x1 (car x1*)] [a (Expr e0)] [b (Expr e1)])
+                     (with-output-language (Lanf Expr) `(if ,x1 ,a ,b)))))]
               [(seq ,e0 ,e1) `(seq ,(Expr e0) ,(Expr e1))]
               [(let ([,x ,se]) ,body)
                (SimpleExpr se
@@ -334,8 +335,8 @@
                      (with-output-language (Lanf Expr) `(let ([,x ,se1]) ,body1)))))]
               [(tailcall ,x ,x* ...)
                (with-unboxed (cons x x*)
-                 (lambda (y*)
-                   (let ([f (car y*)] [a* (cdr y*)])
+                 (lambda (x1*)
+                   (let ([f (car x1*)] [a* (cdr x1*)])
                      (with-output-language (Lanf Expr) `(tailcall ,f ,a* ...)))))]
               [(lambda (,x* ...) ,body) `(lambda (,x* ...) ,(Body x* body))]
               [(letrec ([,x* ,e*] ...) ,body) (Letrec x* e* body)]
@@ -346,9 +347,9 @@
                    ;; A global. `(sonic gcell)` owns this one: a top-level
                    ;; binding is already a cell and boxing it would nest two.
                    `(set! ,x ,(Expr e)))]
-              [(declare ([,x* ,pn*] ...) ,body)
+              [(declare ([,x* ,prem*] ...) ,body)
                (no-premise-on-boxed! x* "declare")
-               `(declare ([,x* ,pn*] ...) ,(Expr body))]
+               `(declare ([,x* ,prem*] ...) ,(Expr body))]
               [(declare-distinct (,x* ...) ,body)
                (no-premise-on-boxed! x* "declare-distinct")
                `(declare-distinct (,x* ...) ,(Expr body))]
@@ -414,7 +415,7 @@
 
         (define (fill-cell x e)
           (nanopass-case (Lanf Expr) e
-            [,y (with-unboxed (list y) (lambda (v*) (emit-store x (car v*))))]
+            [,x1 (with-unboxed (list x1) (lambda (v*) (emit-store x (car v*))))]
             [(quote ,d)
              (let ([t (fresh x "c")]
                    [q (with-output-language (Lanf SimpleExpr) `(quote ,d))])
@@ -439,14 +440,14 @@
                   `(lambda (,x* ...) ,(Body x* body))))]
             [(call ,x ,x* ...)
              (with-unboxed (cons x x*)
-               (lambda (y*)
+               (lambda (x1*)
                  (k (with-output-language (Lanf SimpleExpr)
-                      `(call ,(car y*) ,(cdr y*) ...)))))]
+                      `(call ,(car x1*) ,(cdr x1*) ...)))))]
             [(primcall ,pr ([,pn* ,c*] ...) ,x* ...)
              (with-unboxed x*
-               (lambda (y*)
+               (lambda (x1*)
                  (k (with-output-language (Lanf SimpleExpr)
-                      `(primcall ,pr ([,pn* ,c*] ...) ,y* ...)))))]
+                      `(primcall ,pr ([,pn* ,c*] ...) ,x1* ...)))))]
             [else (k se)]))
 
         (let ([out (Expr e)])

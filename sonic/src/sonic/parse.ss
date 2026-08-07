@@ -189,10 +189,11 @@
          (fixed-length! form 3 "malformed declare")
          (let* ([ps (pairs-of form "malformed declare" symbol? symbol?)]
                 [x* (map (lambda (p) (reference! ctx bound (car p))) ps)]
-                [pn* (map cadr ps)])
-           (for-each (lambda (pn)
-                       (unless (policy-name? pn) (ps-error "not a check name" pn)))
-                     pn*)
+                [prem* (map cadr ps)])
+           (for-each (lambda (prem)
+                       (unless (premise-name? prem)
+                         (ps-error "not a premise name" prem)))
+                     prem*)
            `(declare ([,x* ,prem*] ...) ,(Expr (caddr form) ctx bound)))]
 
         [(declare-distinct)
