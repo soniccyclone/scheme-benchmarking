@@ -43,6 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         make \
         python3 \
         ca-certificates \
+        libelf1 \
         libncurses-dev \
         libx11-dev \
         uuid-dev \

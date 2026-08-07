@@ -38,3 +38,27 @@ services:
     # Raw doubles on stdout (see sonic/src/sonic/runtime.ss), so nothing here
     # may allocate a tty and mangle them.
     tty: false
+
+  # Benchmarking, which needs one thing the test suite must NOT have.
+  #
+  # Docker's DEFAULT seccomp profile denies `perf_event_open` outright -- the
+  # syscall every hardware counter goes through -- and it fails with a bare
+  # EPERM that reads like a file-permission problem rather than a policy
+  # decision. Measured, since guessing about this wasted time once already:
+  #
+  #     host, no docker              perf_event_open OK
+  #     container, default seccomp   EPERM
+  #     container, seccomp=unconfined  OK
+  #
+  # That is the ONLY blocker. `perf_event_paranoid` is 2 on this host and the
+  # container reads the same 2, which already permits counting your own
+  # user-space process; no CAP_PERFMON, no host sysctl.
+  #
+  # It gets its own service so the suite keeps the tight default profile. A
+  # benchmark run is short, deliberate and human-started; the suite runs
+  # constantly and is where a compiler bug shows up first.
+  bench:
+    extends:
+      service: sonic
+    security_opt:
+      - seccomp:unconfined
