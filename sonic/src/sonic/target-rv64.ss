@@ -344,7 +344,13 @@
     ;; fails. This is the standard trick and it halves the fast-path cost.
     `((bgeu ,idx ,limit ,(rv64-trap-label 'bounds-check))))
 
-  (define (overflow-check-seq sum a b)
+  ;; Operands are (a b sum), matching what lower.ss emits: the check is a
+  ;; POSTcondition, so the sum is the operation's own destination and comes
+  ;; last. This used to read them as (sum a b), which computed
+  ;; ((b^a)&(sum^a))<0 -- a test with no meaning. x86-64 was unaffected because
+  ;; it reads the flags and ignores the operands entirely, which is exactly why
+  ;; the disagreement could sit here undetected.
+  (define (overflow-check-seq a b sum)
     ;; No flags register: see note 2 at the top. Signed addition overflowed iff
     ;; both operands differ in sign from the result, i.e.
     ;;   ((a ^ sum) & (b ^ sum)) < 0
@@ -363,6 +369,18 @@
       ((overflow-check)
        (arity-check! who 3 srcs)
        (overflow-check-seq (car srcs) (cadr srcs) (caddr srcs)))
+      ;; A type check needs to know WHICH type. `chk` carries the tag; the
+      ;; mach-op spelling has no operand for it and passes 0, and 0 is fixnum
+      ;; -- a real tag, not a "no answer" marker. Emitting it would compile
+      ;; "check this is something" into "check this is a fixnum", which for
+      ;; a flonum check is a branch that always traps.
+      ((type-check-no-tag)
+       (error who
+              (string-append
+               "a type check through the mach-op spelling has no operand for "
+               "the expected tag, and 0 is fixnum rather than a no-answer "
+               "marker; use `chk`, which carries it")
+              srcs))
       ((type-check)
        ;; Lmach's chk NOW carries the expected tag, so this is selectable:
        ;; mask the primary tag out of the value and compare it against the
@@ -391,7 +409,10 @@
     ;; The mach-op spelling. Unlike `chk` these carry no expected tag, because a
     ;; mach-op check-bounds has no operand to put one in, so type-check through
     ;; this path passes 0 and emit-check refuses it rather than guessing.
-    (lambda (dst sc srcs) (emit-check 'rv64-select name srcs 0)))
+    (lambda (dst sc srcs)
+      (emit-check 'rv64-select
+                  (if (eq? name 'type-check) 'type-check-no-tag name)
+                  srcs 0)))
 
   (define rv64-rules
     (list

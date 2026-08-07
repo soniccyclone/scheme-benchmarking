@@ -86,6 +86,11 @@
          (not (equal? (list-ref (caddr (car n)) 4)
                       (list-ref (caddr (car a)) 4))))))
 
+;; The mach-op spelling of a type check has no operand for the expected tag and
+;; would pass 0 -- which is FIXNUM, a real tag rather than a no-answer marker.
+(ck! "a type check through the mach-op spelling is REFUSED, not defaulted to fixnum"
+     (raises? (lambda () (select-instr x86-64-selector '(check-type v raw-word v-a)))))
+
 ;; A suppressed check must stay suppressed.
 (ck! "an `unchecked` chk emits nothing"
      (null? (select-instr x86-64-selector '(chk bounds-check unchecked 0 v0 v1))))

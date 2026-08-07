@@ -100,12 +100,24 @@
 
 ;; RISC-V has no flags register. numeric.ss describes a checked fx+ as "an add
 ;; followed by jo"; here it is four instructions and two scratches.
+;; The operands are (a b sum), matching what lower.ss emits: the check is a
+;; POSTcondition, so the sum is the operation's own destination and comes last.
+;; The idiom is ((a^sum) & (b^sum)) < 0, so BOTH xors must name the sum -- and
+;; because it is symmetric in a and b, reading the operands in the wrong order
+;; still produces four plausible instructions that test nothing. The assertion
+;; is therefore on which operand each xor pairs with, not on the shape.
 (ck! "an overflow check becomes the sign-comparison idiom, not a flag test"
-     (equal? (sel1 '(chk overflow-check checked 0 v-sum v-a v-b))
+     (equal? (sel1 '(chk overflow-check checked 0 v-a v-b v-sum))
              '((xor t0 v-a v-sum)
                (xor t1 v-b v-sum)
                (and t0 t0 t1)
                (blt t0 zero trap-overflow-check))))
+;; The mach-op spelling of a type check has no operand for the expected tag and
+;; would pass 0 -- which is FIXNUM, a real tag rather than a no-answer marker.
+;; Emitting it would turn "check this is something" into "check this is a
+;; fixnum": a branch that always traps for any other type.
+(ck! "a type check through the mach-op spelling is REFUSED, not defaulted to fixnum"
+     (raises-naming? (lambda () (sel1 '(check-type v raw-word v-a))) "expected tag"))
 ;; One unsigned compare catches the negative index too.
 (ck! "a bounds check is a single bgeu"
      (equal? (sel1 '(chk bounds-check checked 0 v-i v-n))

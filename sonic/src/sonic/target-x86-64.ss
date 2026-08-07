@@ -349,7 +349,18 @@
      ;; put it in. So they pass 0 and check-type via this path is refused by
      ;; check-rule rather than guessing a tag.
      (cons 'check-bounds   (lambda (dst sc srcs) (check-rule 'bounds-check srcs 0)))
-     (cons 'check-type     (lambda (dst sc srcs) (check-rule 'type-check srcs 0)))
+     ;; A type check needs to know WHICH type. `chk` carries the tag; this
+     ;; spelling has no operand for it and would pass 0 -- which is fixnum, a
+     ;; real tag rather than a no-answer marker. Emitting it turns "check this
+     ;; is something" into "check this is a fixnum", a branch that always traps
+     ;; for any other type.
+     (cons 'check-type
+           (lambda (dst sc srcs)
+             (error 'x86-64-selector
+                    (string-append
+                     "a type check through the mach-op spelling has no operand "
+                     "for the expected tag; use `chk`, which carries it")
+                    srcs)))
      (cons 'check-overflow (lambda (dst sc srcs) (check-rule 'overflow-check srcs 0)))
 
      ;; `(chk pn c v* ...)`: the framework hands the check name as `dst` and the
