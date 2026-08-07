@@ -154,6 +154,57 @@
 (check! "index against unknown length is not eliminable"
         (not (iv-within? (iv-range 0 34) iv-top)))
 
+;; --- branch edges, and NaN -------------------------------------------------
+;;
+;; e-SSA reports a comparison plus which edge we are on; `iv-refine` decides
+;; what follows. The FALSE edge is where the two numeric types part company, and
+;; getting it wrong is a wrong-code bug rather than a lost optimization, so it is
+;; pinned per type rather than assumed from the fixnum case.
+
+(define (refine-first cmp neg a b)
+  (let-values (((a2 b2) (iv-refine cmp neg a b))) a2))
+(define (refine-second cmp neg a b)
+  (let-values (((a2 b2) (iv-refine cmp neg a b))) b2))
+
+(check-eq! "true edge of (< i 5) bounds i above"
+           (refine-first '< #f iv-top (iv-const 5)) (iv-range 'neginf 4))
+(check-eq! "true edge of (< i n) bounds n below too"
+           (refine-second '< #f (iv-const 3) iv-top) (iv-range 4 'posinf))
+(check-eq! "false edge of (fx< i 5) is i >= 5"
+           (refine-first 'fx< #t iv-top (iv-const 5)) (iv-range 5 'posinf))
+(check-eq! "false edge of (fx>= i 5) is i < 5"
+           (refine-first 'fx>= #t iv-top (iv-const 5)) (iv-range 'neginf 4))
+
+;; A disequality is not an interval. The primitive table has no fx<>, and even
+;; if it did, [0,10] minus one point is not representable here.
+(check-eq! "false edge of an equality refines nothing"
+           (refine-first 'fx= #t (iv-range 0 10) (iv-const 5)) (iv-range 0 10))
+
+;; THE NaN CASE. This is the one the sigma negation flag exists for.
+;;
+;; (fl< a b) being FALSE does not mean (fl>= a b). NaN compares false against
+;; everything, so a NaN operand makes the negation true while no ordering holds
+;; at all. A domain that narrowed here would hand bounds-check elision a fact
+;; that is false for a real input, and there is no check downstream to catch it.
+(check-eq! "false edge of (fl< a b) must NOT narrow a"
+           (refine-first 'fl< #t (iv-range 0 10) (iv-const 5)) (iv-range 0 10))
+(check-eq! "false edge of (fl< a b) must NOT narrow b"
+           (refine-second 'fl< #t (iv-range 0 10) (iv-range 0 10)) (iv-range 0 10))
+(check-eq! "false edge of (fl>= a b) must NOT narrow either"
+           (refine-first 'fl>= #t (iv-range 0 10) (iv-const 5)) (iv-range 0 10))
+(check! "no flonum comparison has a usable negation"
+        (for-all (lambda (c) (not (iv-edge-cmp c #t)))
+                 '(fl< fl<= fl> fl>= fl=)))
+
+;; The TRUE edge is unaffected, and that asymmetry is the whole content of the
+;; rule: a comparison that SUCCEEDED had no NaN operand, so the ordering it
+;; states really holds and refines exactly as the fixnum one does.
+(check-eq! "true edge of (fl< a b) refines normally"
+           (refine-first 'fl< #f iv-top (iv-const 5)) (iv-range 'neginf 4))
+(check! "every fixnum comparison but equality has a negation"
+        (for-all (lambda (c) (and (iv-edge-cmp c #t) #t))
+                 '(fx< fx<= fx> fx>=)))
+
 ;; nbody's actual access pattern: b[i*7 + k], i in [0,4], k in [0,6],
 ;; against a flvector of length 35.
 (let* ((i (iv-range 0 4))

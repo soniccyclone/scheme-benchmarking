@@ -95,6 +95,46 @@
         '((b . 35))
         '(#f))
 
+;; 7b. Both bounds recovered, but the LOWER one comes off a FALSE edge:
+;;     (if (< i 0) nothing (if (< i 35) b[i] nothing)). The outer test failing
+;;     is what proves i >= 0.
+(expect "lower bound from the false edge of a fixnum test"
+        '(let zero (const 0)
+           (let n (const 35)
+             (if (fx< i zero)
+                 (const 0)
+                 (if (fx< i n) (vref b i) (const 0)))))
+        '((b . 35))
+        '(#t))
+
+;; 7c. THE NaN CASE, and it is the same program with one letter changed.
+;;
+;;     (fl< i 0.0) being FALSE does not mean i >= 0.0: NaN compares false
+;;     against everything, so the negation is true for NaN while the ordering is
+;;     not. The domain must therefore recover NOTHING from this edge and the
+;;     check must survive. If this case ever prints #t, the compiler is deleting
+;;     a bounds check that a NaN index walks straight through.
+(expect "the same lower bound off a FLONUM false edge is NOT recoverable"
+        '(let zero (const 0)
+           (let n (const 35)
+             (if (fl< i zero)
+                 (const 0)
+                 (if (fx< i n) (vref b i) (const 0)))))
+        '((b . 35))
+        '(#f))
+
+;; 7d. The flonum TRUE edge is not affected: a comparison that succeeded had no
+;;     NaN operand. Same shape, guards rewritten so both facts come off true
+;;     edges.
+(expect "flonum true edges still refine"
+        '(let zero (const 0)
+           (let n (const 35)
+             (if (fl>= i zero)
+                 (if (fl< i n) (vref b i) (const 0))
+                 (const 0))))
+        '((b . 35))
+        '(#t))
+
 ;; 8. Two references, one safe and one not, in the same program. Catches an
 ;;    analysis that collapses all decisions into a single verdict.
 (expect "mixed: first safe, second not"

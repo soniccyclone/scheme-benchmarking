@@ -31,6 +31,38 @@
 ;;; distinct objects. That is decidable locally and it covers the numeric kernel
 ;;; shapes the benchmarks are made of. Anything else is assumed to alias.
 ;;;
+;;; AND ONE THING IT DOES NOT PROVE: `declare-distinct`. Allocation-site
+;;; reasoning runs out at the procedure boundary, and that is where the real
+;;; kernels live. nbody's inner loop takes its flvectors as ARGUMENTS; the
+;;; `make-flvector` happened in a caller this compiler may never see, so the
+;;; parameters are top and every query answers `may`. That single fact is the
+;;; difference between vectorizing nbody and not, and no amount of local
+;;; cleverness recovers it, because the information is genuinely not in the
+;;; procedure.
+;;;
+;;; So the programmer supplies it. `(declare-distinct (a b) body)` is C99's
+;;; `restrict` and Ada's pragma: a PREMISE, in the D5 sense, not a check being
+;;; suppressed. Two names in one group answer `must-not` for as long as the
+;;; premise holds.
+;;;
+;;; VIOLATING IT IS UNDEFINED BEHAVIOUR, and here that phrase has teeth. This is
+;;; the ONE path in this file that returns `must-not` without a proof, and it is
+;;; therefore the one path that can miscompile. Stage 10 will reorder reads
+;;; against writes on the strength of the answer and there is no runtime check
+;;; anywhere downstream: pass the same flvector twice under a `declare-distinct`
+;;; and the program computes wrong numbers silently. Like `restrict`, the
+;;; premise also covers ACCESS, not merely identity -- inside the body, the
+;;; declared names are the only paths to their storage -- which is why it is
+;;; consulted ahead of the escape test that would otherwise force `may`. The
+;;; compiler cannot check any of this. The programmer is asserting it.
+;;;
+;;; SCOPE. The premise is recorded per program, not per program point, which
+;;; matches the flow-insensitivity above and is sound for the same reason: Lanf
+;;; is single-assignment, so a name denotes one object for its whole lifetime,
+;;; and "these two objects are distinct" is a fact about the objects rather than
+;;; about where you stand in the program. Binder uniqueness (see below) is what
+;;; keeps a name from meaning two different things in two scopes.
+;;;
 ;;; ON ESCAPE. Strictly, two distinct allocation sites denote distinct objects
 ;;; forever, escaped or not, so `escaped => may` gives up precision we are not
 ;;; obliged to give up. We give it up anyway, because the question stage 10 asks
@@ -60,15 +92,17 @@
   (export alias-analyze
           alias-table?
           alias-query may-alias? must-not-alias?
-          alias-points-to alias-escaped? alias-sites)
+          alias-points-to alias-escaped? alias-sites
+          alias-declared-distinct?)
   (import (chezscheme) (nanopass) (sonic lang))
 
   ;; --- the table -----------------------------------------------------------
-  ;; pt      : symbol -> 'unknown | (site-id ...)      points-to
-  ;; escaped : site-id -> #t
-  ;; names   : site-id -> symbol                       the binder, for reports
+  ;; pt       : symbol -> 'unknown | (site-id ...)     points-to
+  ;; escaped  : site-id -> #t
+  ;; names    : site-id -> symbol                      the binder, for reports
+  ;; distinct : ((x ...) ...)                          declare-distinct groups
   (define-record-type alias-table
-    (fields pt escaped names))
+    (fields pt escaped names distinct))
 
   (define (pt-ref tbl x)
     (let ([h (alias-table-pt tbl)])
@@ -87,6 +121,16 @@
 
   (define (pts-disjoint? a b)
     (not (exists (lambda (s) (memv s b)) a)))
+
+  ;; Is this pair covered by a `declare-distinct` premise? A name is never
+  ;; distinct from ITSELF, however many times the programmer wrote it: two
+  ;; occurrences of one variable are the same object, so a group that repeats a
+  ;; name is a violated premise and answering `must-not` on it would turn the
+  ;; programmer's mistake into a miscompile at the one point we can cheaply
+  ;; refuse to.
+  (define (groups-distinct? groups x y)
+    (and (not (eq? x y))
+         (exists (lambda (g) (and (memq x g) (memq y g) #t)) groups)))
 
   ;; --- which primitives can even yield a reference -------------------------
   ;; Stated as a table rather than left to a default, because the default here
@@ -145,6 +189,11 @@
                      x* e*)
            (Expr body)]
           [(declare ([,x* ,pn*] ...) ,body) (use*! x*) (Expr body)]
+          ;; declare-distinct's variables are REFERENCES, like declare's. Missing
+          ;; this clause did not merely lose the premise, it lost the BODY: an
+          ;; unhandled form falls to `else` and the subtree under it was never
+          ;; scanned at all.
+          [(declare-distinct (,x* ...) ,body) (use*! x*) (Expr body)]
           [(policy ([,pn* ,b*] ...) ,body) (Expr body)]
           [else (void)]))
       (define (SimpleExpr se)
@@ -185,7 +234,11 @@
     (let* ([known (scan-procs e)]
            [pt (make-eq-hashtable)]
            [escaped (make-eqv-hashtable)]
-           [names (make-eqv-hashtable)])
+           [names (make-eqv-hashtable)]
+           ;; Rebuilt from scratch on every fixpoint iteration, alongside the
+           ;; site counter, so a group is recorded once rather than once per
+           ;; pass over the program.
+           [distinct '()])
 
       (define (get x) (if (hashtable-contains? pt x) (hashtable-ref pt x #f) 'unknown))
       (define (put! x v) (hashtable-set! pt x (pts-join (get-or-bottom x) v)))
@@ -253,6 +306,13 @@
           [(declare ([,x* ,pn*] ...) ,body)
            (for-each (lambda (x) (ref! x escaping?)) x*)
            (walk body escaping?)]
+          ;; The premise. Recorded, not checked: see the header note on
+          ;; undefined behaviour. Recording it here rather than in scan-procs
+          ;; keeps it beside the points-to facts it competes with in the query.
+          [(declare-distinct (,x* ...) ,body)
+           (for-each (lambda (x) (ref! x escaping?)) x*)
+           (set! distinct (cons x* distinct))
+           (walk body escaping?)]
           [(policy ([,pn* ,b*] ...) ,body) (walk body escaping?)]
           [else (void)]))
 
@@ -298,14 +358,18 @@
          [(> i fixpoint-cap)
           ;; The termination argument above says we cannot get here. If we do,
           ;; the argument is wrong, and the only safe response is to forget
-          ;; everything: an all-top table answers `may` to every query.
-          (make-alias-table (make-eq-hashtable) (make-eqv-hashtable) names)]
+          ;; everything: an all-top table answers `may` to every query. The
+          ;; declared premises go too. They are sound on their own, but a table
+          ;; built from a walk we do not trust is not one to answer `must-not`
+          ;; from.
+          (make-alias-table (make-eq-hashtable) (make-eqv-hashtable) names '())]
          [else
           (set! counter 0)
+          (set! distinct '())
           (walk e #f)
           (let ([s (signature)])
             (if (= s prev)
-                (make-alias-table pt escaped names)
+                (make-alias-table pt escaped names distinct)
                 (loop (+ i 1) s)))]))))
 
   ;; --- the query -----------------------------------------------------------
@@ -323,13 +387,25 @@
       (map (lambda (k) (cons k (hashtable-ref h k #f)))
            (vector->list (hashtable-keys h)))))
 
-  ;; 'must-not or 'may. Read the cond top to bottom: every branch but the last
-  ;; two answers `may`, and the one branch that answers `must-not` is guarded by
-  ;; a positive proof that the two point-to sets are known, unescaped and
-  ;; disjoint.
+  ;; Does a `declare-distinct` premise cover this pair?
+  (define (alias-declared-distinct? tbl x y)
+    (groups-distinct? (alias-table-distinct tbl) x y))
+
+  ;; 'must-not or 'may. Read the cond top to bottom: every branch but the first
+  ;; and the last-but-one answers `may`, and each of those two is a positive
+  ;; claim -- one asserted by the programmer, one proven here.
   (define (alias-query tbl x y)
     (let ([px (pt-ref tbl x)] [py (pt-ref tbl y)])
       (cond
+       ;; THE PREMISE, and it comes first on purpose. A kernel's arrays arrive
+       ;; as parameters, so their points-to sets are top and they count as
+       ;; escaped; every test below this one would answer `may` and the premise
+       ;; would never be reachable. Ordering it first is what makes
+       ;; declare-distinct mean anything, and it is why the header calls
+       ;; violating it undefined behaviour: like C99's `restrict`, the
+       ;; programmer is asserting both distinctness AND that these names are the
+       ;; only paths to that storage inside the body.
+       [(alias-declared-distinct? tbl x y) 'must-not]
        ;; Nothing known about one of them.
        [(or (eq? px 'unknown) (eq? py 'unknown)) 'may]
        ;; Reachable from code we cannot see, so we cannot enumerate the

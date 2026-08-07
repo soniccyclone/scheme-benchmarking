@@ -142,6 +142,75 @@
               (seq a s))))
         'a 's 'must-not)
 
+;; --- declare-distinct, the premise ----------------------------------------
+;;
+;; nbody's real entry point: the kernel receives its flvectors as PARAMETERS.
+;; The make-flvector happened in a caller this compiler may not have, so
+;; allocation-site reasoning has nothing to work with and every case below
+;; except the declared one must answer `may`.
+
+;; 12. The baseline. Without a premise, two parameters are two unknowns.
+(expect "two kernel parameters, no premise"
+        (with-output-language (Lanf Expr)
+          `(lambda (a b) ,(mention 'a 'b)))
+        'a 'b 'may)
+
+;; 13. THE ONE THIS EXISTS FOR. The same kernel, with the programmer asserting
+;;     what the compiler cannot see. This is the difference between vectorizing
+;;     nbody and not.
+(expect "two kernel parameters under declare-distinct"
+        (with-output-language (Lanf Expr)
+          `(lambda (a b) (declare-distinct (a b) ,(mention 'a 'b))))
+        'a 'b 'must-not)
+
+;; 14. A name is not distinct from itself, however the group is written. The
+;;     premise is already violated at that point; answering `must-not` would
+;;     turn the programmer's mistake into a silently miscompiled loop.
+(expect "a name is never distinct from itself"
+        (with-output-language (Lanf Expr)
+          `(lambda (a b) (declare-distinct (a b) ,(mention 'a 'a))))
+        'a 'a 'may)
+
+;; 15. The premise covers the group it names and nothing else.
+(expect "a third array is not covered by someone else's premise"
+        (with-output-language (Lanf Expr)
+          `(lambda (a b c) (declare-distinct (a b) ,(mention 'a 'c))))
+        'a 'c 'may)
+
+;; 16. Three names in one group are pairwise distinct, which is what `restrict`
+;;     on three pointers means and what a three-array kernel needs.
+(expect "a group of three is pairwise distinct"
+        (with-output-language (Lanf Expr)
+          `(lambda (a b c) (declare-distinct (a b c) ,(mention 'b 'c))))
+        'b 'c 'must-not)
+
+;; 17. The premise wins over escape, and that is deliberate rather than an
+;;     oversight: a parameter is escaped by construction here, so an escape test
+;;     ahead of the premise would make declare-distinct unreachable. Like C99's
+;;     restrict, the assertion covers access and not merely identity. See the
+;;     undefined-behaviour note in alias.ss.
+(expect "the premise outranks escape, which is what makes it usable"
+        (with-output-language (Lanf Expr)
+          `(lambda (a b)
+             (declare-distinct (a b) (seq (tailcall opaque a) b))))
+        'a 'b 'must-not)
+
+;; 18. The body under declare-distinct is still ANALYSED. Before the form was
+;;     handled it fell to the walk's `else` and the whole subtree went unread,
+;;     so allocations inside it were invisible: sound, and blind.
+(expect "allocations inside the body are still seen"
+        (with-output-language (Lanf Expr)
+          `(declare-distinct (p q) ,(two-arrays (mention 'a 'b))))
+        'a 'b 'must-not)
+
+(expect-true "the premise is separately reportable"
+             (let ([tbl (alias-analyze
+                         (with-output-language (Lanf Expr)
+                           `(lambda (a b) (declare-distinct (a b) ,(mention 'a 'b)))))])
+               (and (alias-declared-distinct? tbl 'a 'b)
+                    (alias-declared-distinct? tbl 'b 'a)
+                    (not (alias-declared-distinct? tbl 'a 'a)))))
+
 ;; --- the direction of the default -----------------------------------------
 ;; If a form is added to Lanf and this file is not taught about it, the walk
 ;; falls through and the answer stays `may`. Assert the fall-through lands on

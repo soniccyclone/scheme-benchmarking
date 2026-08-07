@@ -129,7 +129,16 @@
 
 (ok! "Lssa: sigma names the branch fact ABCD needs"
      (lambda () (with-output-language (Lssa Expr)
-                  `(sigma i2 i fx< n (phi ([s (quote 0)]) s)))))
+                  `(sigma i2 i fx< n #f (phi ([s (quote 0)]) s)))))
+
+;; The false edge of the same test. Sigma carries the comparison AS WRITTEN plus
+;; a negation flag rather than an opposite primitive, because for flonums there
+;; is no opposite: NaN makes (not (fl< a b)) true where (fl>= a b) is false.
+;; lang.ss states it at the production; this pins that the production can hold
+;; it.
+(ok! "Lssa: sigma can carry a NEGATED comparison"
+     (lambda () (with-output-language (Lssa Expr)
+                  `(sigma a2 a fl< b #t (phi ([s (quote 0)]) s)))))
 
 (ok! "Lrepr: a binding carries its storage class"
      (lambda () (with-output-language (Lrepr Expr)

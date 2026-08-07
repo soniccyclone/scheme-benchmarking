@@ -51,47 +51,54 @@
 ;;;     only when the `if` is in value position. In statement position the
 ;;;     merge is dead and no phi is emitted.
 ;;;
-;;; See the report at the bottom of this file for what the frozen `sigma`
-;;; production can and cannot express. Two cases it cannot are load bearing.
+;;; WHAT SIGMA EXPRESSES, AND WHAT IT DOES NOT DECIDE.
+;;;
+;;; A sigma is a syntactic report: this edge is the one where (p a b) held, or
+;;; the one where it failed. It does not say what follows from that. The false
+;;; edge of (fl< a b) is emitted as an fl< sigma with negated? set, NOT as an
+;;; fl>= sigma, because NaN makes the negation true where fl>= is false. Turning
+;;; the report into an interval is (sonic interval)'s iv-refine, and that is the
+;;; only place the NaN rule appears.
 
 (library (sonic essa)
-  (export essa comparison-prim? cmp-negate cmp-swap)
+  (export essa comparison-prim? cmp-swap)
   (import (chezscheme) (nanopass) (sonic lang))
 
   ;; --- the comparison algebra -----------------------------------------------
-  ;; Each row: the primitive, its SWAP ((p a b) iff (swap(p) b a)), and its
-  ;; NEGATION (the fact that holds on the false edge).
+  ;; Each row: the primitive and its SWAP ((p a b) iff (swap(p) b a)).
   ;;
-  ;; Two rows are deliberately incomplete, and both are correctness, not
-  ;; laziness:
+  ;; SWAP IS ALL THIS PASS KNOWS, AND THAT IS DELIBERATE. There is no negation
+  ;; column, because negating a comparison is a claim about the numbers and this
+  ;; pass only reports syntax. NaN makes every comparison false, so
+  ;; (not (fl<= a b)) is TRUE for a NaN operand while (fl> a b) is false, and a
+  ;; pass that rewrote the false edge of (fl< a b) into an fl>= sigma would
+  ;; assert an ordering in exactly the case where neither ordering holds. There
+  ;; is no fx<> either, so the false edge of an equality had nowhere to go at
+  ;; all.
   ;;
-  ;;   fx= has no negation because the primitive table has no `fx<>`. The false
-  ;;   edge of (fx= a b) states a disequality no production can carry.
+  ;; Both problems are the same problem, and the fix is the same: the false edge
+  ;; carries the comparison AS WRITTEN with sigma's negated? flag set, and
+  ;; (sonic interval) decides what follows from it -- an ordering for fixnums,
+  ;; nothing for flonums, nothing for a disequality. See iv-refine.
   ;;
-  ;;   NO FLONUM COMPARISON HAS A NEGATION. lang.ss says why, at the fl< entry:
-  ;;   NaN makes every comparison false, so (not (fl<= a b)) is TRUE for a NaN
-  ;;   operand while (fl> a b) is false. Emitting (sigma a2 a fl>= b ...) on
-  ;;   the false edge of (fl< a b) would therefore assert a>=b in exactly the
-  ;;   case where neither ordering holds, and this pass feeds a bounds-check
-  ;;   elision client. A wrong interval here is a wrong-code bug, so the false
-  ;;   edge of a flonum test carries no sigma at all. Swapping is fine on both
-  ;;   edges (NaN makes both spellings false), so the true edge is unaffected.
+  ;; Swapping needs no such care and holds on both edges: (p a b) and
+  ;; (swap(p) b a) are the same test, so they are true together and false
+  ;; together, NaN included.
   (define cmp-table
-    ;;  prim   swap   negation
-    '((fx<     fx>    fx>=)
-      (fx<=    fx>=   fx>)
-      (fx=     fx=    #f)
-      (fx>=    fx<=   fx<)
-      (fx>     fx<    fx<=)
-      (fl<     fl>    #f)
-      (fl<=    fl>=   #f)
-      (fl=     fl=    #f)
-      (fl>=    fl<=   #f)
-      (fl>     fl<    #f)))
+    ;;  prim   swap
+    '((fx<     fx>)
+      (fx<=    fx>=)
+      (fx=     fx=)
+      (fx>=    fx<=)
+      (fx>     fx<)
+      (fl<     fl>)
+      (fl<=    fl>=)
+      (fl=     fl=)
+      (fl>=    fl<=)
+      (fl>     fl<)))
 
   (define (comparison-prim? pr) (and (assq pr cmp-table) #t))
   (define (cmp-swap pr) (cadr (assq pr cmp-table)))
-  (define (cmp-negate pr) (caddr (assq pr cmp-table)))
 
   ;; --- fresh names ----------------------------------------------------------
   ;; Readable rather than gensym'd: `i.7` beats `g$1234`, fixtures are written
@@ -169,43 +176,47 @@
       ;; For a test (p a b) taken on this edge, ABCD wants BOTH operands split,
       ;; because the true edge of a<b tells you as much about b as about a. So:
       ;;
-      ;;   (sigma a2 a  p        b  (sigma b2 b  swap(p)  a2  body))
+      ;;   (sigma a2 a  p        b  neg  (sigma b2 b  swap(p)  a2  neg  body))
       ;;
       ;; a2's other operand is the unrefined b (b2 is not in scope yet); b2's
       ;; is the already-refined a2, which is what the paper does and is strictly
       ;; more precise.
+      ;;
+      ;; `neg` is #f on the true edge and #t on the false one, and the SAME
+      ;; comparison is emitted on both. Swapping distributes over negation --
+      ;; (p a b) and (swap(p) b a) are one test, so they fail together -- so the
+      ;; second sigma of a false edge is (swap(p), negated), not swap of some
+      ;; negated primitive that may not exist.
       (define (edge-sigmas env f true?)
         (define (nowrap) (values env (lambda (body) body)))
         (if (not f)
             (nowrap)
-            (let* ([pr0 (car f)]
+            (let* ([p (car f)]
                    [asrc (car (cadr f))] [assa (cdr (cadr f))]
                    [bsrc (car (caddr f))] [bssa (cdr (caddr f))]
-                   [p (if true? pr0 (cmp-negate pr0))])
-              (if (not p)
-                  (nowrap)                     ; not expressible: see cmp-table
-                  (let* ([a-ok (eq? (env-lookup env asrc) assa)]
-                         ;; (fx< i i) constrains one variable, not two.
-                         [b-ok (and (eq? (env-lookup env bsrc) bssa)
-                                    (not (eq? assa bssa)))]
-                         [q (cmp-swap p)])
-                    (if (and (not a-ok) (not b-ok))
-                        (nowrap)
-                        (let* ([a^ (and a-ok (fresh-name asrc))]
-                               [b^ (and b-ok (fresh-name bsrc))]
-                               [env1 (if a-ok (cons (cons asrc a^) env) env)]
-                               [env2 (if b-ok (cons (cons bsrc b^) env1) env1)]
-                               [aother (if a-ok a^ assa)])
-                          (values
-                            env2
-                            (lambda (body)
-                              (with-output-language (Lssa Expr)
-                                (let ([inner (if b-ok
-                                                 `(sigma ,b^ ,bssa ,q ,aother ,body)
-                                                 body)])
-                                  (if a-ok
-                                      `(sigma ,a^ ,assa ,p ,bssa ,inner)
-                                      inner))))))))))))
+                   [neg (not true?)]
+                   [a-ok (eq? (env-lookup env asrc) assa)]
+                   ;; (fx< i i) constrains one variable, not two.
+                   [b-ok (and (eq? (env-lookup env bsrc) bssa)
+                              (not (eq? assa bssa)))]
+                   [q (cmp-swap p)])
+              (if (and (not a-ok) (not b-ok))
+                  (nowrap)
+                  (let* ([a^ (and a-ok (fresh-name asrc))]
+                         [b^ (and b-ok (fresh-name bsrc))]
+                         [env1 (if a-ok (cons (cons asrc a^) env) env)]
+                         [env2 (if b-ok (cons (cons bsrc b^) env1) env1)]
+                         [aother (if a-ok a^ assa)])
+                    (values
+                      env2
+                      (lambda (body)
+                        (with-output-language (Lssa Expr)
+                          (let ([inner (if b-ok
+                                           `(sigma ,b^ ,bssa ,q ,aother ,neg ,body)
+                                           body)])
+                            (if a-ok
+                                `(sigma ,a^ ,assa ,p ,bssa ,neg ,inner)
+                                inner))))))))))
 
       ;; Does this let-bound simple expression establish a comparison fact?
       ;; Operands in Lanf are atoms by construction, so both are variables and

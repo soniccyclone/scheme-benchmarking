@@ -16,11 +16,18 @@
 ;;;   e ::= (const n)
 ;;;       | (var x)
 ;;;       | (let x e body)
-;;;       | (if (cmp x y) e1 e2)          cmp in < <= >= =
+;;;       | (if (cmp x y) e1 e2)          cmp: see below
 ;;;       | (prim op x y)                 op in + - *
 ;;;       | (vref v x)                    the reference whose check we want gone
 ;;;       | (loop x lo hi body)           x from lo below hi
 ;;;       | (begin e ...)
+;;;
+;;; A comparison is spelled either bare (< <= > >= =), which means the totally
+;;; ordered one, or with its primitive name from lang.ss (fx< ... fl< ...). The
+;;; flonum spellings are not decoration: an `fl` comparison's FALSE edge refines
+;;; nothing, because NaN makes every comparison false and so the negation is
+;;; true where the opposite ordering is not. `iv-refine` in (sonic interval)
+;;; carries that rule; this file only says which edge it is on.
 ;;;
 ;;; `loop` is a primitive rather than sugar over letrec on purpose. The whole
 ;;; problem is proving a fact about the induction variable, and a loop form
@@ -88,22 +95,23 @@
           ((eq? (car e) 'var) (env-ref env (cadr e)))
           (else (error 'eval-atom "not an atom" e))))
 
-  ;; Refine both operands of a comparison on the branch where it holds.
-  ;; This is the step cptypes cannot take at all, and it is where elision
-  ;; ultimately comes from.
+  ;; Refine both operands of a comparison on one edge of the branch. This is the
+  ;; step cptypes cannot take at all, and it is where elision ultimately comes
+  ;; from.
+  ;;
+  ;; WHAT THE EDGE MEANS IS NOT DECIDED HERE. `true?` says which edge we are on
+  ;; and the comparison says what was written; `iv-refine` owns the conclusion,
+  ;; because that conclusion depends on the operand type and gets the NaN case
+  ;; wrong if it is spread over two files. The false edge of a flonum comparison
+  ;; comes back unrefined, and that is the correct answer, not a gap.
   (define (refine env cmp x y true?)
-    (let ((vx (env-ref env x)) (vy (env-ref env y)))
-      (cond
-       ((and (eq? cmp '<) true?)
-        (env-set (env-set env x (iv-lt-refine vx vy))
-                 y (iv-ge-refine vy (iv-add vx (iv-const 1)))))
-       ((and (eq? cmp '<) (not true?))          ; false branch: x >= y
-        (env-set env x (iv-ge-refine vx vy)))
-       ((and (eq? cmp '<=) true?) (env-set env x (iv-le-refine vx vy)))
-       ((and (eq? cmp '>=) true?) (env-set env x (iv-ge-refine vx vy)))
-       ((and (eq? cmp '=) true?)
-        (let ((m (iv-meet vx vy))) (env-set (env-set env x m) y m)))
-       (else env))))
+    (let-values (((vx vy) (iv-refine cmp (not true?)
+                                     (env-ref env x) (env-ref env y))))
+      ;; (< i i) constrains one variable, not two, so the second env-set must
+      ;; not simply overwrite the first.
+      (if (eq? x y)
+          (env-set env x (iv-meet vx vy))
+          (env-set (env-set env x vx) y vy))))
 
   (define (apply-prim op a b)
     (cond ((eq? op '+) (iv-add a b))

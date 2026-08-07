@@ -80,7 +80,7 @@
     (with-output-language (Lssa Expr)
       `(let ([t (primcall fx< () i n)])
          (if t
-             (sigma i2 i fx< n
+             (sigma i2 i fx< n #f
                (let ([off (primcall fx* ([overflow-check checked]) i2 seven)])
                  (let ([idx (primcall fx+ ([overflow-check checked]) off k)])
                    (let ([val (primcall flvector-ref

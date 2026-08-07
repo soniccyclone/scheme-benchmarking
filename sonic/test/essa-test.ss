@@ -72,11 +72,18 @@
             [(char=? (string-ref s i) #\.) (string->symbol (substring s 0 i))]
             [else (string->symbol s)]))))
 
-;; (sigma x0 x1 pr x2 body) -> (x0-base x1-base pr x2-base)
+;; (sigma x0 x1 pr x2 neg body) -> (x0-base x1-base pr x2-base neg)
+;; The flag is part of the shape, not an afterthought: the whole point of the
+;; production is that the false edge says "this comparison FAILED" rather than
+;; naming an opposite comparison that, for flonums, does not exist.
 (define (sigma-shapes s)
   (map (lambda (g)
-         (list (base (cadr g)) (base (caddr g)) (cadddr g) (base (car (cddddr g)))))
+         (list (base (cadr g)) (base (caddr g)) (cadddr g)
+               (base (list-ref g 4)) (list-ref g 5)))
        (collect 'sigma s)))
+
+;; The body of a sigma, which is where the next one on the same edge sits.
+(define (sigma-body g) (list-ref g 6))
 
 ;; (phi ([x e] ...) body) -> the number of merged names
 (define (phi-widths s) (map (lambda (p) (length (cadr p))) (collect 'phi s)))
@@ -183,48 +190,60 @@
           (length (collect 'sigma out)) 4)
   (check! "the facts, in order: true edge then false edge"
           (sigma-shapes out)
-          '((i i fx<  n)      ; true:  i is the i that is < n
-            (n n fx>  i)      ; true:  n is the n that is > i
-            (i i fx>= n)      ; false: i is the i that is >= n
-            (n n fx<= i)))    ; false: n is the n that is <= i
+          '((i i fx< n #f)    ; true:  i is the i that is < n
+            (n n fx> i #f)    ; true:  n is the n that is > i
+            (i i fx< n #t)    ; false: i is the i for which i < n FAILED
+            (n n fx> i #t)))  ; false: n is the n for which n > i failed
   (check! "definitions are uniquely named" (all-distinct? (binders out)) #t)
   ;; The second sigma on an edge refers to the first one's OUTPUT, which is
   ;; what makes the pair of constraints mutually refining rather than two
   ;; independent facts about the pre-branch values.
   (check! "the second sigma of an edge refines against the first's output"
           (let ([sig (collect 'sigma out)])
-            (equal? (list-ref (car sig) 5)                 ; body of sigma 1
+            (equal? (sigma-body (car sig))                 ; body of sigma 1
                     (cadr sig)))                           ; is sigma 2
           #t)
   (check! "sigma 2's other operand is sigma 1's output"
           (list-ref (cadr (collect 'sigma out)) 4)
           (cadr (car (collect 'sigma out)))))
 
-;; The remaining fixnum comparisons, so the negation table is exercised rather
-;; than assumed. `fx=` has no false-edge spelling: the primitive table has no
-;; disequality, so that edge carries no sigma at all.
+;; The remaining comparisons. Every one of them splits BOTH edges now: the false
+;; edge repeats the comparison as written and sets the flag, so no primitive has
+;; to exist for the opposite relation. Swapping still applies on both edges,
+;; because (p a b) and (swap(p) b a) are the same test and fail together.
 (define (edge-facts pr)
   (sigma-shapes (run (with-output-language (Lanf Expr)
                        `(let ([c (primcall ,pr () i n)]) (if c i n))))))
 
-(check! "fx<= negates to fx>" (edge-facts 'fx<=)
-        '((i i fx<= n) (n n fx>= i) (i i fx> n) (n n fx< i)))
-(check! "fx>= negates to fx<" (edge-facts 'fx>=)
-        '((i i fx>= n) (n n fx<= i) (i i fx< n) (n n fx> i)))
-(check! "fx> negates to fx<=" (edge-facts 'fx>)
-        '((i i fx> n) (n n fx< i) (i i fx<= n) (n n fx>= i)))
-(check! "fx= splits the true edge only: there is no fx<> to spell the other"
-        (edge-facts 'fx=)
-        '((i i fx= n) (n n fx= i)))
+(check! "fx<= splits both edges" (edge-facts 'fx<=)
+        '((i i fx<= n #f) (n n fx>= i #f) (i i fx<= n #t) (n n fx>= i #t)))
+(check! "fx>= splits both edges" (edge-facts 'fx>=)
+        '((i i fx>= n #f) (n n fx<= i #f) (i i fx>= n #t) (n n fx<= i #t)))
+(check! "fx> splits both edges" (edge-facts 'fx>)
+        '((i i fx> n #f) (n n fx< i #f) (i i fx> n #t) (n n fx< i #t)))
 
-;; NaN. lang.ss states it at the fl< entry and it lands here: (not (fl< a b))
-;; is TRUE when either operand is NaN, where (fl>= a b) is false. So the false
-;; edge of a flonum test is not expressible as a comparison primitive and this
-;; pass emits nothing there rather than asserting an ordering that does not
-;; hold. The true edge is fine, because a comparison that succeeded had no NaN.
-(check! "flonum branches split the true edge only, because of NaN"
+;; The false edge of an equality is a DISEQUALITY, and the primitive table has
+;; no fx<> to name it. Before the flag existed that edge carried no sigma at
+;; all; now it carries the equality with the flag set, and the interval domain
+;; declines to refine it, which is the same conclusion reached one layer down
+;; where it belongs.
+(check! "fx= splits both edges; the false one is a disequality"
+        (edge-facts 'fx=)
+        '((i i fx= n #f) (n n fx= i #f) (i i fx= n #t) (n n fx= i #t)))
+
+;; NaN, and this is the case the flag exists for. (not (fl< a b)) is TRUE when
+;; either operand is NaN, where (fl>= a b) is false, so the false edge must NOT
+;; be spelled fl>=. It is spelled fl< with negated? set: a faithful report of
+;; what the branch tested, leaving the conclusion to a domain that knows about
+;; NaN. interval-test.ss and analyze-test.ss pin that the domain then refuses to
+;; narrow anything on that edge.
+(check! "a flonum false edge repeats the comparison and sets the flag"
         (edge-facts 'fl<)
-        '((i i fl< n) (n n fl> i)))
+        '((i i fl< n #f) (n n fl> i #f) (i i fl< n #t) (n n fl> i #t)))
+(check! "no flonum sigma ever names the opposite comparison"
+        (exists (lambda (s) (memq (caddr s) '(fl>= fl<=)))
+                (append (edge-facts 'fl<) (edge-facts 'fl>)))
+        #f)
 
 ;; --- 5. conditional on a non-comparison -----------------------------------
 
@@ -247,7 +266,64 @@
 (let* ([out (run (with-output-language (Lanf Expr)
                    `(let ([c (primcall fx< () i i)]) (if c i i))))])
   (check! "a self-comparison splits one variable per edge"
-          (sigma-shapes out) '((i i fx< i) (i i fx>= i))))
+          (sigma-shapes out) '((i i fx< i #f) (i i fx< i #t))))
+
+;; --- 5b. the guarded loop, which is why the expander nests -----------------
+;;
+;; This is the Lanf shape a conjunctive guard MUST arrive in, and the reason
+;; (sonic expand) lowers `and` in test position to nested ifs rather than to a
+;; boolean temporary. Written the other way, the outer test is a let-bound
+;; boolean produced by an `if`, `simple-fact` finds no comparison, and the
+;; branch gets no sigma at all -- the analysis goes blind at exactly the shape
+;; every bounds-guarded loop in the benchmark set has.
+;;
+;; Nested, each comparison gets its own pair, and the inner one is converted
+;; under the outer edge's refined environment, so the two facts COMPOSE: the
+;; index reaching flvector-ref is the one known both >= 0 and < n.
+
+(printf "\nguarded loop:\n")
+
+(let* ([out (run (with-output-language (Lanf Expr)
+                   `(letrec ([f (lambda (i)
+                                  (let ([c1 (primcall fx<= () zero i)])
+                                    (if c1
+                                        (let ([c2 (primcall fx< () i n)])
+                                          (if c2
+                                              (let ([v (primcall flvector-ref
+                                                                 ([type-check checked]
+                                                                  [bounds-check checked])
+                                                                 a i)])
+                                                v)
+                                              (quote 0)))
+                                        (quote 0))))])
+                      (let ([r (call f z)]) r))))]
+       [sigmas (collect 'sigma out)])
+  ;; Two guards, two operands each, two edges each.
+  (check! "a two-comparison guard yields eight sigmas"
+          (length sigmas) 8)
+  (check! "the guard's facts, both edges of both tests"
+          (sigma-shapes out)
+          '((zero zero fx<= i #f)     ; 0 <= i
+            (i i fx>= zero #f)        ; i >= 0, and this is the one that matters
+            (i i fx< n #f)            ; i < n, under the refined i
+            (n n fx> i #f)
+            (i i fx< n #t)            ; the inner guard failing
+            (n n fx> i #t)
+            (zero zero fx<= i #t)     ; the outer guard failing
+            (i i fx>= zero #t)))
+  ;; The composition. The index handed to flvector-ref must be the name the
+  ;; INNER sigma produced, not the loop parameter and not the outer sigma's
+  ;; output: only that name carries both bounds.
+  (check! "the indexed load reads the doubly-refined index"
+          (let* ([load (car (filter (lambda (p) (eq? (cadr p) 'flvector-ref))
+                                    (collect 'primcall out)))]
+                 ;; (primcall flvector-ref (controls) a idx)
+                 [idx (list-ref load 4)]
+                 ;; sigma 3 is (i i fx< n #f), the inner refinement of i
+                 [inner-i (cadr (list-ref sigmas 2))])
+            (eq? idx inner-i))
+          #t)
+  (check! "definitions are uniquely named" (all-distinct? (binders out)) #t))
 
 ;; --- 6. the fact must not outlive the value it is about -------------------
 ;;
@@ -264,7 +340,7 @@
                         (if c i n)))))])
   (check! "a rebound operand drops its sigma, keeps the other's"
           (sigma-shapes out)
-          '((n n fx> i) (n n fx<= i))))
+          '((n n fx> i #f) (n n fx> i #t))))
 
 (printf "\n~a checks, ~a failures\n" checks failures)
 (if (> failures 0) (exit 1) (begin (printf "PASS\n") (exit 0)))

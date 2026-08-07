@@ -636,6 +636,124 @@
            (env2 (extend* env formals (map make-variable new))))
       (list 'lambda new (expand-body body-forms env2))))
 
+  ;; --- test position --------------------------------------------------------
+  ;;
+  ;; `and` and `or` in the TEST of a conditional lower to nested `if`s, one per
+  ;; operand. In value position they keep the lowering that preserves the value.
+  ;;
+  ;; THIS IS A FRONT-END CONTRACT THE ANALYSIS DEPENDS ON, not a tidiness
+  ;; preference. Lanf's `if` takes a single ATOM, so whatever the test evaluates
+  ;; to gets let-bound, and (sonic essa) attaches a sigma only when the tested
+  ;; variable was bound by a COMPARISON primcall. Lower
+  ;;
+  ;;   (if (and (fx<= 0 i) (fx< i n)) body else)
+  ;;
+  ;; the value-position way and the test becomes `(if (fx<= 0 i) (fx< i n) #f)`,
+  ;; a boolean computed by an `if`. There is no comparison for a fact to hang
+  ;; off, the branch gets NO sigma, and the analysis is blind at every
+  ;; bounds-guarded loop -- which is the shape of config-2c and of every guard
+  ;; the benchmark set contains.
+  ;;
+  ;; Nested, each comparison keeps its own branch and its own sigma pair, and
+  ;; the inner one is converted under the outer edge's already-refined
+  ;; environment, so the two facts COMPOSE into the interval the bounds check
+  ;; needs. That composition is the entire mechanism.
+  ;;
+  ;; ON DUPLICATION. Distributing a conditional over an n-operand `and` copies
+  ;; the ALTERNATIVE n times (`or` copies the consequent). An arm that is a
+  ;; variable or a literal is copied outright; anything else is bound once to a
+  ;; nullary join procedure and called from each site, so a nested test cannot
+  ;; blow up code size. The arm reached exactly once is always emitted INLINE,
+  ;; and for the guarded-loop shape that arm is the loop body: putting it behind
+  ;; a call would move it out of the scope of the very refinements this lowering
+  ;; exists to create.
+
+  ;; A thunk that runs at most once. The skeleton builder calls each edge where
+  ;; source order says that edge's code appears, and an `and` chain reaches the
+  ;; same edge from several leaves; without memoization those leaves would each
+  ;; expand it afresh, renaming its binders differently every time.
+  (define (once thunk)
+    (let ((forced #f) (value #f))
+      (lambda ()
+        (unless forced (set! value (thunk)) (set! forced #t))
+        value)))
+
+  ;; The arms are stood in for by these while the skeleton is built, so the
+  ;; builder never has to know what an arm is, and so we can COUNT how many
+  ;; times each one is reached before deciding whether to copy it. Fresh vectors
+  ;; rather than symbols: identity is by eq?, and nothing in expander output can
+  ;; be eq? to a vector allocated here, not even a quoted vector literal.
+  (define (make-mark) (vector 'arm))
+
+  (define (tree-count m t)
+    (cond ((eq? m t) 1)
+          ((pair? t) (+ (tree-count m (car t)) (tree-count m (cdr t))))
+          (else 0)))
+
+  (define (tree-subst m v t)
+    (cond ((eq? m t) v)
+          ((pair? t) (cons (tree-subst m v (car t)) (tree-subst m v (cdr t))))
+          (else t)))
+
+  ;; Cheap enough that copying it beats naming it.
+  (define (duplicable-arm? e)
+    (or (symbol? e) (and (pair? e) (eq? (car e) 'quote))))
+
+  ;; Build the nested-if skeleton for `form` used as a test. `c` and `a` are
+  ;; thunks yielding the trees for the true and false edges.
+  ;;
+  ;; A macro in test position is expanded HERE rather than left to `expand`, so
+  ;; that a guard written as a macro over `and` gets the same lowering a guard
+  ;; written as `and` does. Both keywords are recognised by DENOTATION, so a
+  ;; program that rebinds `and` as a variable or a macro is unaffected.
+  (define (build-test form c a env)
+    (let ((d (and (pair? form) (symbol? (car form)) (lookup (car form) env))))
+      (cond
+        ((macro? d)
+         (build-test (apply-transformer (den-value d) form env) c a env))
+        ((and (special-is? d 'and) (list? form))
+         (let loop ((es (cdr form)))
+           (cond ((null? es) (c))                  ; (and) is true
+                 ((null? (cdr es)) (build-test (car es) c a env))
+                 (else (build-test (car es) (once (lambda () (loop (cdr es)))) a env)))))
+        ((and (special-is? d 'or) (list? form))
+         (let loop ((es (cdr form)))
+           (cond ((null? es) (a))                  ; (or) is false
+                 ((null? (cdr es)) (build-test (car es) c a env))
+                 (else (build-test (car es) c (once (lambda () (loop (cdr es)))) env)))))
+        ;; The leaf. Expanding the test BEFORE forcing either edge is what keeps
+        ;; fresh names and error reports in source order.
+        (else (let ((t (expand form env))) (list 'if t (c) (a)))))))
+
+  ;; The entry point every conditional goes through. `then-thunk` and
+  ;; `else-thunk` produce the already-expanded arms; they are called after the
+  ;; skeleton so that a test's own bindings are numbered before the arms', which
+  ;; is the order the source is written in.
+  ;;
+  ;; A test that is not an `and` or an `or` produces exactly `(if t C A)`, the
+  ;; same tree the direct construction gave, so nothing but conjunctive and
+  ;; disjunctive tests changes shape.
+  (define (expand-test test then-thunk else-thunk env)
+    (let* ((c-mark (make-mark))
+           (a-mark (make-mark))
+           (skeleton (build-test test (lambda () c-mark) (lambda () a-mark) env))
+           (then-arm (then-thunk))
+           (else-arm (else-thunk)))
+      (let place ((arms (list (cons c-mark then-arm) (cons a-mark else-arm)))
+                  (body skeleton)
+                  (joins '()))
+        (if (null? arms)
+            (if (null? joins) body (list 'let joins body))
+            (let* ((m (caar arms))
+                   (arm (cdar arms))
+                   (n (tree-count m body)))
+              (if (or (<= n 1) (duplicable-arm? arm))
+                  (place (cdr arms) (tree-subst m arm body) joins)
+                  (let ((k (fresh 'join)))
+                    (place (cdr arms)
+                           (tree-subst m (list k) body)
+                           (cons (list k (list 'lambda '() arm)) joins)))))))))
+
   ;; --- special forms --------------------------------------------------------
 
   (define (check-length! form n what)
@@ -660,12 +778,12 @@
       ((if)
        (unless (and (list? form) (memv (length form) '(3 4)))
          (ex-error "malformed if" (strip form)))
-       (list 'if
-             (expand (cadr form) env)
-             (expand (caddr form) env)
-             (if (null? (cdddr form))
-                 unspecified-expr
-                 (expand (cadddr form) env))))
+       (expand-test (cadr form)
+                    (lambda () (expand (caddr form) env))
+                    (lambda () (if (null? (cdddr form))
+                                   unspecified-expr
+                                   (expand (cadddr form) env)))
+                    env))
 
       ((lambda)
        (unless (and (list? form) (>= (length form) 3))
@@ -715,11 +833,13 @@
       ((when unless)
        (unless (and (list? form) (>= (length form) 3))
          (ex-error "malformed when/unless" (strip form)))
-       (let ((test (expand (cadr form) env))
-             (body (expand-sequence (cddr form) env)))
+       ;; Same test position as `if`, so the same lowering: `(when (and ...) ...)`
+       ;; is how half the guards in the benchmark set are actually written.
+       (let ((body (lambda () (expand-sequence (cddr form) env)))
+             (nothing (lambda () unspecified-expr)))
          (if (eq? which 'when)
-             (list 'if test body unspecified-expr)
-             (list 'if test unspecified-expr body))))
+             (expand-test (cadr form) body nothing env)
+             (expand-test (cadr form) nothing body env))))
 
       ((and)
        (unless (list? form) (ex-error "malformed and" (strip form)))
@@ -837,10 +957,15 @@
                (let ((t (fresh 'cond-tmp)))
                  (list 'let (list (list t (expand (car c) env)))
                        (list 'if t t (loop (cdr clauses))))))
+              ;; An ordinary clause is a test position too. The remaining
+              ;; clauses are the false edge, and they are exactly the arm the
+              ;; join point exists for: an `and` test would otherwise copy the
+              ;; whole rest of the `cond` once per operand.
               (else
-               (list 'if (expand (car c) env)
-                     (expand-sequence (cdr c) env)
-                     (loop (cdr clauses)))))))))
+               (expand-test (car c)
+                            (lambda () (expand-sequence (cdr c) env))
+                            (lambda () (loop (cdr clauses)))
+                            env)))))))
 
   ;; (declare ([x pn] ...) body ...) and (policy ([pn on?] ...) body ...).
   ;; Both are Lcore forms already; the expander's only jobs are to rename the

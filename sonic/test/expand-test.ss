@@ -120,6 +120,107 @@
 (e= "or, first true" '(or 7 (car '())) 7)
 (e= "or, falls through" '(or #f #f 9) 9)
 
+;; --- and/or in TEST position -----------------------------------------------
+;;
+;; The meaning tests above pin `and` and `or` in VALUE position, where the
+;; result is the operand's own value and a temporary is the right lowering.
+;; In TEST position only truth matters, and there the lowering has to be nested
+;; `if`s, because the analysis five stages downstream reads the test.
+;;
+;; Lanf's `if` takes a single atom. A test that is anything but a comparison
+;; becomes a let-bound boolean, and (sonic essa) attaches a sigma only where the
+;; tested variable came from a comparison primcall. Lower `(and A B)` as
+;; `(if A B #f)` inside a test and there is nothing for a fact to attach to: the
+;; branch gets no sigma, and the interval domain is blind at every bounds-
+;; guarded loop -- config-2c's shape, and every guard in the benchmark set.
+;;
+;; So these check the SHAPE, not the value. A value oracle cannot see the
+;; difference; the analysis can see nothing else.
+
+;; Every `if` test in a tree, in document order.
+(define (if-tests d)
+  (reverse
+   (let walk ((d d) (acc '()))
+     (if (not (pair? d))
+         acc
+         (let ((acc (if (and (eq? (car d) 'if) (= (length d) 4))
+                        (cons (cadr d) acc)
+                        acc)))
+           (if (and (pair? d) (eq? (car d) 'quote))
+               acc
+               (let loop ((l d) (acc acc))
+                 (if (pair? l) (loop (cdr l) (walk (car l) acc)) acc))))))))
+
+;; What e-SSA can hang a fact on: an application of a comparison primitive to
+;; atoms. Anything else -- an `if`, a `let`, a bare boolean variable -- is a
+;; test the analysis cannot read.
+(define (readable-test? t)
+  (and (pair? t)
+       (memq (car t) '(fx< fx<= fx= fx>= fx> fl< fl<= fl= fl>= fl>))
+       (for-all (lambda (a) (or (symbol? a)
+                                (and (pair? a) (eq? (car a) 'quote))))
+                (cdr t))
+       #t))
+
+(check! "a conjunctive test becomes nested ifs, each reading a comparison"
+        (let ((tests (if-tests (expand-expression
+                                '(if (and (fx<= 0 i) (fx< i n)) (f i) 0)))))
+          (and (= (length tests) 2) (for-all readable-test? tests))))
+
+(check! "a disjunctive test becomes nested ifs too"
+        (let ((tests (if-tests (expand-expression
+                                '(if (or (fx< i 0) (fx>= i n)) 0 (f i))))))
+          (and (= (length tests) 2) (for-all readable-test? tests))))
+
+(check! "three conjuncts give three readable tests"
+        (let ((tests (if-tests (expand-expression
+                                '(if (and (fx<= 0 i) (fx< i n) (fx< j n)) (f i) 0)))))
+          (and (= (length tests) 3) (for-all readable-test? tests))))
+
+;; THE CASE THE BEAD IS ABOUT. A guarded loop, written the way the benchmark
+;; sources write one. Every conditional in the output must read a comparison
+;; directly, and the loop body must sit INSIDE both guards, because that nesting
+;; is what makes the two facts compose into [0,n).
+(define guarded-loop
+  (expand-expression
+   '(let loop ((i 0))
+      (if (and (fx<= 0 i) (fx< i n))
+          (begin (g (flvector-ref a i)) (loop (fx+ i 1)))
+          '()))))
+
+(check! "guarded loop: every test is a comparison the analysis can read"
+        (let ((tests (if-tests guarded-loop)))
+          (and (= (length tests) 2) (for-all readable-test? tests))))
+
+(check! "guarded loop: no test is itself a conditional"
+        (for-all (lambda (t) (not (and (pair? t) (memq (car t) '(if let)))))
+                 (if-tests guarded-loop)))
+
+(check! "guarded loop: the body is nested inside BOTH guards, not behind a call"
+        (let find ((d guarded-loop) (depth 0))
+          (cond ((not (pair? d)) #f)
+                ((eq? (car d) 'quote) #f)
+                ((and (eq? (car d) 'flvector-ref) (= depth 2)) #t)
+                ((and (eq? (car d) 'if) (= (length d) 4))
+                 (or (find (caddr d) (+ depth 1)) (find (cadddr d) depth)))
+                (else (exists (lambda (s) (find s depth)) d)))))
+
+;; The duplicated arm is named once rather than copied, so a nested test cannot
+;; multiply code size. The arm reached exactly once is never named: putting the
+;; loop body behind a call would take it out of the scope of the refinements.
+(check-equal! "a non-trivial duplicated arm is bound once and called"
+              (let ((out (expand-expression
+                          '(if (and (fx<= 0 i) (fx< i n) (fx< j n)) (f i) (h j)))))
+                (list (car out) (length (cadr out))))
+              '(let 1))
+
+;; Value position is untouched: `and` still yields its last operand's value and
+;; `or` still yields the first true one, which the meaning tests above cover.
+;; This pins that the two positions really are lowered differently.
+(check! "in value position `and` is NOT distributed into ifs"
+        (let ((out (expand-expression '(let ((c (and (fx< i n) (fx< j n)))) c))))
+          (equal? (if-tests out) '((fx< i n)))))
+
 (e= "cond, first clause" '(cond (#t 1) (else 2)) 1)
 (e= "cond, else" '(cond (#f 1) (else 2 3)) 3)
 (e= "cond, no clause matches" '(cond (#f 1)) '())

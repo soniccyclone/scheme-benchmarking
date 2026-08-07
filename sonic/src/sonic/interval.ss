@@ -24,6 +24,7 @@
           iv-add iv-sub iv-mul iv-neg
           iv-widen iv-narrow
           iv-lt-refine iv-le-refine iv-ge-refine
+          iv-comparison? iv-edge-cmp iv-refine
           iv-within? iv->string)
   (import (rnrs base)
           (rnrs lists)
@@ -184,6 +185,70 @@
   (define (iv-ge-refine a b)          ; a, given (>= a b) is true
     (if (or (iv-bot? a) (iv-bot? b)) iv-bot
         (iv-meet a (make-interval (interval-lo b) 'posinf))))
+
+  ;; --- branch edges, and the one place the NaN rule lives -------------------
+  ;;
+  ;; e-SSA hands the domain a SYNTACTIC fact: the comparison exactly as the
+  ;; program wrote it, plus a flag saying whether this is the edge where it
+  ;; FAILED. See the `sigma` production in lang.ss. Turning that pair into a
+  ;; refinement is a domain question, and the two numeric types answer it
+  ;; differently.
+  ;;
+  ;; Fixnums are totally ordered. (not (fx< a b)) is (fx>= a b), so the false
+  ;; edge refines exactly as well as the true one, and the false edge of an
+  ;; equality is the one case the ORDER cannot express: a disequality is not an
+  ;; interval, so it refines nothing.
+  ;;
+  ;; Flonums are not totally ordered. NaN compares false against everything,
+  ;; itself included, so (not (fl< a b)) is TRUE when either operand is NaN,
+  ;; where (fl>= a b) is false. Concluding a >= b on that edge asserts an
+  ;; ordering in precisely the case where no ordering holds, and the consumer is
+  ;; bounds-check elision, so it is a wrong-code bug and not a lost
+  ;; optimization. A NEGATED FLONUM COMPARISON THEREFORE REFINES NOTHING.
+  ;;
+  ;; Recovering that edge needs a premise that neither operand is NaN. No
+  ;; production in lang.ss carries one today; when one exists it is consumed
+  ;; HERE and nowhere else, by widening iv-edge-cmp's second argument. The true
+  ;; edge needs no such premise and is unaffected: a comparison that SUCCEEDED
+  ;; had no NaN operand, so the ordering it states holds.
+  ;;
+  ;; Comparisons are named three ways because three languages meet here: the
+  ;; bare symbols of this file's own client, the fixnum primitives of lang.ss,
+  ;; and the flonum ones. Only the last group is special.
+
+  (define cmp-table
+    ;;  spelling  base  negation-of-the-base, or #f for "conclude nothing"
+    '((<     <   >=)   (<=    <=  >)   (>     >   <=)   (>=    >=  <)   (=  =  #f)
+      (fx<   <   >=)   (fx<=  <=  >)   (fx>   >   <=)   (fx>=  >=  <)   (fx= =  #f)
+      (fl<   <   #f)   (fl<=  <=  #f)  (fl>   >   #f)   (fl>=  >=  #f)  (fl= =  #f)))
+
+  (define (iv-comparison? c) (and (assq c cmp-table) #t))
+
+  ;; The comparison the domain may assume on this edge, as one of < <= > >= =,
+  ;; or #f for "this edge licenses no conclusion".
+  (define (iv-edge-cmp cmp negated?)
+    (let ((row (assq cmp cmp-table)))
+      (and row (if negated? (caddr row) (cadr row)))))
+
+  ;; Refine BOTH operands of a comparison on one of its edges. Returns
+  ;; (values a' b'), and returns them unchanged when the edge licenses nothing,
+  ;; which is the answer for every negated flonum comparison.
+  ;;
+  ;; Both operands, because the edge constrains both: the true edge of a < b
+  ;; says as much about b as it does about a, and ABCD's constraint graph wants
+  ;; the vertex either way.
+  (define (iv-refine cmp negated? a b)
+    (let ((c (iv-edge-cmp cmp negated?)))
+      (cond
+       ((not c) (values a b))
+       ((eq? c '<)  (values (iv-lt-refine a b)
+                            (iv-ge-refine b (iv-add a (iv-const 1)))))
+       ((eq? c '<=) (values (iv-le-refine a b) (iv-ge-refine b a)))
+       ((eq? c '>)  (values (iv-ge-refine a (iv-add b (iv-const 1)))
+                            (iv-lt-refine b a)))
+       ((eq? c '>=) (values (iv-ge-refine a b) (iv-le-refine b a)))
+       ((eq? c '=)  (let ((m (iv-meet a b))) (values m m)))
+       (else (values a b)))))
 
   ;; --- the query the whole file exists to answer ---------------------------
   ;; Is every value of `idx` a valid index into a vector of length `len`?

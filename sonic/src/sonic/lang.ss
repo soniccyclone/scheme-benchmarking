@@ -285,9 +285,25 @@
     (extends Lanf)
     (Expr (e body)
       (+ (phi ([x* e*] ...) body)
-         ;; (sigma x-out x-in cmp x-other) : x-out is x-in, refined by knowing
-         ;; (cmp x-in x-other) holds on this edge.
-         (sigma x0 x1 pr x2 body))))
+         ;; (sigma x-out x-in cmp x-other negated?) : x-out is x-in, refined by
+         ;; knowing that (cmp x-in x-other) HELD on this edge when negated? is
+         ;; #f, and that it FAILED when negated? is #t.
+         ;;
+         ;; THE FLAG IS NOT FOLDED INTO `pr`, and that is the whole point of it.
+         ;; A comparison that failed is not in general the same as its opposite
+         ;; comparison. NaN compares false against everything, so (not (fl< a b))
+         ;; is TRUE when either operand is NaN while (fl>= a b) is FALSE.
+         ;; Spelling the false edge as fl>= would assert an ordering in exactly
+         ;; the case where none holds, and the consumer is bounds-check elision,
+         ;; so that is a wrong-code bug rather than a lost optimization.
+         ;;
+         ;; So sigma records the SYNTACTIC fact -- the comparison as written,
+         ;; plus which edge this is -- and the DOMAIN decides what follows from
+         ;; it. (sonic interval) turns not(a<b) into a>=b for fixnums and into
+         ;; nothing at all for flonums, and that is the only place the NaN rule
+         ;; is encoded. The alternative, a table of negated primitives, needs an
+         ;; fx<> and five flonum spellings that do not exist and must not.
+         (sigma x0 x1 pr x2 b body))))
 
   ;; --- Lrepr ----------------------------------------------------------------
   ;; Storage classes assigned. Every binding now says where its value lives.
