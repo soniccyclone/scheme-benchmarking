@@ -24,20 +24,61 @@ suppression costs exactly nothing against `Suppress (All_Checks)`.
 
 | stage | what | state |
 |---|---|---|
-| 06 | interval abstract domain | **working**, 6101 checks |
-| 05, 07-09 | core language, fixpoint analysis, elision decision | **working prototype**, 11 cases |
-| 01-04 | reader, expander, macro expansion, A-normalization | not started |
-| 10 | vectorization | not started |
-| 11-13 | instruction selection, register allocation, x86-64 emission | not started |
+| 01-04 | reader, expander, surface-to-core, A-normalization | **working** |
+| 04b-c | inlining, assignment conversion | **working** |
+| 05-06 | interval domain, e-SSA, ABCD, check elision | **working** |
+| 07-08 | loops and trip counts, representation selection | **working** |
+| 09 | alias analysis, escape analysis | **working** |
+| 10 | vectorization | legality in progress; emission not started |
+| 11-13 | selection, allocation, encoding, ELF | **working**, both targets |
+| runtime | numeric tower, primitives, allocator, collector, barrier | **working** |
+| policy | lexical named check suppression, `fp-contract` | **working** |
 
-Nothing here compiles a program yet, and the front end is deliberately last. The analysis
-came first because it is the part the measurements proved is load-bearing, and the part no
-existing Scheme has. A reader is a solved problem; this is not.
+**40 test suites, all green.** `make test` runs them.
 
-The core language is s-expressions, A-normalized. A-normalization is a **precondition**
-rather than a tidiness preference: the analysis hangs an abstract value on each variable,
-so an unnamed subexpression has nowhere to put its interval and the transfer functions
-cannot compose.
+### What actually runs, end to end
+
+`bench/nbody/config-sonic.sps` — a real nbody in SonicScheme's surface syntax, verified
+bit-exact against `config2a.sps` and against `SPEC.md` — goes through **eleven stages**:
+
+```
+read → expand → parse → policy → anf → assign → inline → essa → elide → repr → lower
+```
+
+and comes out as a 16-block `Lmach` CFG. On the way:
+
+| measurement | value |
+|---|---|
+| checks **proved** by the analysis | **50** |
+| checks kept | 177 |
+| checks suppressed by policy | **0** |
+| bindings unboxed as `raw-f64` | 152 |
+| bindings unboxed as `raw-word` | 143 |
+| bindings `tagged` | 27 |
+
+Every one of the 50 is a *proof*, not a permission — `lower.ss` counts the two apart
+precisely so that claim can be made honestly.
+
+The back end emits real objects for both targets. SonicScheme's own RV64 output,
+disassembled by `riscv64-linux-gnu-objdump`:
+
+```
+addi t0,zero,7 / mul a2,a1,t0 / add a3,a2,a4
+slli t1,a3,0x3 / add t1,a0,t1 / fld fa0,0(t1) / jalr zero,0(ra)
+```
+
+63 x86-64 instructions and 68 RV64 instructions are verified **byte-identical against the
+real assembler**, not against our own expectations.
+
+### What does not work yet
+
+A multi-argument call. `Lmach`'s `call` has no fixed arity and neither selector lowers it
+into argument moves plus a jump, so the whole lowered program stops at selection. The
+calling convention exists and precoloring exists; nothing joins them to the selector. That
+is the last gap before milestone 1.
+
+Tail calls currently lower to ordinary calls, which loses the one performance guarantee
+R5RS made that ANSI CL never did. Tracked with the above.
 
 ## What the domain does
 

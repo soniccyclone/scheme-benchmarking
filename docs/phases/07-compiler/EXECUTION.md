@@ -53,15 +53,25 @@ component, before committing to it.
 
 ## 2. What is already done
 
-| component | state | where |
-|---|---|---|
-| interval domain (stage 05/06 core) | working, 6101 checks | `sonic/src/sonic/interval.ss` |
-| fixpoint analysis + elision decision | working prototype, 11 cases | `sonic/src/sonic/analyze.ss` |
-| core language sketch | s-expression form, A-normalized | `analyze.ss` header |
+**Most of it.** 76 of 93 beads closed, 40 test suites green. `sonic/README.md` carries the
+current stage table and the end-to-end numbers; this section records only what bears on the
+*plan*.
 
-Two consequences for planning. The riskiest analysis component is de-risked, so it should
-*not* be treated as an unknown in scheduling. And the core language already exists in
-prototype, so the IR contract bead is a formalization job rather than a from-scratch design.
+The DAG argument in §1 held. Freezing the IR contracts first did convert a depth-13 chain
+into a wide graph: seven agents built passes in parallel against fixtures, and when the
+passes were finally composed on a real program they fit together with three gaps, all of
+them plumbing rather than design — two passes missing a program-level entry point, and one
+pass (`repr.ss`) that had been claimed and never written, which went unnoticed precisely
+*because* nothing composed the passes until then.
+
+That last one is the cost of the approach, stated honestly: fixture-tested passes can all
+pass while the pipeline does not exist. The countermeasure is `test/pipeline-test.ss`,
+which runs the real benchmark through every stage and reports the reach as a number.
+
+What remains is one gap and its consequences: `Lmach`'s `call` has no fixed arity and
+neither selector lowers a multi-argument call into argument moves plus a jump. The calling
+convention and precoloring both exist; nothing joins them to the selector. Milestone 1 and
+everything downstream of it wait on that.
 
 ## 3. Bead boundary rules
 
