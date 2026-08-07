@@ -14,7 +14,7 @@
 ;;; the kernel. That is why the image is a few kilobytes rather than a megabyte.
 
 (library (sonic elfexec)
-  (export build-executable write-executable
+  (export build-executable write-executable pool-offset-for
           elf-load-base elf-text-vaddr elf-page-size)
   (import (chezscheme))
 
@@ -42,6 +42,16 @@
 
   (define (align-up n a) (if (zero? (modulo n a)) n (+ n (- a (modulo n a)))))
 
+  ;; Where the constant pool lands, given the code size.
+  ;;
+  ;; It must be aligned to `pool-alignment` (16), and not because it is tidy: a
+  ;; sign mask is a 128-bit SSE operand, and a non-VEX `xorpd` reading an
+  ;; unaligned 16-byte memory operand FAULTS. litpool.ss aligns entries within
+  ;; the pool; that is worth nothing if the pool itself starts at an odd offset,
+  ;; which is exactly what happened -- `flneg` on its own segfaulted while every
+  ;; other instruction in the program was fine.
+  (define (pool-offset-for code-size) (align-up code-size 16))
+
   ;; code    : bytevector, already at its final addresses
   ;; pool    : bytevector of constants, placed immediately after the code
   ;; entry   : absolute virtual address of _start
@@ -55,7 +65,8 @@
              target))
     (let* ((code-size (bytevector-length code))
            (pool-size (bytevector-length pool))
-           (text-size (+ code-size pool-size))
+           (pool-at (pool-offset-for code-size))
+           (text-size (+ pool-at pool-size))
            (phdrs
             (append
              ;; PT_LOAD, R+X: the headers, the code, and the constants. The
@@ -93,7 +104,9 @@
           (bytevector-u8-set! bv i (car bs))
           (blit (cdr bs) (+ i 1))))
       (bytevector-copy! code 0 bv text-file-offset code-size)
-      (bytevector-copy! pool 0 bv (+ text-file-offset code-size) pool-size)
+      ;; The gap between the code and the pool stays zero, which is what
+      ;; `make-bytevector` already gave us.
+      (bytevector-copy! pool 0 bv (+ text-file-offset pool-at) pool-size)
       bv))
 
   (define (write-executable path bv)

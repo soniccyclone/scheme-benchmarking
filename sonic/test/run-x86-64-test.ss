@@ -17,7 +17,7 @@
         (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide)
         (sonic repr) (sonic lower) (sonic select) (sonic regs) (sonic regalloc)
         (sonic finalize) (sonic litpool) (sonic object) (sonic runtime)
-        (sonic elfexec) (sonic globals) (sonic target-x86-64))
+        (sonic elfexec) (sonic globals) (sonic target-x86-64) (sonic driver) (sonic pipeline))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -34,48 +34,15 @@
     (let ((p (open-file-output-port src (file-options no-fail)
                                     (buffer-mode block) (native-transcoder))))
       (put-string p source) (close-port p))
-    (let* ((p0 (inline-program (assign-convert-program
-                (anf-program (resolve-policy-program
-                 (parse-program (expand-program (read-all-from-file src)) externs)))))))
-      (let*-values (((p1 st) (elide-program (essa-program p0)))
-                    ((p2 rp) (select-representations-program p1)))
-        (let*-values (((prog lst) (lower-toplevel (unparse-Lrepr p2) 'main
-                                                  (repr-report-classes rp))))
-          (let* ((classes (lowered-classes))
-                 (cells (global-cells (unparse-Lrepr p2)))
-                 (prog* (globalize prog cells classes))
-                 (entry (caddr prog*))
-                 (gaddrs (assign-global-cells
-                          (map global-cell-name
-                               (vector->list (hashtable-keys cells))))))
-            (parameterize ((current-litpool (make-pool))
-                           (current-vreg-classes classes)
-                           (current-globals gaddrs))
-              (let* ((selected (select-program x86-64-selector prog*))
-                     (fns (finalize-program 'x86-64 arch-x86-64 selected
-                                            (cadr prog*) entry classes (lowered-params)))
-                     (listing (append (runtime-listing 'x86-64 entry)
-                                      (apply append (map finalized-listing fns))))
-                     (pool (pool-bytes (current-litpool)))
-                     (extra (map (lambda (l) (cons (pool-label (lit-offset l))
-                                                   (lit-offset l)))
-                                 (pool-entries (current-litpool))))
-                     (o (assemble-function 'x86-64 'prog listing
-                                           (list (cons 'constants pool)
-                                                 (cons 'extra-labels extra))))
-                     (start (let loop ((xs listing) (pc 0))
-                              (cond ((null? xs) (error 'run "no _start"))
-                                    ((eq? (car xs) '_start) pc)
-                                    ((symbol? (car xs)) (loop (cdr xs) pc))
-                                    (else (loop (cdr xs)
-                                                (+ pc (instruction-size 'x86-64 (car xs))))))))
-                     (img (build-executable 'x86-64 (function-object-code o) pool
-                                            (+ elf-text-vaddr start)
-                                            #x600000 runtime-data-size)))
-                (write-executable exe img)
-                (system (string-append "chmod +x " exe))
-                (let ((code (system (string-append exe " > " tmp ".out 2>/dev/null"))))
-                  (values code (read-doubles (string-append tmp ".out"))))))))))))
+    ;; ONE driver, shared with the build. There used to be a second copy of the
+    ;; pipeline here, and it drifted: lambda lifting and the constant pool's
+    ;; alignment padding went into the build and not into this file, so the test
+    ;; compiled a different program from the one being shipped and reported five
+    ;; failures the shipped program did not have.
+    (compile-sonic-to-file src externs exe)
+    (system (string-append "chmod +x " exe))
+    (let ((code (system (string-append exe " > " tmp ".out 2>/dev/null"))))
+      (values code (read-doubles (string-append tmp ".out"))))))
 
 ;; `display` writes a double's eight raw bytes -- see runtime.ss on why that is
 ;; the right thing for an oracle -- so the output is read back as doubles.
@@ -144,6 +111,35 @@
        "(define (outer i acc) (if (fx= i n) acc (outer (fx+ i 1) (inner i 0 acc))))\n"
        "(define (main) (display (outer 0 0.0)) (newline))\n(main)\n")
       '(9.0))
+
+;; THE BENCHMARK ITSELF, as far as it currently gets.
+;;
+;; nbody's initial energy is the first oracle check in docs/METHOD.md, and it
+;; is exact: the compiled program agrees with Chez running the same source to
+;; the last bit. That covers init!, offset-momentum! and energy -- allocation,
+;; an eight-argument call, nested tail-recursive loops, indexed loads and
+;; stores, and IEEE negation through a pooled sign mask.
+;;
+;; `advance!` is NOT yet correct and is tracked separately, so this asserts the
+;; part that is. Asserting less than is true would be as bad as asserting more:
+;; the initial energy landing exactly is the strongest single piece of evidence
+;; the compiler has, and leaving it unasserted invites a regression nobody sees.
+(let-values (((code out)
+              (compile-and-run
+               (string-append
+                (call-with-input-file "../bench/nbody/config-sonic.sps"
+                  (lambda (p)
+                    (let loop ((acc '()))
+                      (let ((l (get-line p)))
+                        (if (eof-object? l)
+                            (apply string-append (reverse acc))
+                            (loop (cons (string-append l "\n") acc)))))))
+                "")
+               nbody-externs)))
+  (ck! "nbody's INITIAL energy is bit-exact against Chez on the same source"
+       (and (pair? out) (= (car out) -0.16907516382852447)))
+  (unless (and (pair? out) (= (car out) -0.16907516382852447))
+    (display "       got=") (write out) (newline)))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)

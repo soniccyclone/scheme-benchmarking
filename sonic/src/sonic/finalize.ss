@@ -58,7 +58,8 @@
   (import (chezscheme)
           (sonic regs)
           (sonic regalloc)
-          (sonic callconv))
+          (sonic callconv)
+          (sonic parcopy))
 
   ;; --- frame layout ---------------------------------------------------------
 
@@ -184,6 +185,28 @@
             (cadddr x)
             (list-ref x 4)))
      (else x)))
+
+  ;; A jump whose destination is a block of this function is an ordinary edge
+  ;; and needs no epilogue. A jump to a function ENTRY is a tail call and does.
+  ;;
+  ;; The function's OWN entry is a tail-call target, not an ordinary edge, and
+  ;; conflating the two is a stack leak that looks like nothing else. A loop is
+  ;; a procedure that tail-calls itself, so the jump lands on its own entry
+  ;; label; treating that as an intra-function edge skips the epilogue, and the
+  ;; prologue at the entry then reserves ANOTHER frame. The stack grows by the
+  ;; frame size every iteration until it runs out -- which for a loop with no
+  ;; spills at all is zero bytes and no symptom, and for one with spills is a
+  ;; segfault whose backtrace points at whatever was executing when the guard
+  ;; page was hit.
+  ;;
+  ;; So `own-labels` excludes the entry.
+  (define (own-label? i own-labels)
+    (let ((t (let loop ((xs (cdr i)))
+               (cond ((null? xs) #f)
+                     ((and (pair? (car xs)) (eq? (car (car xs)) 'label)) (cadr (car xs)))
+                     ((symbol? (car xs)) (car xs))
+                     (else (loop (cdr xs)))))))
+      (and t (memq t own-labels) #t)))
 
   ;; --- the pass -------------------------------------------------------------
 
@@ -344,7 +367,69 @@
           fcvt.d.l fcvt.l.d fsqrt.d fmv.d))
       (define (reads-dst? i) (not (memq (car i) write-only-mnemonics)))
 
-      (let ((listing
+      ;; A run of register-to-register moves is a PARALLEL copy: every source
+      ;; reads the state before the run, not part-way through it. Emitted in
+      ;; sequence, a later move can read a register an earlier one overwrote.
+      ;;
+      ;; This is what argument setup is. `put!` takes seven doubles, so the
+      ;; caller emits seven moves into xmm0..xmm6 -- and if the value for xmm6
+      ;; is sitting in xmm2, the move into xmm2 has already destroyed it. The
+      ;; symptom is one wrong argument and a plausible answer: nbody's `mass`
+      ;; came out zero while `pos` and `vel` were exact.
+      ;;
+      ;; parcopy.ss has resolved this correctly since it was written; nothing
+      ;; called it. It runs here, after allocation, because that is the first
+      ;; point at which the physical registers are known -- which is precisely
+      ;; the reason callseq.ss could not do it.
+      (define (mov-of i)
+        (and (pair? i)
+             (memq (car i) '(mov movsd addi fsgnj.d))
+             (case (car i)
+               ((mov movsd)
+                (and (= (length i) 3) (symbol? (cadr i)) (symbol? (caddr i))
+                     (reg-class arch (cadr i)) (reg-class arch (caddr i))
+                     (cons (cadr i) (caddr i))))
+               ;; RV64 spells a register move `addi rd, rs, 0` and a float one
+               ;; `fsgnj.d rd, rs, rs`.
+               ((addi)
+                (and (= (length i) 4) (eqv? (cadddr i) 0)
+                     (symbol? (cadr i)) (symbol? (caddr i))
+                     (reg-class arch (cadr i)) (reg-class arch (caddr i))
+                     (cons (cadr i) (caddr i))))
+               ((fsgnj.d)
+                (and (= (length i) 4) (eq? (caddr i) (cadddr i))
+                     (cons (cadr i) (caddr i))))
+               (else #f))))
+
+      ;; Resolve the maximal run of moves ending at each call or tail jump.
+      (define (call-or-jump? i)
+        (and (pair? i)
+             (memq (car i) '(call jmp jal jalr ret))))
+
+      (define (resolve-argument-moves xs)
+        (let loop ((xs xs) (run '()) (out '()))
+          (cond
+           ((null? xs) (append (reverse out) (reverse run)))
+           ((mov-of (car xs)) (loop (cdr xs) (cons (car xs) run) out))
+           ((call-or-jump? (car xs))
+            ;; The run before a transfer is the argument setup.
+            (let-values (((resolved st)
+                          (resolve-moves-in-block arch (reverse run) mov-of emit-mov)))
+              (loop (cdr xs) '() (cons (car xs) (append (reverse resolved) out)))))
+           (else
+            ;; Anything else ends the run and the run stays as written.
+            (loop (cdr xs) '() (cons (car xs) (append run out)))))))
+
+      (define (emit-mov dst src)
+        ;; `float-register?`, not membership in the allocatable pool: a cycle is
+        ;; broken through the float SCRATCH, which sits outside that pool, and
+        ;; asking the pool spells the move `mov xmm15, xmm0`.
+        (let ((float? (float-register? arch dst)))
+          (if (eq? target 'rv64)
+              (if float? `(fsgnj.d ,dst ,src ,src) `(addi ,dst ,src 0))
+              (if float? `(movsd ,dst ,src) `(mov ,dst ,src)))))
+
+      (let* ((listing
              (apply append
                     (map (lambda (b)
                            (let ((lbl (car b)) (instrs (cadr b)))
@@ -368,7 +453,19 @@
                                                     (list ins)
                                                     post)))
                                                instrs)))))
-                         blocks))))
+                         blocks)))
+            ;; ONLY the argument setup, not every run of moves.
+            ;;
+            ;; Applying parallel-copy resolution to every maximal run of moves
+            ;; is WRONG, because a run of moves in ordinary code can be
+            ;; sequential: `mov a, b` then `mov c, a` means c gets the NEW a.
+            ;; Read as a parallel copy it gets the old one. Argument setup is
+            ;; parallel; a phi copy chain is not necessarily.
+            ;;
+            ;; The run immediately preceding a call or a tail jump is argument
+            ;; setup by construction -- callseq.ss emits the moves and then the
+            ;; transfer, with nothing between -- so that is the run resolved.
+            (listing (resolve-argument-moves listing)))
         ;; ARGUMENT ARRIVAL.
         ;;
         ;; The convention puts argument k of class c in a fixed register, and
@@ -409,27 +506,54 @@
                ;; A parameter the allocator never placed is one this function
                ;; never READS -- it has no live interval, so the scan never saw
                ;; it. Its arrival move is dead, and emitting it would put a
-               ;; virtual register name in front of the encoder.
+               ;; virtual register name in front of the encoder. Dropped rather
+               ;; than raised: an unused parameter is ordinary.
+               (live-arrivals
+                (filter (lambda (m)
+                          (let ((p (cadr m)))
+                            (or (hashtable-ref assign p #f) (spilled? p))))
+                        arrivals))
+               ;; THE ARRIVALS ARE A PARALLEL COPY, and this is where the last
+               ;; wrong answer came from.
                ;;
-               ;; Dropped rather than raised, because an unused parameter is
-               ;; ordinary: `inner` takes the vector its caller threads through
-               ;; even on the iteration that only compares indices.
-               (arrival-instrs
+               ;; Every one of them reads an ARGUMENT register, and the
+               ;; allocator may well have placed some parameter IN an argument
+               ;; register -- they are drawn from the same pools. So a move that
+               ;; writes xmm6 can destroy the value a later move was going to
+               ;; read from xmm6. `put!` took seven doubles and its eighth
+               ;; parameter came out holding the second one's value: the caller
+               ;; was exactly right and the callee shredded its own arguments.
+               ;;
+               ;; Spilled parameters are stored FIRST, straight from the
+               ;; argument register, while every argument register is still
+               ;; pristine. The rest is a parallel copy between physical
+               ;; registers, which parcopy.ss resolves.
+               (arrival-stores
                 (apply append
                        (map (lambda (m)
-                              (let* ((p (cadr m)) (c (caddr m)) (r (cadddr m)))
-                                (if (not (or (hashtable-ref assign p #f) (spilled? p)))
-                                    '()
-                                (let* ((parts (do-instr
-                                             (if (eq? c 'raw-f64)
-                                                 (if (eq? target 'rv64)
-                                                     `(fsgnj.d ,p ,r ,r)
-                                                     `(movsd ,p ,r))
-                                                 (if (eq? target 'rv64)
-                                                     `(addi ,p ,r 0)
-                                                     `(mov ,p ,r))))))
-                                  (append (car parts) (list (cadr parts)) (caddr parts))))))
-                            arrivals)))
+                              (let ((p (cadr m)) (c (caddr m)) (r (cadddr m)))
+                                (if (spilled? p)
+                                    ((spiller-store sp) (frame-slot-offset frame p) r c)
+                                    '())))
+                            live-arrivals)))
+               (arrival-pairs
+                (let loop ((ms live-arrivals) (acc '()))
+                  (cond ((null? ms) (reverse acc))
+                        ((spilled? (cadr (car ms))) (loop (cdr ms) acc))
+                        (else
+                         (loop (cdr ms)
+                               (cons (cons (hashtable-ref assign (cadr (car ms)) #f)
+                                           (cadddr (car ms)))
+                                     acc))))))
+               (arrival-instrs
+                (append arrival-stores
+                        (let-values (((out st) (resolve-moves-in-block
+                                                arch
+                                                (map (lambda (pr)
+                                                       (emit-mov (car pr) (cdr pr)))
+                                                     arrival-pairs)
+                                                mov-of emit-mov)))
+                          out)))
                (head (append ((spiller-prologue sp) bytes) arrival-instrs)))
           ;; The prologue goes AFTER the function's entry label, not before it.
           ;;
@@ -445,27 +569,6 @@
                           frame
                           spills)))))
 
-  ;; A jump whose destination is a block of this function is an ordinary edge
-  ;; and needs no epilogue. A jump to a function ENTRY is a tail call and does.
-  ;;
-  ;; The function's OWN entry is a tail-call target, not an ordinary edge, and
-  ;; conflating the two is a stack leak that looks like nothing else. A loop is
-  ;; a procedure that tail-calls itself, so the jump lands on its own entry
-  ;; label; treating that as an intra-function edge skips the epilogue, and the
-  ;; prologue at the entry then reserves ANOTHER frame. The stack grows by the
-  ;; frame size every iteration until it runs out -- which for a loop with no
-  ;; spills at all is zero bytes and no symptom, and for one with spills is a
-  ;; segfault whose backtrace points at whatever was executing when the guard
-  ;; page was hit.
-  ;;
-  ;; So `own-labels` excludes the entry.
-  (define (own-label? i own-labels)
-    (let ((t (let loop ((xs (cdr i)))
-               (cond ((null? xs) #f)
-                     ((and (pair? (car xs)) (eq? (car (car xs)) 'label)) (cadr (car xs)))
-                     ((symbol? (car xs)) (car xs))
-                     (else (loop (cdr xs)))))))
-      (and t (memq t own-labels) #t)))
 
   ;; The whole program: one finalized listing per function.
   (define (finalize-program target arch selected blocks entry classes . opt)

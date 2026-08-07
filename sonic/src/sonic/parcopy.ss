@@ -85,10 +85,13 @@
                            (arch-scratch arch))))
           ;; Pick a scratch whose file matches: an integer cycle cannot be
           ;; broken through a float register and vice versa.
+          ;; `float-register?` rather than membership in `arch-float`: the
+          ;; float SCRATCH registers are deliberately outside the allocatable
+          ;; pool, so asking the pool concludes there is no float scratch on a
+          ;; target that reserves one precisely for this.
           (let ((same (filter (lambda (s)
-                                (if (memq r (arch-float arch))
-                                    (memq s (arch-float arch))
-                                    (not (memq s (arch-float arch)))))
+                                (eq? (float-register? arch s)
+                                     (float-register? arch r)))
                               (arch-scratch arch))))
             (if (pair? same)
                 (car same)

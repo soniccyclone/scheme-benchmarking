@@ -245,8 +245,9 @@
                (if (fp? sc)
                    (let ((off (pool-intern-sign-mask! (current-litpool) 'neg)))
                      (if (eq? dst a)
-                         `((xorpd ,dst (mem rip #f 1 ,off)))
-                         `((movsd ,dst ,a) (xorpd ,dst (mem rip #f 1 ,off)))))
+                         `((xorpd ,dst (mem rip #f 1 (label ,(pool-label off)))))
+                         `((movsd ,dst ,a)
+                           (xorpd ,dst (mem rip #f 1 (label ,(pool-label off)))))))
                    (if (eq? dst a) `((neg ,dst)) `((mov ,dst ,a) (neg ,dst)))))))
 
      ;; `abs` had no rule at all, so `missing-rules` reported it as owed. Same

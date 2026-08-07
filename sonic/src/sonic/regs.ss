@@ -12,7 +12,7 @@
 
 (library (sonic regs)
   (export make-arch arch? arch-name arch-value arch-raw arch-float arch-structural
-          arch-register-for
+          arch-register-for arch-float-scratch arch-int-scratch float-register?
           arch-scratch
           arch-x86-64 arch-rv64 arch-by-name
           reg-class check-assignment! assignment-ok?
@@ -111,6 +111,31 @@
              (error 'arch-register-for "no register holds this role" (arch-name a) role))
             ((eq? (cdar rs) role) (caar rs))
             (else (loop (cdr rs))))))
+
+  ;; Which scratch registers belong to which FILE.
+  ;;
+  ;; `arch-float` is the ALLOCATABLE float pool and the float scratches are
+  ;; deliberately outside it, so "is this a float register" cannot be answered
+  ;; by membership in that pool. parcopy.ss asked it that way and concluded
+  ;; there was no float scratch to break a cycle with -- on a target that
+  ;; reserves one for exactly that purpose.
+  (define (float-register? a r)
+    (and (or (memq r (arch-float a)) (memq r (arch-float-scratch a))) #t))
+
+  (define (arch-float-scratch a)
+    (filter (lambda (r) (float-scratch-name? (arch-name a) r)) (arch-scratch a)))
+
+  (define (arch-int-scratch a)
+    (filter (lambda (r) (not (float-scratch-name? (arch-name a) r))) (arch-scratch a)))
+
+  ;; Named per target rather than inferred: `xmm15` and `ft11` are float by
+  ;; their ABI names, and inferring that from a spelling is the kind of rule
+  ;; that breaks the first time a register is renamed.
+  (define (float-scratch-name? target r)
+    (case target
+      ((x86-64) (memq r '(xmm15)))
+      ((rv64)   (memq r '(ft9 ft10 ft11)))
+      (else #f)))
 
   ;; Which class does this physical register belong to?
   (define (reg-class a r)
