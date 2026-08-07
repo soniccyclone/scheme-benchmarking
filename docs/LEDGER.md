@@ -55,6 +55,16 @@ reversal attached, never edited away.
 
 ## Corrections to our own claims
 
+- **I flipped `policy`'s boolean polarity and it was wrong.** The ANF agent read `b` as "is
+  the conservative OBLIGATION in force" — run the check, or round twice rather than fuse —
+  which makes `#t` the safe value for every name, keeps the default uniform, and keeps
+  `checked` uniformly meaning the conservative thing happens. It reads oddly for one name,
+  since `(policy ([fp-contract #f]) …)` is what *grants* contraction. I flipped it so `#t`
+  meant "permission granted", which reads better for `fp-contract` and **makes contraction
+  default on, inverting D24**. Four tests said so immediately. Reverted, with the reasoning
+  written into `policy.ss` so it is not flipped a third time: the oddness is in one name's
+  English, the alternative is wrong in the semantics.
+
 - **The reserve reported success for the one guarantee it exists to make.**
   `raise-exhausted!` builds the heap-exhaustion condition inside the nursery reserve, which
   is right: allocating it from the space you just failed to find is the circularity that

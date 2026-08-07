@@ -255,9 +255,14 @@
      ;; convention pass that has the function's signature.
      (cons 'ret (lambda (dst sc srcs) `((ret))))
 
-     (cons 'check-bounds   (lambda (dst sc srcs) (check-rule 'bounds-check srcs)))
-     (cons 'check-type     (lambda (dst sc srcs) (check-rule 'type-check srcs)))
-     (cons 'check-overflow (lambda (dst sc srcs) (check-rule 'overflow-check srcs)))
+     ;; The mach-op spelling of a check. `chk` is the one lower.ss emits, and it
+     ;; carries the expected tag; these do not, because the tag is only
+     ;; meaningful for a type check and a mach-op check-bounds has no operand to
+     ;; put it in. So they pass 0 and check-type via this path is refused by
+     ;; check-rule rather than guessing a tag.
+     (cons 'check-bounds   (lambda (dst sc srcs) (check-rule 'bounds-check srcs 0)))
+     (cons 'check-type     (lambda (dst sc srcs) (check-rule 'type-check srcs 0)))
+     (cons 'check-overflow (lambda (dst sc srcs) (check-rule 'overflow-check srcs 0)))
 
      ;; `(chk pn c v* ...)`: the framework hands the check name as `dst` and the
      ;; control as `sc`. `proved` never arrives; select.ss refuses it upstream.

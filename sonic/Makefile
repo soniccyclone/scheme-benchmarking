@@ -76,6 +76,14 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/elide-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/anf-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/policy-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/differential-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/disasm-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss

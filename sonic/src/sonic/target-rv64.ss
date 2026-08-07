@@ -320,7 +320,10 @@
 
   ;; The same three checks also exist as mach-ops.
   (define (check-op name)
-    (lambda (dst sc srcs) (emit-check 'rv64-select name srcs)))
+    ;; The mach-op spelling. Unlike `chk` these carry no expected tag, because a
+    ;; mach-op check-bounds has no operand to put one in, so type-check through
+    ;; this path passes 0 and emit-check refuses it rather than guessing.
+    (lambda (dst sc srcs) (emit-check 'rv64-select name srcs 0)))
 
   (define rv64-rules
     (list

@@ -83,6 +83,24 @@
   ;; why the form is lexical rather than a global dial with a save/restore
   ;; protocol somebody has to get right.
 
+  ;; `b` is "is the conservative OBLIGATION in force", uniformly.
+  ;;
+  ;; For a check the obligation is to run it. For fp-contract the obligation is
+  ;; to round twice rather than fuse. So #t is the safe value for every name and
+  ;; the default is the same everywhere, with no per-name special case, and the
+  ;; control vocabulary stays uniform too: `checked` always means the
+  ;; conservative thing happens.
+  ;;
+  ;; This reads slightly oddly for fp-contract alone -- (policy ([fp-contract
+  ;; #f]) ..) is what GRANTS contraction. I tried flipping it so #t meant
+  ;; "permission granted", which reads better for that one name; it makes
+  ;; contraction default ON, which inverts D24, and four tests said so
+  ;; immediately. Do not flip it again. The oddness is in one name's English,
+  ;; and the alternative is wrong in the semantics.
+  ;;
+  ;; It fails safe either way: omit the policy and you get checks on and
+  ;; contraction off; write the wrong boolean and you get strict IEEE, never
+  ;; silent fusion.
   (define (policy-default)
     (map (lambda (n) (cons n #t)) (all-check-names)))
 
