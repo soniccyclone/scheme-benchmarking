@@ -100,6 +100,12 @@
 
 ;; --- the gaps the expander agent found -------------------------------------
 
+(ok! "declare-distinct expresses restrict-style non-aliasing"
+     (lambda () (with-output-language (Lcore Expr)
+                  `(declare-distinct (a b c) (primcall flvector-ref
+                                               ([type-check proved] [bounds-check proved])
+                                               a i)))))
+
 (ok! "void is a distinct value, not (quote ())"
      (lambda () (with-output-language (Lcore Expr) `(if (void) (void) (void)))))
 

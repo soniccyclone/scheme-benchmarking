@@ -34,6 +34,10 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/expand-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/alias-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/inline-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss

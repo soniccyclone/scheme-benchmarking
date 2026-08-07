@@ -201,6 +201,19 @@
       ;; leans on.
       (letrec* ([x* e*] ...) body)
       (declare ([x* pn*] ...) body)
+      ;; DISTINCTNESS as a premise. `declare` can only assert check names, so
+      ;; there was no way to write "these arrays do not alias each other" and
+      ;; alias analysis had to answer `may` for every kernel that receives its
+      ;; arrays as parameters, which is what a real entry point looks like:
+      ;; nbody's kernel takes its flvectors as arguments and the allocation
+      ;; happened in a caller the compiler may not even have.
+      ;;
+      ;; C99 spells this `restrict` and Ada spells it as a pragma. It is a
+      ;; PREMISE in the D5 sense, not a check being suppressed, so it gets its
+      ;; own production rather than widening the check vocabulary: a premise the
+      ;; programmer asserts and the compiler propagates, with undefined
+      ;; behaviour if violated.
+      (declare-distinct (x* ...) body)
       ;; LEXICAL check policy. The thing no Scheme standard has ever had.
       ;; (policy ((pn on?) ...) body)
       (policy ([pn* b*] ...) body)
