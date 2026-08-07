@@ -208,6 +208,9 @@
                 ((fp? sc)
                  (let ((off (pool-intern-f64! (current-litpool) d)))
                    `((movsd ,dst (mem rip #f 1 ,off)))))
+                ;; The empty list is a real Scheme object, not an immediate --
+                ;; see the same case in target-rv64.ss. `r15` holds nil.
+                ((null? d) `((mov ,dst ,(arch-register-for arch-x86-64 'nil))))
                 ((and (integer? d) (exact? d)) `((mov ,dst (imm ,d))))
                 (else
                  (error 'x86-64-selector
@@ -226,16 +229,37 @@
                       dst srcs))
              ((arith 'x86-64-selector 'idiv 'divsd #f) dst sc srcs)))
 
+     ;; f64 negation is a sign-bit XOR against a pooled mask, NOT `(sub 0.0 x)`.
+     ;; The two disagree at x = 0.0 and the sign survives a division, which
+     ;; bench/nbody/SPEC.md step 0 states as its own first item. Getting this
+     ;; wrong would not show up as a crash; it would show up as the last bits of
+     ;; the energy, which is what the bit-exact oracle exists to catch.
+     ;;
+     ;; The mask must be in the destination register, so the operand order is
+     ;; `xorpd dst, mask` after moving the value in.
      (cons 'neg
            (lambda (dst sc srcs)
-             (when (fp? sc)
-               ;; Not `(sub 0.0 x)`: those disagree at x = 0.0, and lang.ss says
-               ;; so. True negation is a sign-bit xor against a pooled mask.
-               (error 'x86-64-selector
-                      "f64 negation needs a pooled sign mask, which does not exist yet"
-                      dst))
              (let ((a (car srcs)))
-               (if (eq? dst a) `((neg ,dst)) `((mov ,dst ,a) (neg ,dst))))))
+               (if (fp? sc)
+                   (let ((off (pool-intern-sign-mask! (current-litpool) 'neg)))
+                     (if (eq? dst a)
+                         `((xorpd ,dst (mem rip #f 1 ,off)))
+                         `((movsd ,dst ,a) (xorpd ,dst (mem rip #f 1 ,off)))))
+                   (if (eq? dst a) `((neg ,dst)) `((mov ,dst ,a) (neg ,dst)))))))
+
+     ;; `abs` had no rule at all, so `missing-rules` reported it as owed. Same
+     ;; mask machinery, clearing the sign bit rather than flipping it.
+     (cons 'abs
+           (lambda (dst sc srcs)
+             (unless (fp? sc)
+               (error 'x86-64-selector
+                      "integer abs has no rule; it is a branch or a cmov and neither is written"
+                      dst sc))
+             (let ((a (car srcs))
+                   (off (pool-intern-sign-mask! (current-litpool) 'abs)))
+               (if (eq? dst a)
+                   `((andpd ,dst (mem rip #f 1 ,off)))
+                   `((movsd ,dst ,a) (andpd ,dst (mem rip #f 1 ,off)))))))
 
      (cons 'sqrt
            (lambda (dst sc srcs)

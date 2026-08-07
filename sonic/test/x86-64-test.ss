@@ -12,7 +12,7 @@
 
 (import (chezscheme) (nanopass) (rnrs io simple)
         (sonic lang) (sonic fixtures) (sonic select) (sonic regs) (sonic regalloc)
-        (sonic target-x86-64) (sonic encode-x86-64))
+        (sonic target-x86-64) (sonic encode-x86-64) (sonic litpool))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -65,9 +65,26 @@
   (ck! "a commutative op swaps instead of needing a scratch"
        (equal? (r 'rbx 'raw-word '(r8 rbx)) '((add rbx r8)))))
 
-;; Deliberate gaps are REPORTED, not raised at selection time.
-(ck! "`abs` is an owed rule the framework can report, not a rule that explodes"
-     (not (assq 'abs x86-64-rules)))
+;; UPDATED: `abs` is no longer owed. The constant pool exists, so the sign mask
+;; it needs exists, and it selects. It is still IEEE-correct by construction --
+;; a bit mask, not a compare and branch -- so it agrees with the reference on
+;; negative zero and on NaN payloads.
+(ck! "`abs` now selects, as a sign-bit AND against a pooled mask"
+     (let ((r (cdr (assq 'abs x86-64-rules))))
+       (parameterize ((current-litpool (make-pool)))
+         (let ((out (r 'xmm1 'raw-f64 '(xmm2))))
+           (and (equal? (car out) '(movsd xmm1 xmm2))
+                (eq? (car (cadr out)) 'andpd)
+                (equal? (cadr (cadr out)) 'xmm1)
+                (eq? (car (caddr (cadr out))) 'mem))))))
+;; And negation is a DIFFERENT mask. Sharing one slot would make (- x) compute
+;; (abs x), which no type error and no crash would reveal.
+(ck! "negation and abs intern two distinct pool slots"
+     (parameterize ((current-litpool (make-pool)))
+       (let ((n ((cdr (assq 'neg x86-64-rules)) 'xmm1 'raw-f64 '(xmm1)))
+             (a ((cdr (assq 'abs x86-64-rules)) 'xmm1 'raw-f64 '(xmm1))))
+         (not (equal? (list-ref (caddr (car n)) 4)
+                      (list-ref (caddr (car a)) 4))))))
 
 ;; A suppressed check must stay suppressed.
 (ck! "an `unchecked` chk emits nothing"
@@ -147,7 +164,12 @@
 (define (gas-mem m size?)
   (let ((b (cadr m)) (i (caddr m)) (s (cadddr m)) (d (list-ref m 4)))
     (unless b (error 'gas-mem "the harness does not print baseless addressing" m))
-    (string-append (if size? "QWORD PTR " "")
+    ;; `size?` is #f, 'qword or 'xmmword. A packed-double operand is 128 bits
+    ;; and gas rejects QWORD PTR on it, which would look like an encoder bug.
+    (string-append (case size?
+                     ((#f) "")
+                     ((xmmword) "XMMWORD PTR ")
+                     (else "QWORD PTR "))
                    "[" (symbol->string b)
                    (if i (string-append " + " (symbol->string i) "*" (number->string s)) "")
                    " + " (number->string d) "]")))
@@ -157,6 +179,8 @@
         ((and (pair? x) (eq? (car x) 'mem)) (gas-mem x size?))
         ((symbol? x) (symbol->string x))
         (else (error 'gas-op "cannot print operand" x))))
+
+(define packed-mnemonics '(xorpd andpd))
 
 (define setcc-mnemonics '(sete setne setl setge setle setg))
 (define jcc-mnemonics '(je jne jl jge jle jg jo))
@@ -179,7 +203,9 @@
       ;; no size prefix: lea computes an address, it does not access memory
       (string-append "lea " (gas-op (car ops) #f) ", " (gas-op (cadr ops) #f)))
      ((eq? m 'neg) (string-append "neg " (gas-op (car ops) #t)))
-     (else (string-append (name) " " (gas-op (car ops) #t) ", " (gas-op (cadr ops) #t))))))
+     (else
+      (let ((sz (if (memq m packed-mnemonics) 'xmmword 'qword)))
+        (string-append (name) " " (gas-op (car ops) sz) ", " (gas-op (cadr ops) sz)))))))
 
 ;; --- assemble one instruction and read its bytes back ----------------------
 
@@ -249,6 +275,13 @@
     (mov r11 (mem rip #f 1 -8))             ; REX.R on a RIP operand
     (movsd xmm3 (mem rip #f 1 16))
     (movsd xmm12 (mem rip #f 1 0))          ; REX.R with a zero displacement
+    ;; IEEE negation and abs: a sign-bit mask, packed because SSE has no
+    ;; scalar bitwise form
+    (xorpd xmm1 xmm2)
+    (xorpd xmm9 xmm14)                      ; REX.R and REX.B
+    (andpd xmm0 xmm3)
+    (xorpd xmm2 (mem rip #f 1 32))          ; the pooled mask, RIP-relative
+    (andpd xmm11 (mem rip #f 1 16))
     ;; the type check's tag mask
     (and rbx (imm 7))
     (and r13 (imm 7))                       ; REX.B on the immediate form

@@ -284,6 +284,7 @@
                     (else (loop (cdr ps))))))
 
 (define lowered #f)
+(define repr-classes #f)
 (when src
   (run-pipeline src
     (list (cons 'read   (lambda (p) (read-all-from-file p)))
@@ -295,9 +296,10 @@
           (cons 'inline (lambda (a) (inline-program a)))
           (cons 'essa   (lambda (a) (essa-program a)))
           (cons 'elide  (lambda (a) (let-values (((o st) (elide-program a))) o)))
-          (cons 'repr   (lambda (a) (let-values (((o rp) (select-representations-program a))) o)))
+          (cons 'repr   (lambda (a) (let-values (((o rp) (select-representations-program a)))
+                                      (set! repr-classes (repr-report-classes rp)) o)))
           (cons 'lower  (lambda (a)
-                          (let-values (((o st) (lower-toplevel (unparse-Lrepr a) 'main)))
+                          (let-values (((o st) (lower-toplevel (unparse-Lrepr a) 'main repr-classes)))
                             (set! lowered o) o))))))
 
 (ck! "the nbody variant lowers to a multi-block Lmach program"

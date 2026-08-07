@@ -36,11 +36,13 @@
 (library (sonic repr)
   (export select-representations select-representations-program
           prim-result-class datum-class
-          repr-report repr-report? repr-report-counts)
+          parameter-classes
+          repr-report repr-report? repr-report-counts repr-report-classes)
   (import (chezscheme) (nanopass) (sonic lang))
 
   (define-record-type (repr-report make-repr-report repr-report?)
-    (fields counts))          ; ((class . n) ...)
+    (fields counts          ; ((class . n) ...)
+            classes))       ; vreg -> storage class, INCLUDING parameters
 
   ;; --- the classification ---------------------------------------------------
   ;;
@@ -81,24 +83,266 @@
           ((and (integer? d) (exact? d)) 'raw-word)
           (else 'tagged)))
 
+  ;; --- parameter classes ----------------------------------------------------
+  ;;
+  ;; A `let` binding gets its class from its initializer, which is right there.
+  ;; A LAMBDA PARAMETER has no initializer, and it needs a class for exactly the
+  ;; same reasons: a double parameter that lands in the value class is scavenged
+  ;; by the collector as if it were a pointer, and a tagged parameter that lands
+  ;; in a raw register is a root the collector never finds.
+  ;;
+  ;; Its class comes from the CALL SITES. Every procedure in this compiler is
+  ;; top-level or letrec-bound and every call names it directly -- closures are
+  ;; a later bead -- so the argument in position i is known at every site, and
+  ;; its class is the parameter's.
+  ;;
+  ;; This needs a fixpoint rather than one pass, because a loop is a letrec
+  ;; whose tailcall passes the loop variable back to itself: the argument in
+  ;; position i IS the parameter in position i, so a single pass would ask for
+  ;; a class that is still being computed. Iterating from "unknown" and
+  ;; assigning only what is known settles because classes are only ever added.
+  ;;
+  ;; Where two call sites disagree, the parameter is genuinely polymorphic and
+  ;; there is no sound answer -- see this file's header: neither error is
+  ;; recoverable and `tagged` is NOT a safe default. So it raises.
+  (define (parameter-classes form)
+    (let ((classes (make-eq-hashtable))     ; vreg -> class
+          (params  (make-eq-hashtable))     ; procedure -> (param ...)
+          (bodies  (make-eq-hashtable))     ; procedure -> body expr
+          (results (make-eq-hashtable))     ; procedure -> result class
+          (lets '())                        ; (x . simple-expr)
+          (merges '())                      ; (x . (expr ...)) from phi/sigma
+          (sites '()))                      ; (name . (arg ...))
+
+      ;; Merging two classes.
+      ;;
+      ;; Call sites CAN legitimately disagree. nbody's own argument handling is
+      ;; the case:
+      ;;
+      ;;   (if (> (length args) 1) (string->number (cadr args)) 1000)
+      ;;
+      ;; One arm is a call whose result is a tagged object; the other is a
+      ;; literal, which repr.ss would otherwise unbox. The join continuation's
+      ;; parameter receives both, and a register holds one representation.
+      ;;
+      ;; `tagged` is the join of tagged and raw-word, and it is reachable
+      ;; WITHOUT a conversion instruction whenever the raw side is a literal:
+      ;; under numeric.ss's scheme a tagged fixnum's machine word is the value
+      ;; shifted left 3 (fixnum tag 000), so the constant is simply materialized
+      ;; already tagged, and the selectors honour that.
+      ;;
+      ;; A double against anything else has no such shortcut -- it needs a heap
+      ;; box -- so that raises.
+      (define (join-class v a b)
+        (cond
+         ((eq? a b) a)
+         ((and (memq a '(tagged raw-word)) (memq b '(tagged raw-word))) 'tagged)
+         (else
+          (error 'select-representations
+                 (string-append
+                  "cannot merge these storage classes: a double and a "
+                  "non-double have no common representation short of boxing "
+                  "the double on the heap, which is a later bead")
+                 v a b))))
+
+      (define (note-into! tbl v c)
+        (if (and (symbol? v) c)
+            (let ((old (hashtable-ref tbl v #f)))
+              (if (not old)
+                  (begin (hashtable-set! tbl v c) #t)
+                  (let ((j (join-class v old c)))
+                    (if (eq? j old) #f (begin (hashtable-set! tbl v j) #t)))))
+            #f))
+      (define (note! v c) (note-into! classes v c))
+
+      ;; --- collection ---
+      (define (note-procs! binds)
+        (for-each (lambda (b)
+                    (let ((v (cadr b)))
+                      (if (and (pair? v) (eq? (car v) 'lambda))
+                          (begin
+                            (hashtable-set! params (car b) (cadr v))
+                            (hashtable-set! bodies (car b) (caddr v)))
+                          ;; A top-level or letrec binding whose value is NOT a
+                          ;; procedure -- nbody's `pos`, `vel` and `mass` are
+                          ;; all of these. It is an ordinary binding and needs
+                          ;; a class like any other; only its syntax differs
+                          ;; from a `let`.
+                          (set! merges (cons (cons (car b) (list v)) merges)))))
+                  binds))
+      ;; --- what a SimpleExpr's class is, given what is known so far ---
+      ;;
+      ;; A bare variable is a COPY and takes its source's class. `class-of` used
+      ;; to answer `tagged` here, on the grounds that the class is "unknown" --
+      ;; but this file's header says plainly that `tagged` is not a safe
+      ;; default, and it is not: a double copied through a let would be
+      ;; classified tagged, land in the value class, and be scavenged by the
+      ;; collector as though the mantissa were an address.
+      ;;
+      ;; A CALL likewise used to answer `tagged`, on the grounds that an unknown
+      ;; callee returns an object. But no callee here is unknown -- closures are
+      ;; a later bead, so every procedure is top-level or letrec-bound and every
+      ;; call names it -- and answering `tagged` for a procedure that returns a
+      ;; double is not conservative, it is wrong: it forces a merge between a
+      ;; double and a tagged value, which has no representation at all.
+      (define (class-of-simple se)
+        (cond
+         ((symbol? se) (hashtable-ref classes se #f))
+         ((not (pair? se)) (datum-class se))
+         (else
+          (case (car se)
+            ((quote)    (datum-class (cadr se)))
+            ((lambda)   'tagged)
+            ;; A known callee's result class; `tagged` for an EXTERN, where it
+            ;; is the correct answer rather than a default -- an external
+            ;; procedure returns a Scheme object and nothing here can say more.
+            ((call)     (if (hashtable-ref bodies (cadr se) #f)
+                            (hashtable-ref results (cadr se) #f)
+                            'tagged))
+            ((primcall) (prim-result-class (cadr se)))
+            (else 'tagged)))))
+
+      ;; The class an expression's TAIL produces. This is what a procedure
+      ;; returns, and it is a join over the arms of any conditional in tail
+      ;; position.
+      (define (tail-class e)
+        (cond
+         ((symbol? e) (hashtable-ref classes e #f))
+         ((not (pair? e)) (datum-class e))
+         (else
+          (case (car e)
+            ((quote) (datum-class (cadr e)))
+            ((let) (tail-class (caddr e)))
+            ((seq) (tail-class (caddr e)))
+            ((letrec) (tail-class (caddr e)))
+            ((phi) (tail-class (caddr e)))
+            ((sigma) (tail-class (list-ref e 6)))
+            ((declare declare-distinct policy) (tail-class (caddr e)))
+            ((if) (let ((a (tail-class (caddr e))) (b (tail-class (cadddr e))))
+                    (cond ((and a b) (join-class '<if> a b)) (a a) (else b))))
+            ((tailcall call) (if (hashtable-ref bodies (cadr e) #f)
+                                 (hashtable-ref results (cadr e) #f)
+                                 'tagged))
+            ((primcall) (prim-result-class (cadr e)))
+            ((lambda) 'tagged)
+            ;; An unspecified value. Classified raw-word to match what lower.ss
+            ;; materialises for it, and because it is not a pointer: putting it
+            ;; in the value class would have the collector scavenge it.
+            ((void) 'raw-word)
+            ((set!) 'raw-word)
+            (else #f)))))
+
+      (let walk ((x form))
+        (when (pair? x)
+          (case (car x)
+            ((let) (let ((b (car (cadr x))))
+                     (set! lets (cons (cons (car b) (cadr b)) lets))))
+            ;; phi and sigma BIND names, and nothing else in this walk sees
+            ;; them. Missing them left every join variable unclassified, which
+            ;; then propagated: a procedure whose tail is a phi had no result
+            ;; class, so every call to it had none either.
+            ((phi)
+             (for-each (lambda (b)
+                         (set! merges
+                               (cons (cons (car b) (map cadr (cdr b))) merges)))
+                       (cadr x)))
+            ((sigma)
+             ;; (sigma x-out x-in pr x-other negated? body): x-out is a
+             ;; refinement of x-in and therefore the same representation.
+             (set! merges (cons (cons (cadr x) (list (caddr x))) merges)))
+            ((letrec top) (note-procs! (cadr x)))
+            ((call tailcall) (set! sites (cons (cons (cadr x) (cddr x)) sites))))
+          (for-each walk x)))
+
+      ;; --- fixpoint ---
+      ;;
+      ;; Iterating is not an optimisation here, it is required. A loop is a
+      ;; letrec whose tailcall passes the loop variable back to itself, so the
+      ;; argument in position i IS the parameter in position i, and a single
+      ;; pass would ask for a class still being computed. Classes are only ever
+      ;; joined upward, and the lattice has three points, so it settles.
+      (let fix ()
+        (let ((changed #f))
+          (for-each (lambda (l)
+                      (when (note! (car l) (class-of-simple (cdr l)))
+                        (set! changed #t)))
+                    lets)
+          (for-each (lambda (m)
+                      (for-each (lambda (op)
+                                  (when (note! (car m) (tail-class op))
+                                    (set! changed #t)))
+                                (cdr m)))
+                    merges)
+          (vector-for-each
+           (lambda (f)
+             (when (note-into! results f (tail-class (hashtable-ref bodies f #f)))
+               (set! changed #t)))
+           (hashtable-keys bodies))
+          (for-each
+           (lambda (site)
+             (let ((ps (hashtable-ref params (car site) #f)))
+               (when (and ps (= (length ps) (length (cdr site))))
+                 (for-each
+                  (lambda (p a)
+                    (let ((ac (and (symbol? a) (hashtable-ref classes a #f)))
+                          (pc (hashtable-ref classes p #f)))
+                      (when (and ac (note! p ac)) (set! changed #t))
+                      ;; BACKWARD. Once a parameter has joined to `tagged`,
+                      ;; every argument feeding it must ARRIVE tagged, or the
+                      ;; callee reads a raw word as an object. Pushing the
+                      ;; requirement back to the producer is what makes the
+                      ;; literal case free: the constant is materialized already
+                      ;; shifted and there is no conversion to insert.
+                      (when (and pc (symbol? a) (note! a pc)) (set! changed #t))))
+                  ps (cdr site)))))
+           sites)
+          (when changed (fix))))
+      classes))
+
+  ;; The class of an Lrepr/Lssa SimpleExpr given as a datum. A bare variable is
+  ;; NOT handled here on purpose: it is a copy, and copies are resolved by the
+  ;; fixpoint above rather than guessed at.
+  (define (class-of-datum se)
+    (cond
+     ((not (pair? se)) (datum-class se))
+     (else
+      (case (car se)
+        ((quote) (datum-class (cadr se)))
+        ((lambda) 'tagged)
+        ((call) 'tagged)
+        ((primcall) (prim-result-class (cadr se)))
+        (else 'tagged)))))
+
   ;; --- the pass -------------------------------------------------------------
 
-  (define (select-representations e)
-    (let ([counts (make-eq-hashtable)])
+  ;; `known` is the table `parameter-classes` computed over the whole program.
+  ;; It is the authority: it resolves copies, call results and parameters, none
+  ;; of which are answerable from a single binding's initializer.
+  (define (select-representations e . opt)
+    (let ([counts (make-eq-hashtable)]
+          [known (if (pair? opt) (car opt) (parameter-classes (unparse-Lssa e)))])
       (define (bump! c) (hashtable-set! counts c (+ 1 (hashtable-ref counts c 0))))
-      (define (class-of se)
-        (nanopass-case (Lssa SimpleExpr) se
-          [,x 'tagged]                       ; a bare variable: unknown here
-          [(quote ,d) (datum-class d)]
-          [(lambda (,x* ...) ,body) 'tagged]
-          [(call ,x ,x* ...) 'tagged]        ; an unknown callee returns an object
-          [(primcall ,pr ([,pn* ,c*] ...) ,x* ...) (prim-result-class pr)]
-          [else 'tagged]))
+      (define (class-of-binding x se)
+        (or (hashtable-ref known x #f)
+            ;; Not reached by the whole-program fixpoint: a binding nothing
+            ;; ever reads. Its own initializer still answers, and this is the
+            ;; only case where the local answer is the whole answer.
+            (nanopass-case (Lssa SimpleExpr) se
+              [(quote ,d) (datum-class d)]
+              [(lambda (,x* ...) ,body) 'tagged]
+              [(primcall ,pr ([,pn* ,c*] ...) ,x* ...) (prim-result-class pr)]
+              [else
+               (error 'select-representations
+                      (string-append
+                       "no storage class for this binding; classifying it "
+                       "wrongly would either lose a GC root or put a double in "
+                       "an integer register, and there is no safe default")
+                      x)])))
       (define (Expr e)
         (with-output-language (Lrepr Expr)
           (nanopass-case (Lssa Expr) e
             [(let ([,x ,se]) ,body)
-             (let ([sc (class-of se)])
+             (let ([sc (class-of-binding x se)])
                (bump! sc)
                `(let ([,x ,sc ,(SimpleExpr se)]) ,(Expr body)))]
             ;; `lambda` is both an Expr and a SimpleExpr: a top-level binding's
@@ -135,14 +379,20 @@
         (values out
                 (make-repr-report
                  (map (lambda (c) (cons c (hashtable-ref counts c 0)))
-                      '(tagged raw-word raw-f64)))))))
+                      '(tagged raw-word raw-f64))
+                 known)))))
 
   (define (select-representations-program p)
     (nanopass-case (Lssa Program) p
       [(top ([,x* ,e*] ...) (,x2* ...) ,body)
-       (let ([total (make-eq-hashtable)])
+       (let ([total (make-eq-hashtable)]
+             ;; ONE fixpoint over the whole program. Per-binding would be
+             ;; wrong: a call crosses top-level bindings, so the class of what
+             ;; a procedure returns is not derivable from the binding that
+             ;; contains the call.
+             [known (parameter-classes (unparse-Lssa p))])
          (define (one e)
-           (let-values ([(e^ rpt) (select-representations e)])
+           (let-values ([(e^ rpt) (select-representations e known)])
              (for-each (lambda (p)
                          (hashtable-set! total (car p)
                                          (+ (cdr p) (hashtable-ref total (car p) 0))))
@@ -153,5 +403,6 @@
              (values `(top ([,x* ,v*] ...) (,x2* ...) ,b)
                      (make-repr-report
                       (map (lambda (c) (cons c (hashtable-ref total c 0)))
-                           '(tagged raw-word raw-f64)))))))]))
+                           '(tagged raw-word raw-f64))
+                      known)))))]))
   )

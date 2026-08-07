@@ -105,6 +105,7 @@
   ;; and read by hand here, and the counter reset at pass entry keeps the
   ;; output reproducible so a test can assert on it.
 
+  (define reset-names-on-entry? (make-parameter #t))
   (define name-counter 0)
   (define (reset-names!) (set! name-counter 0))
 
@@ -395,7 +396,31 @@
        `(primcall ,pr ([,pn* ,c*] ...)
                   ,(map (lambda (a) (env-lookup env a)) x*) ...)])
 
-    (begin (reset-names!) (Expr e '() '() #t)))
+    (begin (when (reset-names-on-entry?) (reset-names!)) (Expr e '() '() #t)))
+
+  ;; Whether `essa` restarts the name counter.
+  ;;
+  ;; `essa` resets so a hand-written fixture converts to the same names every
+  ;; time, which is what makes the tests readable. Doing that once per top-level
+  ;; binding makes the names unique only WITHIN a binding, and the whole
+  ;; compiler downstream treats a vreg name as a program-wide identity: repr.ss
+  ;; maps names to storage classes, select.ss builds one class table for the
+  ;; program, and the allocator keys off the same names. With five procedures
+  ;; each owning a `t.1`, one of them a double and four of them words, that map
+  ;; has to pick one -- and whichever it picks, four procedures get the wrong
+  ;; register file.
+  ;;
+  ;; It resets by default so a hand-written fixture converts to the same names
+  ;; every time, which is what makes the tests readable. But doing that once per
+  ;; TOP-LEVEL BINDING makes names unique only within a binding, and the whole
+  ;; compiler downstream treats a vreg name as a program-wide identity: repr.ss
+  ;; maps names to storage classes, select.ss builds one class table for the
+  ;; program, and the allocator keys off the same names. With five procedures
+  ;; each owning a `t.1`, one of them a double and four of them words, that map
+  ;; has to pick one -- and whichever it picks, four procedures get the wrong
+  ;; register file.
+  ;;
+  ;; So `essa-program` resets ONCE and holds this off for the bindings.
   
   ;; Program-level entry. Every other pass in the pipeline has one; this did
   ;; not, so a whole-program run stopped here with "unexpected Expr" and the
@@ -409,7 +434,8 @@
     (nanopass-case (Lanf Program) p
       [(top ([,x* ,e*] ...) (,x2* ...) ,body)
        (with-output-language (Lssa Program)
-         (let* ([v* (map essa e*)]
-                [b (essa body)])
+         (reset-names!)
+         (let* ([v* (parameterize ([reset-names-on-entry? #f]) (map essa e*))]
+                [b (parameterize ([reset-names-on-entry? #f]) (essa body))])
            `(top ([,x* ,v*] ...) (,x2* ...) ,b)))]))
 )

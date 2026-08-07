@@ -12,6 +12,7 @@
 
 (library (sonic regs)
   (export make-arch arch? arch-name arch-value arch-raw arch-float arch-structural
+          arch-register-for
           arch-scratch
           arch-x86-64 arch-rv64 arch-by-name
           reg-class check-assignment! assignment-ok?
@@ -82,6 +83,17 @@
   (define (value-count a) (length (arch-value a)))
   (define (raw-count a)   (length (arch-raw a)))
   (define (float-count a) (length (arch-float a)))
+
+  ;; The register holding a structural role: `nil`, `current-thread`,
+  ;; `current-cpu`, `frame`, `stack`. Selection needs `nil` by name -- the empty
+  ;; list is a real Scheme object with no immediate encoding, and both
+  ;; partitions already dedicate a register to it rather than paying for a tag.
+  (define (arch-register-for a role)
+    (let loop ((rs (arch-structural a)))
+      (cond ((null? rs)
+             (error 'arch-register-for "no register holds this role" (arch-name a) role))
+            ((eq? (cdar rs) role) (caar rs))
+            (else (loop (cdr rs))))))
 
   ;; Which class does this physical register belong to?
   (define (reg-class a r)

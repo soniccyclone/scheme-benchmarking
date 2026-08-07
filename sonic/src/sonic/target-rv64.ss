@@ -150,6 +150,13 @@
                (t (rv64-addr-scratch)))
           `((auipc ,t ,off)
             (fld ,dst ,t ,off))))
+       ;; The empty list is a real Scheme object, not an immediate. numeric.ss
+       ;; assigns tags to fixnums and flonums and to nothing else, so there is
+       ;; no bit pattern to materialise -- and there does not need to be: the
+       ;; partition in regs.ss dedicates `gp` to nil precisely so that nil is a
+       ;; register move rather than a tag.
+       ((null? d)
+        `((addi ,dst ,(arch-register-for arch-rv64 'nil) 0)))
        ((not (and (integer? d) (exact? d)))
         (error 'rv64-select "RV64 const rule takes an exact integer" d))
        ((<= -2048 d 2047)

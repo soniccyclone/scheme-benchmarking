@@ -20,6 +20,7 @@
 
 (define elide-stats #f)
 (define repr-counts #f)
+(define repr-classes #f)
 (define lower-stats #f)
 (define lowered #f)
 
@@ -38,9 +39,11 @@
                             (set! elide-stats st) o)))
           (cons 'repr   (lambda (a)
                           (let-values ([(o rp) (select-representations-program a)])
-                            (set! repr-counts (repr-report-counts rp)) o)))
+                            (set! repr-counts (repr-report-counts rp))
+                            (set! repr-classes (repr-report-classes rp))
+                            o)))
           (cons 'lower  (lambda (a)
-                          (let-values ([(o st) (lower-toplevel (unparse-Lrepr a) 'main)])
+                          (let-values ([(o st) (lower-toplevel (unparse-Lrepr a) 'main repr-classes)])
                             (set! lower-stats st) (set! lowered o) o))))))
 
 (for-each (lambda (p)

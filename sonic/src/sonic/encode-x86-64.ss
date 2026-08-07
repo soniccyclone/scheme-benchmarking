@@ -242,6 +242,21 @@
     '((addsd . #x58) (subsd . #x5C) (mulsd . #x59)
       (divsd . #x5E) (sqrtsd . #x51)))
 
+  ;; PACKED double bitwise ops, 66-prefixed rather than F2.
+  ;;
+  ;; They are here for one job: IEEE negation and absolute value. `sub 0.0 x` is
+  ;; not negation -- the two disagree at x = 0.0 and the sign survives a
+  ;; division, which bench/nbody/SPEC.md step 0 states -- so negation is a
+  ;; sign-bit XOR against a pooled mask and abs is an AND.
+  ;;
+  ;; The packed form is the only form: there is no scalar xorpd, because SSE
+  ;; has no scalar bitwise ops at all. Operating on both lanes is harmless
+  ;; because we only ever read the low one, and litpool.ss gives the mask 16
+  ;; bytes at 16-byte alignment, which non-VEX SSE requires of a 128-bit memory
+  ;; operand -- an unaligned one faults.
+  (define sse-bitwise
+    '((andpd . #x54) (xorpd . #x57)))
+
   (define jcc-table
     '((je . #x84) (jne . #x85) (jl . #x8C) (jge . #x8D)
       (jle . #x8E) (jg . #x8F) (jo . #x80)))
@@ -251,14 +266,15 @@
       (setle . #x9E) (setg . #x9F)))
 
   (define (mnemonic-known? m)
-    (or (assq m int-alu) (assq m sse-arith) (assq m jcc-table) (assq m setcc-table)
+    (or (assq m int-alu) (assq m sse-arith) (assq m sse-bitwise)
+        (assq m jcc-table) (assq m setcc-table)
         (memq m '(mov movsd movzx imul lea shl neg cvtsi2sd jmp call ret))
         #f))
 
   (define (x86-64-supports? m) (and (mnemonic-known? m) #t))
 
   (define (x86-64-mnemonics)
-    (append (map car int-alu) (map car sse-arith)
+    (append (map car int-alu) (map car sse-arith) (map car sse-bitwise)
             (map car jcc-table) (map car setcc-table)
             '(mov movsd movzx imul lea shl neg cvtsi2sd jmp call ret)))
 
@@ -358,6 +374,13 @@
           (unless (or (xmm? src) (mem? src))
             (error 'encode-instr "scalar-double source must be xmm or memory" i))
           (asm 'encode-instr '(#xF2) 0 (list #x0F (cdr (assq m sse-arith)))
+               (reg-number dst) src '() #f)))
+       ((assq m sse-bitwise)
+        (let ((dst (arg 0)) (src (arg 1)))
+          (unless (xmm? dst) (error 'encode-instr "packed-double destination must be xmm" i))
+          (unless (or (xmm? src) (mem? src))
+            (error 'encode-instr "packed-double source must be xmm or memory" i))
+          (asm 'encode-instr '(#x66) 0 (list #x0F (cdr (assq m sse-bitwise)))
                (reg-number dst) src '() #f)))
        ((eq? m 'cvtsi2sd)
         (let ((dst (arg 0)) (src (arg 1)))
