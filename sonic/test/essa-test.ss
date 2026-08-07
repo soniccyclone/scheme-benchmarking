@@ -342,5 +342,30 @@
           (sigma-shapes out)
           '((n n fx> i #f) (n n fx> i #t))))
 
+
+;; --- regression: nanopass's generated clause is the dangerous kind of default
+;; It typechecks, it round-trips, and it is WRONG. Without an explicit tailcall
+;; clause the operands are copied verbatim with no env-lookup, so a back edge
+;; emits (tailcall loop i2 n) while the binders are loop.1, i2.11, n.5. Every
+;; loop consumer downstream then reads an induction step naming variables that
+;; do not exist.
+(let* ([prog (with-output-language (Lanf Expr)
+               `(letrec ([loop (lambda (i n)
+                                 (let ([t (primcall fx< () i n)])
+                                   (if t
+                                       (let ([i2 (primcall fx+ ([overflow-check checked]) i one)])
+                                         (tailcall loop i2 n))
+                                       (quote 0))))])
+                  (tailcall loop zero ten)))]
+       [out (unparse-Lssa (essa prog))]
+       [syms (let f ([x out]) (cond [(pair? x) (append (f (car x)) (f (cdr x)))]
+                                    [(symbol? x) (list x)] [else '()]))]
+       [renamed? (lambda (base)
+                   ;; the ORIGINAL name must not survive anywhere a binder was renamed
+                   (not (memq base syms)))])
+  (check! "tailcall operator is renamed, not copied verbatim" (renamed? 'loop) #t)
+  (check! "tailcall argument is renamed" (renamed? 'i2) #t)
+  (check! "free variables are untouched" (and (memq 'zero syms) (memq 'ten syms) #t) #t))
+
 (printf "\n~a checks, ~a failures\n" checks failures)
 (if (> failures 0) (exit 1) (begin (printf "PASS\n") (exit 0)))

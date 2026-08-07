@@ -54,6 +54,17 @@ reversal attached, never edited away.
 
 ## Corrections to our own claims
 
+- **Nanopass's generated fallthrough clause is the dangerous kind of default.** `essa.ss`
+  had no `tailcall` clause, so nanopass generated one that copies operands verbatim with no
+  environment lookup. It typechecks, it round-trips, and it is wrong: a back edge emitted
+  `(tailcall loop i2 n)` while the binders were `loop.1`, `i2.11`, `n.5`, so every operand
+  named a variable that did not exist. Silent, and it broke every loop consumer downstream,
+  since a back edge is exactly where the induction step is read. `set!` and
+  `declare-distinct` had the same hole. Found by the loop agent, which noticed its input was
+  unusable and filed it rather than working around it. **Lesson: in a renaming pass, every
+  production that mentions a variable needs an explicit clause; the ones you forget do not
+  fail, they quietly pass the wrong name through.**
+
 - **`(fl- 0.0 px)` is not floating-point negation**, and every Scheme nbody config we wrote
   uses it where `ref.c` writes `-px`. Verified: `(fl- 0.0 0.0)` is `0.0`, `(- 0.0)` is
   `-0.0`, and the sign survives the division that follows. Latent rather than active, since

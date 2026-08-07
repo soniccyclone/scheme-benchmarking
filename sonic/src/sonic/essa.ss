@@ -298,6 +298,31 @@
       [(policy ([,pn* ,b*] ...) ,body)
        `(policy ([,pn* ,b*] ...) ,(Expr body env facts val?))]
 
+      ;; tailcall and set! MUST have explicit clauses. Nanopass generates a
+      ;; fallthrough that copies operands verbatim, with no env-lookup, so
+      ;; without these a back edge emits `(tailcall loop i2 n)` while the
+      ;; binders are `loop.1`, `i2.11`, `n.5` — every operand names a variable
+      ;; that does not exist. Silent, and it breaks every loop consumer
+      ;; downstream, since a back edge is exactly where the loop analysis reads
+      ;; its induction step.
+      ;;
+      ;; The generated clause is the dangerous kind of default: it typechecks,
+      ;; it round-trips, and it is wrong.
+      [(tailcall ,x ,x* ...)
+       `(tailcall ,(env-lookup env x)
+                  ,(map (lambda (a) (env-lookup env a)) x*) ...)]
+
+      ;; set!'s TARGET is a reference to a binder already in scope, not a new
+      ;; one, so it renames like any other use. The value is an ordinary
+      ;; expression.
+      [(set! ,x ,e)
+       `(set! ,(env-lookup env x) ,(Expr e env facts #t))]
+
+      ;; declare-distinct's variables are references, same as declare's.
+      [(declare-distinct (,x* ...) ,body)
+       `(declare-distinct (,(map (lambda (x) (env-lookup env x)) x*) ...)
+                          ,(Expr body env facts val?))]
+
       ;; First arm is statement position: its value, and so any merge in it,
       ;; is dead.
       [(seq ,e0 ,e1)

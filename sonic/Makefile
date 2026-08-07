@@ -48,6 +48,8 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/alloc-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/loops-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss
