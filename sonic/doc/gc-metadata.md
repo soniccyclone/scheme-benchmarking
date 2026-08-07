@@ -111,7 +111,10 @@ is fine; sharing the field layout is the mistake this document exists to prevent
 never reaches a raw register (`register-partition.md`) is what makes the absent register
 bitmap sound on both.
 
-**The RVV field is a live question for E5-RVV**, not settled here: whether the restart
-region approach extends to a `vsetvl`-established context, or whether vector loops need
-their own restart discipline, depends on how E5 structures its loops. Recorded so it is not
-discovered late.
+**The RVV field's open question is now answered: restart regions DO extend to a
+`vsetvl`-established context.** The region runs from the `vsetvli` to the last vector
+instruction, and every pointer bump and the count decrement sit *outside* it. So a rewind
+re-runs the `vsetvli` and then the same loads and store from unadvanced pointers —
+idempotent by layout, which is exactly the obligation `preempt.ss` states a restart region
+author must discharge. `vl-live?` is set across that span and round-trips through the real
+`gcmeta` wire format.

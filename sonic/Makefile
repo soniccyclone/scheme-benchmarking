@@ -94,6 +94,10 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/parcopy-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/vec-x86-64-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/vec-rv64-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss
