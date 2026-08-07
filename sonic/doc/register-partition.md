@@ -22,7 +22,7 @@ objection nearly vanishes for the numeric code this project measures.
 
 ---
 
-## RV64 (RVA23 baseline, `lp64d`)
+## RV64 (RVA23, `lp64d`)
 
 | register | ABI name | class | role |
 |---|---|---|---|
@@ -97,37 +97,50 @@ per-target (E1-GCVOCAB).
 Scheme objects at every call, so making them raw would force a shuffle at every boundary.
 Foreign calls to C are the exception and shuffle explicitly at the boundary.
 
-### The trap: the distro default `-march` is much richer than real hardware
+### The baseline: RVA23, not rv64gc
 
-Measured, not assumed. `riscv64-linux-gnu-gcc` on this box defaults to:
+**Corrected 2026-08-06.** An earlier version of this file called the toolchain default a
+trap and recommended `rv64gc`. That was wrong, and it was wrong in the direction that would
+have hurt most.
 
-```
-rv64imafdcbv_zic64b_zicbom_..._zba_zbb_zbs_zkt_zvbb_zve32f_..._zve64d_...
--mabi=lp64d
-```
+`riscv64-linux-gnu-gcc` here defaults to an ISA string containing **every RVA23U64
+mandatory extension** — verified one by one: `v`, `zicond`, `zfa`, `zba`, `zbb`, `zbs`,
+`zicboz`, `zicbom`, `zihintpause`, `zihintntl`, `zimop`, `zcmop`, `zawrs`, `zkt`, `zvbb`,
+`zve64d`. That is not an accident. Ubuntu's cross toolchain deliberately targets RVA23.
 
-That is RVA23-class: **RVV 1.0 vectors, Zba, Zbb, Zbs, Zfa, Zicond**, all on by default.
-`__riscv_v` is `1000000` and `__riscv_flen` is 64.
+What changed in the ecosystem:
 
-It is also far more than a typical devboard has. A JH7110 / U74 board is `rv64gc` with **no
-V extension at all**, and much of the current shipping fleet is the same. So developing
-against the default `-march` will happily emit RVV that the hardware you eventually buy
-cannot execute.
+- **RVA23 makes the V extension mandatory.** It was optional in RVA22.
+- **Ubuntu 26.04 LTS ships RVA23 images** with Canonical support, and Ubuntu **dropped
+  pre-RVA23 hardware in October 2025**. RHEL targets RVA23 as its baseline too.
+- **SiFive P550 and P870 align on the profile**; the P870 is a six-wide out-of-order core
+  claiming ~50% single-thread gain over the previous generation.
 
-Two consequences:
+So targeting `rv64gc` would aim at hardware the distribution no longer supports.
 
-1. **Pin `-march` explicitly in the smoke gate and in SonicScheme's target description.**
-   Never inherit the toolchain default. Baseline is `rv64gc`; anything above it is a named,
-   detected feature.
-2. **RVV is a feature, not the baseline** (E5-RVV). The vectorizer must have a scalar
-   fallback path, and `E2-RVSEL` should target `rv64gc` only.
+**Two profiles, both smoke-tested:**
 
-Two concrete demonstrations, both from this tree:
+| profile | ISA | role |
+|---|---|---|
+| `rva23` (default) | RV64 + V + Zba/Zbb/Zbs/Zfa/Zicond/… | what we optimize for |
+| `legacy` | `rv64gc` | proves we still *run* with no V |
 
-- `sh3add` appears in the disassembly of a trivial indexing loop. gcc reached for a **Zba**
-  instruction unasked, on a default target string, for code as ordinary as `p[k]`.
-- `fli.d` appeared in nbody's RISC-V instruction list under the default `-march` and
-  **disappears under `rv64gc`**. It is a **Zfa** load-immediate. Nothing warned; the
-  instruction set simply got smaller when asked honestly.
+`gcc` does not accept profile names like `-march=rva23u64`, only spelled-out ISA strings,
+so `harness/smoke-riscv.sh` carries the string and selects with `PROFILE=rva23|legacy`.
 
-`harness/smoke-riscv.sh` now pins `MARCH=rv64gc MABI=lp64d` and never inherits the default.
+**This promotes E5-RVV from bolt-on to first-class.** Vectors are the baseline on
+PC-class RISC-V, so the scalar path is the fallback for old hardware rather than the common
+case. Worth noting the hardware gap while it lasts: affordable boards you can buy today —
+Banana Pi BPI-F3 and Milk-V Jupiter, both SpacemiT K1/M1 — are **RVA22 plus RVV 1.0**, so
+they have the V extension that matters here even though they predate the full RVA23 profile.
+The older JH7110/U74 generation (VisionFive 2, Milk-V Mars) genuinely has no V, which is
+what the `legacy` profile exists to keep honest.
+
+Two demonstrations that pinning still matters, both from this tree:
+
+- `sh3add`, a **Zba** instruction, appears for code as ordinary as `p[k]`.
+- `fli.d`, a **Zfa** load-immediate, appears under RVA23 and disappears under `rv64gc`.
+
+Neither is a bug. They are the reason the march must be *stated* rather than inherited: the
+same source silently produces a different instruction set depending on a flag nobody wrote
+down.

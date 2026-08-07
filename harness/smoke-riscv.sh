@@ -28,12 +28,32 @@ BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/riscv"
 QEMU="${QEMU_RISCV:-$HOME/.local/bin/qemu-riscv64}"
 CC=riscv64-linux-gnu-gcc
-# PIN the march. Never inherit the toolchain default: on this box it is RVA23
-# class (rv64imafdcbv_..._zba_zbb_zbs_...) with RVV 1.0 and Zba ON, which is far
-# richer than a typical devboard. A JH7110/U74 is rv64gc with no V at all, so
-# inheriting the default emits code the eventual hardware cannot run.
-MARCH=${MARCH:-rv64gc}
+# PIN the march explicitly, but pin it to RVA23, not to rv64gc.
+#
+# CORRECTED 2026-08-06 after checking current sources. The toolchain default
+# here is not an accident and not a trap: every RVA23U64 mandatory extension is
+# present in it, so Ubuntu's cross-gcc deliberately targets RVA23.
+#
+#   - RVA23 makes the V extension MANDATORY. It was optional in RVA22.
+#   - Ubuntu 26.04 LTS ships RVA23 images with Canonical support, and Ubuntu
+#     DROPPED pre-RVA23 hardware in October 2025. RHEL targets RVA23 too.
+#   - SiFive P550/P870 align on it; the P870 is a six-wide out-of-order core.
+#
+# So rv64gc is the LEGACY floor (JH7110/U74: VisionFive 2, Milk-V Mars, no V at
+# all), not the baseline. Targeting it would aim at hardware the distro no
+# longer supports.
+#
+# gcc does not accept profile names like -march=rva23u64, only ISA strings, so
+# PROFILE selects a spelled-out string. Both are smoke-tested: RVA23 is what we
+# optimize for, rv64gc proves we still RUN without V.
 MABI=${MABI:-lp64d}
+RVA23=rv64imafdcv_zicond_zfa_zba_zbb_zbs_zicboz_zicbom_zicbop_zihintpause_zihintntl_zimop_zcmop_zawrs_zkt_zvbb
+PROFILE=${PROFILE:-rva23}
+case "$PROFILE" in
+  rva23)  MARCH=${MARCH:-$RVA23} ;;
+  legacy) MARCH=${MARCH:-rv64gc} ;;
+  *)      MARCH=${MARCH:-$PROFILE} ;;
+esac
 CFLAGS_RV="-march=$MARCH -mabi=$MABI"
 N=${1:-1000}
 
@@ -45,7 +65,8 @@ need "$CC"; need riscv64-linux-gnu-objdump
 [ -x "$QEMU" ] || { echo "MISSING: $QEMU"; fail=1; }
 [ "$fail" -eq 0 ] || { echo; echo "FAIL: toolchain incomplete"; exit 1; }
 
-echo "RISC-V smoke gate, N=$N, -march=$MARCH -mabi=$MABI"
+echo "RISC-V smoke gate, N=$N, profile=$PROFILE"
+echo "  -march=$MARCH -mabi=$MABI"
 echo
 
 # --- 1. the reference compiles and runs, and agrees with x86-64 bit for bit ---
@@ -89,6 +110,14 @@ printf '  %-6s csrw under rv64imac_zicsr\n  %-6s csrw under rv64imac (expected: 
 d=$(probe_march rv64gc lp64d 'fadd.d ft0, ft0, ft0')
 printf '  %-6s fadd.d under rv64gc\n' "$d"
 [ "$d" = ok ] || fail=1
+
+# RVV must be available under the RVA23 profile and absent under the legacy floor.
+# E5-RVV is a first-class path for PC-class RISC-V, not a bolt-on, so this is a
+# capability check rather than a curiosity.
+vv=$(probe_march "$RVA23" lp64d 'vsetvli t0, zero, e64, m1, ta, ma')
+vl=$(probe_march rv64gc    lp64d 'vsetvli t0, zero, e64, m1, ta, ma')
+printf '  %-6s vsetvli under RVA23 (RVV 1.0 mandatory)\n  %-6s vsetvli under rv64gc legacy floor (expected: refused)\n' "$vv" "$vl"
+[ "$vv" = ok ] && [ "$vl" = refused ] || fail=1
 
 # --- 4. no x86-only instruction reached the RISC-V build ---------------------
 # Placeholder for SonicScheme output. Once the compiler emits RV64, this asserts

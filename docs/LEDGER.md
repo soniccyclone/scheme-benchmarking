@@ -53,6 +53,18 @@ reversal attached, never edited away.
 
 ## Corrections to our own claims
 
+- **"The distro default `-march` is a trap; baseline should be `rv64gc`."** Wrong, and
+  wrong in the expensive direction. Checked against current sources: **RVA23 makes the V
+  extension mandatory** where RVA22 had it optional, **Ubuntu 26.04 LTS ships RVA23 images**
+  and **dropped pre-RVA23 hardware in October 2025**, RHEL targets RVA23, and SiFive's
+  P550/P870 align on it. Every RVA23U64 mandatory extension is present in the toolchain
+  default, verified one by one, so the default is deliberate rather than accidental.
+  `rv64gc` is the **legacy floor**, not the baseline. Consequence: E5-RVV is a first-class
+  path for PC-class RISC-V, not a bolt-on, and the scalar path is the fallback for old
+  hardware. The claim that survives is only that the march must be *stated* rather than
+  inherited, since the same source silently changes instruction set with a flag nobody
+  wrote down.
+
 - **"Trip-count proof bounds preemption latency."** Raised as a cheap alternative to
   PC-total metadata. It does not: proving `i in [0, 50000000)` proves the loop is finite,
   not short. Omission is legal only when `trip_count × body_cost` is inside the latency
