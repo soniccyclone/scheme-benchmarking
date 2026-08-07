@@ -51,9 +51,11 @@
 ;;; which is a fight with the partition rather than an encoding problem.
 
 (library (sonic target-x86-64)
-  (export x86-64-selector x86-64-rules)
+  (export x86-64-selector x86-64-rules x86-64-call-emitter)
   (import (chezscheme)
           (sonic select)
+          (sonic callconv)
+          (sonic callseq)
           (sonic regs))
 
   ;; Every Lmach storage class is eight bytes wide on x86-64, so the scale on an
@@ -152,6 +154,24 @@
        `((jo (label sonic-overflow-error))))
       (else (error 'x86-64-selector "no rule for this check" pn))))
 
+  ;; --- calls ----------------------------------------------------------------
+  ;;
+  ;; The convention is sonic/src/sonic/callconv.ss's and the sequencing is
+  ;; sonic/src/sonic/callseq.ss's. This target contributes only the spelling.
+  ;;
+  ;; Four tagged argument registers, against RV64's eight, is the honest
+  ;; consequence of an eight-register value class on a machine with sixteen
+  ;; GPRs; overflow goes to the outgoing area at [rsp + 8*slot]. The scale is 8
+  ;; because every storage class here is a machine word wide.
+  (define x86-64-call-emitter
+    (make-call-emitter
+     'x86-64
+     (lambda (sc reg src) `((,(mov-for sc) ,reg ,src)))
+     (lambda (sc slot src)
+       `((,(mov-for sc) (mem rsp #f ,word-scale ,(* word-scale slot)) ,src)))
+     (lambda (callee) `((call (label ,callee))))
+     (lambda (callee) `((jmp (label ,callee))))))
+
   ;; --- the rule table -------------------------------------------------------
 
   (define x86-64-rules
@@ -247,7 +267,17 @@
                (jne (label ,(cadr srcs)))
                (jmp (label ,(caddr srcs))))))
 
-     (cons 'call (lambda (dst sc srcs) `((call (label ,(car srcs))))))
+     (cons 'call
+           (lambda (dst sc srcs)
+             (call-sequence callconv-x86-64 x86-64-call-emitter dst sc srcs)))
+
+     ;; A block whose last instruction is a call and whose transfer returns that
+     ;; call's result. select.ss finds the shape; this makes it a jump, so no
+     ;; return address is pushed and the caller's frame is reused. Not a rule
+     ;; for a mach-op: `missing-rules` neither demands nor reports it.
+     (cons 'tailcall
+           (lambda (dst sc srcs)
+             (tail-call-sequence callconv-x86-64 x86-64-call-emitter dst sc srcs)))
 
      ;; No move of the result into the return register: the Lmach Transfer
      ;; `(ret v)` carries no storage class, so this rule cannot tell whether the

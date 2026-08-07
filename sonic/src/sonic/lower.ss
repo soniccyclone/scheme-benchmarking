@@ -217,6 +217,17 @@
            (let-values (((a av) (lower-expr (cadr e) stats)))
              (let-values (((b bv) (lower-expr (caddr e) stats)))
                (values (append (reverse acc) a b) bv))))
+          ;; Lmach has no `tailcall` production, so the name is lost here. The
+          ;; SHAPE is not: the call is the block's last instruction and its
+          ;; result is what the block's `(ret v)` returns, and nothing else has
+          ;; that shape, because v is defined by the last instruction and
+          ;; consumed by the transfer. `tail-call-instr` in
+          ;; sonic/src/sonic/select.ss recognises it and the targets emit a jump
+          ;; rather than a call, which is what makes tail calls proper.
+          ;;
+          ;; So do NOT insert anything between this call and the transfer, and
+          ;; do not name the result something the transfer will not return. Both
+          ;; would silently turn every loop iteration back into a stacked frame.
           ((tailcall)
            (let ((v (fresh! "t")))
              (values (reverse (cons `(call ,v raw-word ,@(cdr e)) acc)) v)))

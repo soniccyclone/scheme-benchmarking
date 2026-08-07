@@ -66,10 +66,12 @@
 
 (library (sonic target-rv64)
   (export rv64-selector rv64-rules rv64-addr-scratch rv64-overflow-scratch
-          rv64-trap-label)
+          rv64-trap-label rv64-call-emitter)
   (import (chezscheme)
           (sonic lang)
           (sonic regs)
+          (sonic callconv)
+          (sonic callseq)
           (sonic select))
 
   ;; --- the scratch registers, and the conflict they carry -------------------
@@ -233,12 +235,21 @@
                   `((fld ,dst ,t 0))
                   `((ld ,dst ,t 0))))))
 
-  ;; (store base sc idx val). Lmach's `(op v sc v* ...)` makes the first slot
-  ;; mandatory even for an op with no destination, so a store's base address
-  ;; lands there. Reading it any other way leaves the base with nowhere to go.
-  (define (r:store base sc srcs)
-    (arity-check! 'rv64-select 2 srcs)
-    (let ((t (rv64-addr-scratch)) (idx (car srcs)) (val (cadr srcs)))
+  ;; (store <unused> sc base idx val). Lmach's `(op v sc v* ...)` makes the
+  ;; destination slot mandatory even for an op with no result, and `store-mach`
+  ;; in sonic/src/sonic/fixtures.ss PINS that slot as unused with the base, the
+  ;; index and the value all riding in the sources: `live-intervals` reads the
+  ;; destination slot as a DEFINITION, so putting a live operand there would
+  ;; shorten its range and miscompile.
+  ;;
+  ;; This rule used to read the base out of the destination slot, which is the
+  ;; opposite convention and disagreed with both the fixture and the x86-64
+  ;; table. It survived because nothing had ever selected a lowered store: the
+  ;; RV64 selector died on the call sequence first.
+  (define (r:store dst sc srcs)
+    (arity-check! 'rv64-select 3 srcs)
+    (let ((t (rv64-addr-scratch))
+          (base (car srcs)) (idx (cadr srcs)) (val (caddr srcs)))
       (append (address-into t base idx sc)
               (if (float? sc)
                   `((fsd ,val ,t 0))
@@ -264,9 +275,40 @@
     ;; See note 4 at the top: no class for the returned vreg, so no move.
     `((jalr zero ra 0)))
 
+  ;; --- calls ----------------------------------------------------------------
+  ;;
+  ;; The convention itself is in sonic/src/sonic/callconv.ss and the sequencing
+  ;; in sonic/src/sonic/callseq.ss. All this target contributes is how to spell
+  ;; a move, a store into the outgoing area, a call and a jump -- which is the
+  ;; whole of what is RV64-specific about a call.
+  ;;
+  ;; `jal ra, target` rather than `jalr ra, rs, 0`: the callee slot of an Lmach
+  ;; call holds a block label in every program lower.ss produces, and a label in
+  ;; a register operand is not a thing the encoder can spell. Indirect calls
+  ;; through a closure are a later bead and will need the callee's class, which
+  ;; the same class map that types the arguments already has.
+  ;;
+  ;; The outgoing stack area is addressed from sp with an 8-byte word, because
+  ;; every storage class this compiler has is 8 bytes wide (`class-scale`).
+  (define rv64-call-emitter
+    (make-call-emitter
+     'rv64
+     (lambda (sc reg src)
+       (if (float? sc) `((fsgnj.d ,reg ,src ,src)) `((addi ,reg ,src 0))))
+     (lambda (sc slot src)
+       (let ((off (* (class-scale sc) slot)))
+         (if (float? sc) `((fsd ,src sp ,off)) `((sd ,src sp ,off)))))
+     (lambda (callee) `((jal ra ,callee)))
+     (lambda (callee) `((jal zero ,callee)))))
+
   (define (r:call dst sc srcs)
-    (arity-check! 'rv64-select 1 srcs)
-    `((jalr ra ,(car srcs) 0)))
+    (call-sequence callconv-rv64 rv64-call-emitter dst sc srcs))
+
+  ;; A block whose last instruction is a call and whose transfer returns that
+  ;; call's result. select.ss finds the shape; this says what it becomes: a
+  ;; jump, with no return address pushed and the caller's frame reused.
+  (define (r:tailcall dst sc srcs)
+    (tail-call-sequence callconv-rv64 rv64-call-emitter dst sc srcs))
 
   ;; --- checks ---------------------------------------------------------------
 
@@ -346,7 +388,11 @@
      (cons 'branch    r:jump)
      (cons 'branch-if r:branch-if)
      (cons 'jump      r:jump)
-     (cons 'call   r:call)
+     (cons 'call     r:call)
+     ;; Not a mach-op: `tailcall` is a rule name the framework asks for when it
+     ;; recognises the shape, so `missing-rules` neither demands it nor reports
+     ;; it. See `tail-call-instr` in sonic/src/sonic/select.ss.
+     (cons 'tailcall r:tailcall)
      (cons 'ret    r:ret)
      (cons 'chk    r:chk)
      (cons 'check-bounds   (check-op 'bounds-check))
