@@ -56,6 +56,12 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/peephole-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/gc-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/escape-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/litpool-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss

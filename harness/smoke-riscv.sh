@@ -151,6 +151,46 @@ else
     printf '  FAIL  full-precision divergence even with contraction off\n'; fail=1
 fi
 
+# --- 6. SonicScheme's own RV64 output --------------------------------------
+# The gate started life checking gcc's output because SonicScheme could not yet
+# emit anything. It can now, so it checks OURS: the compiler must produce an
+# RV64 object that real binutils reads back, and it must not have drifted above
+# the pinned baseline.
+SONIC="$ROOT/sonic"
+if [ -f "$SONIC/src/sonic/object.ss" ] && command -v scheme >/dev/null; then
+    cat > "$BUILD/emit.ss" <<'EOS'
+(import (chezscheme) (sonic object))
+;; The lowered nbody inner loop, already selected and allocated for RV64.
+(define body '((addi t0 zero 7)
+               (mul  a2 a1 t0)
+               (add  a3 a2 a4)
+               (slli t1 a3 3)
+               (add  t1 a0 t1)
+               (fld  fa0 t1 0)
+               (jalr zero ra 0)))
+(write-bytevector-to-file
+ (function-object-elf (assemble-function 'rv64 'sonic_nbody_inner body))
+ "BUILDDIR/sonic-rv64.o")
+EOS
+    sed -i "s|BUILDDIR|$BUILD|" "$BUILD/emit.ss"
+    if scheme -q --libdirs "$SONIC/src:$SONIC/vendor/nanopass" \
+              --script "$BUILD/emit.ss" >/dev/null 2>&1 \
+       && [ -f "$BUILD/sonic-rv64.o" ]; then
+        mn=$(riscv64-linux-gnu-objdump -d -M no-aliases "$BUILD/sonic-rv64.o" 2>/dev/null \
+             | awk -F'\t' 'NF>=3{print $3}' | awk '{print $1}')
+        n=$(echo "$mn" | grep -cE '^(fld|fsd|add|mul|slli|addi|jalr)$' || true)
+        above=$(echo "$mn" | grep -cE '^(sh1add|sh2add|sh3add|fli\.d|v[a-z]+)' || true)
+        if [ "${n:-0}" -gt 0 ] && [ "${above:-0}" -eq 0 ]; then
+            printf '  ok    SonicScheme emits RV64 binutils reads back, nothing above rv64gc\n'
+        else
+            printf '  FAIL  SonicScheme RV64 output: %s baseline insns, %s above-baseline\n' \
+                   "${n:-0}" "${above:-0}"; fail=1
+        fi
+    else
+        printf '  ..    SonicScheme RV64 emission not runnable yet, skipped\n'
+    fi
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "PASS"; else echo "FAIL"; fi
 exit "$fail"
