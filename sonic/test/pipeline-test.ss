@@ -1,7 +1,7 @@
 ;;; How far does a real program get? Reported as a number, not an impression.
 (import (chezscheme) (nanopass) (sonic lang) (sonic pipeline)
         (sonic read) (sonic expand) (sonic parse) (sonic policy)
-        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide) (sonic repr))
+        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide) (sonic repr) (sonic lower))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -20,6 +20,8 @@
 
 (define elide-stats #f)
 (define repr-counts #f)
+(define lower-stats #f)
+(define lowered #f)
 
 (define r
   (run-pipeline src
@@ -36,20 +38,23 @@
                             (set! elide-stats st) o)))
           (cons 'repr   (lambda (a)
                           (let-values ([(o rp) (select-representations-program a)])
-                            (set! repr-counts (repr-report-counts rp)) o))))))
+                            (set! repr-counts (repr-report-counts rp)) o)))
+          (cons 'lower  (lambda (a)
+                          (let-values ([(o st) (lower-toplevel (unparse-Lrepr a) 'main)])
+                            (set! lower-stats st) (set! lowered o) o))))))
 
 (for-each (lambda (p)
             (display "       ") (display (if (cdr p) "ok  " "STOP"))
             (display "  ") (display (car p)) (newline))
           (pipeline-result-stages r))
 
-(ck! "all ten stages compose on the real program"
-     (= (pipeline-result-reached r) 10))
+(ck! "all eleven stages compose on the real program"
+     (= (pipeline-result-reached r) 11))
 (ck! "and nothing stopped" (not (pipeline-result-stopped-at r)))
 
 ;; What parse actually produced. These numbers are the shape of the program and
 ;; a change in them is a change in the front end worth noticing.
-(when (= (pipeline-result-reached r) 10)
+(when (= (pipeline-result-reached r) 11)
   ;; The first end-to-end measurement of SonicScheme on a real program. These
   ;; are the numbers the whole project exists to produce, and a change in them
   ;; is a change in what the analysis can prove.
@@ -74,7 +79,23 @@
     (ck! "most bindings are UNBOXED, not tagged"
          (> (+ (g 'raw-f64) (g 'raw-word)) (* 8 (g 'tagged))))
     (ck! "and doubles dominate, which is what nbody is"
-         (> (g 'raw-f64) (g 'raw-word)))))
+         (> (g 'raw-f64) (g 'raw-word))))
+
+  ;; Lowering is where the tree becomes a CFG. The block count is the shape of
+  ;; the program's control flow and a change in it is worth noticing.
+  (display "       blocks=") (display (length (cadr lowered)))
+  (display " lower-proved=") (display (lower-stats-proved lower-stats))
+  (display " lower-emitted=") (display (lower-stats-emitted lower-stats)) (newline)
+  (ck! "the program lowers to a multi-block CFG, not one straight line"
+       (> (length (cadr lowered)) 5))
+  ;; Every block label must be unique: two blocks with one label make the
+  ;; program ambiguous in a way selection cannot detect, since it walks both
+  ;; and the second silently wins.
+  (ck! "every block label is unique"
+       (let loop ([ls (map car (cadr lowered))] [seen '()])
+         (cond [(null? ls) #t]
+               [(memq (car ls) seen) #f]
+               [else (loop (cdr ls) (cons (car ls) seen))]))))
 
 (when #f
   (let* ([u (unparse-Lcore (pipeline-result-note r))]
