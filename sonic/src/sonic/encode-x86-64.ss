@@ -236,6 +236,9 @@
       ;; a value is the one place the compiler needs bitwise work on the
       ;; integer side, and numeric.ss fixes that tag width.
       (and . (#x21 #x23 4))
+      ;; `or` is here for the runtime: tagging a heap pointer is
+      ;; `(raw + header) | 1`, and tagging a boolean is `(x << 3) | 7` (D28).
+      (or  . (#x09 #x0B 1))
       (cmp . (#x39 #x3B 7))))
 
   (define sse-arith
@@ -268,7 +271,8 @@
   (define (mnemonic-known? m)
     (or (assq m int-alu) (assq m sse-arith) (assq m sse-bitwise)
         (assq m jcc-table) (assq m setcc-table)
-        (memq m '(mov movsd movzx imul lea shl neg cvtsi2sd jmp call ret))
+        (memq m '(mov movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
+                  syscall))
         #f))
 
   (define (x86-64-supports? m) (and (mnemonic-known? m) #t))
@@ -276,7 +280,8 @@
   (define (x86-64-mnemonics)
     (append (map car int-alu) (map car sse-arith) (map car sse-bitwise)
             (map car jcc-table) (map car setcc-table)
-            '(mov movsd movzx imul lea shl neg cvtsi2sd jmp call ret)))
+            '(mov movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
+              syscall)))
 
   ;; --- the baseline guard ---------------------------------------------------
   ;;
@@ -399,10 +404,16 @@
           (unless (gpr? dst) (error 'encode-instr "lea destination must be a GPR" i))
           (unless (mem? src) (error 'encode-instr "lea source must be a memory operand" i))
           (asm 'encode-instr '() 1 '(#x8D) (reg-number dst) src '() #f)))
-       ((eq? m 'shl)
-        (let ((dst (arg 0)) (src (arg 1)))
-          (unless (imm? src) (error 'encode-instr "shl count must be an immediate" i))
-          (asm 'encode-instr '() 1 '(#xC1) 4 dst (imm8-bytes (cadr src)) #f)))
+       ((memq m '(shl sar shr))
+        (let ((dst (arg 0)) (src (arg 1))
+              (ext (case m ((shl) 4) ((shr) 5) ((sar) 7))))
+          (unless (imm? src) (error 'encode-instr "shift count must be an immediate" i))
+          (asm 'encode-instr '() 1 '(#xC1) ext dst (imm8-bytes (cadr src)) #f)))
+       ;; SYSCALL. Two bytes, no operands, and no REX -- the only way this
+       ;; runtime talks to the kernel, since D25 puts no libc in the running
+       ;; system. Adding it here rather than as a magic byte string keeps it
+       ;; inside the differential test like every other instruction.
+       ((eq? m 'syscall) '(#x0F #x05))
        ((eq? m 'neg) (asm 'encode-instr '() 1 '(#xF7) 3 (arg 0) '() #f))
        ((assq m setcc-table)
         (let ((dst (arg 0)))

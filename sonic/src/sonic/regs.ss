@@ -58,7 +58,7 @@
   (define arch-rv64
     (make-arch 'rv64
       '(a0 a1 a2 a3 a4 a5 a6 a7 s2 s3 s4 s5 s6 s7)  ; value: 14
-      '(t2 s8 s9 s10 s11 t3 t4 t5 t6)               ; raw: 9
+      '(s8 s9 s10 s11 t3 t4 t5 t6)                  ; raw: 8, t2 is scratch
       ;; HAZARD: this is ALLOCATION order, not ABI f-number order. Taking a
       ;; position in this list as a register number puts fs2 at f10, which is
       ;; fa0, and the program still assembles. Encoders must map ABI NAME to
@@ -66,13 +66,30 @@
       '(ft0 ft1 ft2 ft3 ft4 ft5 ft6 ft7
         fs0 fs1 fs2 fs3 fs4 fs5 fs6 fs7
         fa0 fa1 fa2 fa3 fa4 fa5 fa6 fa7
-        fs8 fs9 fs10 fs11 ft8 ft9 ft10)             ; float: 31, ft11 is scratch
+        fs8 fs9 fs10 fs11 ft8)                      ; float: 29, ft9-ft11 scratch
       '((zero . zero) (ra . return-address) (sp . stack) (s0 . frame)
         (gp . nil) (tp . current-thread) (s1 . current-cpu))
-      ;; t0, t1: address temporaries. RV64 has no indexed addressing, so
-      ;; (load v raw-f64 base idx) is slli/add/fld and the shift needs a home.
-      ;; ft11: the float equivalent.
-      '(t0 t1 ft11)))
+      ;; THREE per file, and the count is forced by the ISA rather than chosen.
+      ;;
+      ;; RV64 is load/store, so a spilled operand cannot ride in memory the way
+      ;; it can on x86-64 -- every one of them needs a register to be reloaded
+      ;; into. And RV64's arithmetic is THREE-ADDRESS, so a single
+      ;; `fadd.d rd, rs1, rs2` can have all three operands spilled at once.
+      ;; With two scratches the third reload clobbers the first, silently.
+      ;;
+      ;; x86-64 needs one per file for the opposite reason on both counts: it
+      ;; is two-address, so an instruction mentions at most two distinct
+      ;; operands, and it reads memory directly, so a spilled source costs no
+      ;; register at all.
+      ;;
+      ;; The price is three of RISC-V's 32 float registers and one of its
+      ;; integer registers -- which it can afford and x86-64 could not, which is
+      ;; the same arithmetic PREEMPTION.md ran.
+      ;;
+      ;; t0, t1 also serve as address temporaries: RV64 has no indexed
+      ;; addressing, so (load v raw-f64 base idx) is slli/add/fld and the shift
+      ;; needs a home.
+      '(t0 t1 t2 ft9 ft10 ft11)))
 
   (define (arch-by-name n)
     (case n

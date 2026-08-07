@@ -88,7 +88,7 @@
 ;;; constant has a home the moment `chk` can name one.
 
 (library (sonic litpool)
-  (export current-litpool
+  (export current-litpool pool-label
           make-pool pool?
           pool-intern! pool-intern-f64! pool-intern-i64!
           pool-intern-sign-mask! pool-intern-tag!
@@ -198,6 +198,16 @@
   ;; it -- the pool has to be the same object `object.ss` later asks for the
   ;; bytes of, or the offsets the relocations carry name nothing.
   (define current-litpool (make-parameter (make-pool)))
+
+  ;; The label naming a pool entry's address.
+  ;;
+  ;; A selector cannot know where the pool lands, so it emits this and the
+  ;; assembler computes the displacement -- the same mechanism a branch target
+  ;; uses. Emitting the raw OFFSET instead, which is what this used to do, is
+  ;; correct only if the pool happens to sit at address zero relative to the
+  ;; next instruction, so the program assembled and read the wrong eight bytes.
+  (define (pool-label off)
+    (string->symbol (string-append "%pool+" (number->string off))))
 
   (define (pool-intern! p kind key datum)
     (let ((k (cons kind key)))

@@ -162,15 +162,15 @@
     (make-callconv
      arch-rv64
      '((tagged   . (a0 a1 a2 a3 a4 a5 a6 a7))
-       (raw-word . (t2 t3 t4 t5 t6))
+       (raw-word . (t3 t4 t5 t6))
        (raw-f64  . (fa0 fa1 fa2 fa3 fa4 fa5 fa6 fa7)))
      ;; The tagged return is a0, as the host ABI has it, and that is sound here
      ;; because a0 is value class. The RAW return is NOT a0: a raw word in a
      ;; value register makes the collector scavenge a non-pointer. t2 instead.
      '((tagged   . (a0 a1 a2 a3 a4 a5 a6 a7))
-       (raw-word . (t2 t3 t4 t5 t6))
+       (raw-word . (t3 t4 t5 t6))
        (raw-f64  . (fa0 fa1 fa2 fa3 fa4 fa5 fa6 fa7)))
-     '(a0 a1 a2 a3 a4 a5 a6 a7 t2 t3 t4 t5 t6
+     '(a0 a1 a2 a3 a4 a5 a6 a7 t3 t4 t5 t6
        ft0 ft1 ft2 ft3 ft4 ft5 ft6 ft7 ft8 ft9 ft10
        fa0 fa1 fa2 fa3 fa4 fa5 fa6 fa7)
      '(s2 s3 s4 s5 s6 s7 s8 s9 s10 s11

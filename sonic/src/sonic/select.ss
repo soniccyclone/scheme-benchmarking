@@ -221,8 +221,21 @@
            (blocks (cadr p))
            (entry (caddr p)))
       ;; The class map is a property of the whole program, so it is built once
-      ;; here and read by whichever rules need it -- today, the call sequence.
-      (parameterize ((current-vreg-classes (program-vreg-classes p)))
+      ;; here and read by whichever rules need it -- the call sequence, and the
+      ;; return move, which cannot otherwise tell rax from xmm0.
+      ;;
+      ;; A map supplied by the CALLER wins. `program-vreg-classes` reconstructs
+      ;; classes by scanning Lmach for (op v sc ...), and lower.ss hardcodes
+      ;; `raw-word` on a tail call's result vreg -- so a procedure returning a
+      ;; double had one class here and another in the allocator, which had put
+      ;; it in an xmm. The return move then emitted `mov rax, xmm4`. Two tables
+      ;; that disagree is worse than either, so the authoritative one -- the one
+      ;; the allocator used -- is threaded in.
+      (parameterize ((current-vreg-classes
+                      (let ((given (current-vreg-classes)))
+                        (if (and given (> (vector-length (hashtable-keys given)) 0))
+                            given
+                            (program-vreg-classes p)))))
         (list 'selected (selector-name sel) entry
               (map (lambda (lb) (list (car lb) (select-block sel (cadr lb)))) blocks)))))
   )

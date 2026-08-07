@@ -243,10 +243,14 @@
      (not (memq 'v-idx (let flat ((x x86-body))
                          (cond ((pair? x) (append (flat (car x)) (flat (cdr x))))
                                ((symbol? x) (list x)) (else '()))))))
+;; The trailing move before the return is the RETURN PLACEMENT -- fsgnj.d into
+;; fa0, movsd into xmm0. Lmach's `(ret v)` carries no storage class, so the rule
+;; reads it from `current-vreg-classes`; without it every function returned
+;; whatever was already in the return register.
 (ck! "RV64 needed three instructions for the indexed load x86-64 folds into one"
-     (and (= (length x86-body) 7) (= (length rv-body) 7)
-          (equal? (map car rv-body) '(addi mul add slli add fld jalr))
-          (equal? (map car x86-body) '(mov mov imul mov add movsd ret))))
+     (and (= (length x86-body) 8) (= (length rv-body) 8)
+          (equal? (map car rv-body) '(addi mul add slli add fld fsgnj.d jalr))
+          (equal? (map car x86-body) '(mov mov imul mov add movsd movsd ret))))
 
 ;; --- what binutils reads back ---------------------------------------------
 

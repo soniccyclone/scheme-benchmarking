@@ -300,9 +300,24 @@
     `((bne ,(car srcs) zero ,(cadr srcs))
       (jal zero ,(caddr srcs))))
 
+  ;; The returned value has to reach the return register, and the class decides
+  ;; which -- a0 or fa0. Lmach's `(ret v)` carries no storage class, which is
+  ;; why this used to emit a bare return and leave the move to "a calling
+  ;; convention pass". There is no such pass, so every function returned
+  ;; whatever was already in a0.
   (define (r:ret dst sc srcs)
-    ;; See note 4 at the top: no class for the returned vreg, so no move.
-    `((jalr zero ra 0)))
+    (if (null? srcs)
+        `((jalr zero ra 0))
+        (let* ((v (car srcs)) (c (vreg-class v)))
+          (unless c
+            (error 'rv64-select
+                   "the returned vreg has no storage class, so nothing says whether it goes to a0 or fa0"
+                   v))
+          (if (eq? c 'raw-f64)
+              `((fsgnj.d ,(return-register callconv-rv64 c) ,v ,v)
+                (jalr zero ra 0))
+              `((addi ,(return-register callconv-rv64 c) ,v 0)
+                (jalr zero ra 0))))))
 
   ;; --- calls ----------------------------------------------------------------
   ;;

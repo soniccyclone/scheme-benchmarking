@@ -119,13 +119,29 @@
       (error who "a call needs a callee" srcs))
     (values (car srcs) (cdr srcs)))
 
-  ;; `(call dst sc f a b c ...)`. `dst` and `sc` are here for the caller's
-  ;; symmetry with every other rule; nothing is emitted for them, because the
-  ;; result placement is `call-result-pins` rather than an instruction.
+  ;; `(call dst sc f a b c ...)`.
+  ;;
+  ;; The result move used to be omitted here, on the reasoning that placement
+  ;; belongs to the allocator as a precoloring constraint rather than to an
+  ;; instruction. `call-result-pins` expresses that constraint and nothing ever
+  ;; consumed it, so `dst` was left holding whatever was in it before the call.
+  ;;
+  ;; That is not a missing optimisation. Every call in the program returned
+  ;; garbage: nbody's `(fx> (length args) 1)` compared an uninitialised register
+  ;; against 1, took the wrong branch, and reached a runtime routine that only
+  ;; exists on the dead branch.
+  ;;
+  ;; A move is the right mechanism anyway. Precoloring would pin `dst` to the
+  ;; return register for its whole live range, which is a caller-saved register
+  ;; on both targets, so anything living past the next call would have to move
+  ;; out regardless.
   (define (call-sequence cc em dst sc srcs)
     (let-values (((callee args) (split-callee 'call-sequence srcs)))
       (append (plan-instrs cc em (call-plan cc callee args 0))
-              ((call-emitter-call em) callee))))
+              ((call-emitter-call em) callee)
+              (if (and dst sc)
+                  ((call-emitter-move em) sc dst (return-register cc sc))
+                  '()))))
 
   ;; A tail call is a JUMP. Not a call followed by a return: that pushes a
   ;; return address, and proper tail calls are the one performance guarantee

@@ -19,7 +19,7 @@
 (library (sonic regalloc)
   (export allocate live-intervals live-intervals/arch physical? label-operand?
           allocate-program allocate-functions live-intervals/cfg
-          partition-into-functions
+          partition-into-functions call-positions
           instr-def instr-uses transfer-uses transfer-targets
           make-alloc-result alloc-result? alloc-result-map
           alloc-result-spills alloc-result-arch)
@@ -369,9 +369,59 @@
   ;; Allocate over a whole CFG. This is what a real program goes through;
   ;; `allocate` remains for single-block fixtures.
   (define (allocate-program arch blocks classes)
-    (allocate/intervals arch (live-intervals/cfg blocks arch) classes))
+    (allocate/intervals* arch (live-intervals/cfg blocks arch) classes
+                         (call-positions blocks)))
+
+  ;; The instruction positions at which a call happens, in the same numbering
+  ;; `live-intervals/cfg` uses.
+  ;;
+  ;; A TAIL call is not one of these. It is a jump: control never comes back, so
+  ;; nothing is live across it.
+  (define (call-positions blocks)
+    (let ((acc '()) (pos 0))
+      (for-each
+       (lambda (b)
+         (let* ((blk (cadr b)) (instrs (cadr blk)) (t (caddr blk))
+                (tail (and (pair? instrs)
+                           (eq? (car t) 'ret)
+                           (let ((last (car (reverse instrs))))
+                             (and (eq? (car last) 'call)
+                                  (eq? (cadr last) (cadr t))
+                                  last)))))
+           (for-each (lambda (i)
+                       (when (and (eq? (car i) 'call) (not (eq? i tail)))
+                         (set! acc (cons pos acc)))
+                       (set! pos (+ pos 1)))
+                     instrs)
+           (set! pos (+ pos 1))))       ; the transfer occupies a position
+       blocks)
+      (reverse acc)))
 
   (define (allocate/intervals arch ivals classes)
+    (allocate/intervals* arch ivals classes '()))
+
+  ;; `calls` are positions where every allocatable register is destroyed.
+  ;;
+  ;; Our own convention saves nothing: a called function uses the whole pool.
+  ;; So a value live ACROSS a call cannot stay in a register, and an allocator
+  ;; that does not know this hands out a register that the callee overwrites --
+  ;; which is not a slow program, it is a wrong one. nbody's `pos`, `vel` and
+  ;; `mass` are exactly this: defined in the entry block, live across the calls
+  ;; to `init!` and `offset-momentum!`, and clobbered by them. The first thing
+  ;; downstream to notice was a type check, since what came back was no longer
+  ;; a tagged pointer.
+  ;;
+  ;; Spilling them is the blunt answer and it is the right one here: designating
+  ;; some registers callee-saved would need the prologue to know which the
+  ;; function uses, and it would buy nothing in the loops, which contain no
+  ;; calls -- every loop back edge is a TAIL call, which is a jump.
+  (define (allocate/intervals* arch ivals classes calls)
+    (let ((crosses-call?
+           (lambda (iv)
+             (exists (lambda (c) (and (< (cadr iv) c) (>= (caddr iv) c))) calls))))
+      (allocate/scan arch ivals classes crosses-call?)))
+
+  (define (allocate/scan arch ivals classes crosses-call?)
     (let* ([ivals ivals]
            [assign (make-eq-hashtable)]
            [spills '()]
@@ -400,6 +450,14 @@
                              (hashtable-set! free dsc (cons dr (hashtable-ref free dsc '()))))
                            (expire (cdr as) keep))]
                         [else (expire (cdr as) (cons (car as) keep))]))])
+                (if (crosses-call? iv)
+                    ;; No register at all: a call destroys the whole pool, so
+                    ;; this value has to live in the frame across it. Not the
+                    ;; eviction path -- evicting someone else would still leave
+                    ;; this one in a register the callee overwrites.
+                    (begin
+                      (set! spills (cons v spills))
+                      (scan (cdr is) still-active))
                 (let ([pool (hashtable-ref free sc '())])
                   (if (null? pool)
                       ;; SPILL. Poletto & Sarkar spill the active interval with
@@ -443,5 +501,5 @@
                         (check-assignment! arch sc r)
                         (hashtable-set! assign v r)
                         (hashtable-set! free sc (cdr pool))
-                        (scan (cdr is) (cons iv still-active)))))))))))
+                        (scan (cdr is) (cons iv still-active))))))))))))
   )

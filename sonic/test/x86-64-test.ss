@@ -204,6 +204,7 @@
     (define (name) (symbol->string m))
     (cond
      ((eq? m 'ret) "ret")
+     ((eq? m 'syscall) "syscall")
      ((memq m '(jmp call))
       (string-append (name) " .+" (number->string (+ 5 (cadr (car ops))))))
      ((memq m jcc-mnemonics)
@@ -296,6 +297,13 @@
     (andpd xmm0 xmm3)
     (xorpd xmm2 (mem rip #f 1 32))          ; the pooled mask, RIP-relative
     (andpd xmm11 (mem rip #f 1 16))
+    ;; tagging, shifts, and the kernel boundary
+    (or rbx (imm 1))
+    (or r13 (imm 1))
+    (or r14 r8)
+    (sar rbx (imm 3))
+    (shr r13 (imm 3))
+    (syscall)
     ;; the type check's tag mask
     (and rbx (imm 7))
     (and r13 (imm 7))                       ; REX.B on the immediate form

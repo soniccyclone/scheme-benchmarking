@@ -11,12 +11,17 @@
 (ck! "x86-64: 8 value, 4 raw, 15 float (rax and xmm15 reserved as scratch)"
      (and (= (value-count arch-x86-64) 8) (= (raw-count arch-x86-64) 4)
           (= (float-count arch-x86-64) 15)))
-(ck! "rv64: 14 value, 9 raw, 31 float (t0, t1, ft11 reserved as scratch)"
-     (and (= (value-count arch-rv64) 14) (= (raw-count arch-rv64) 9)
-          (= (float-count arch-rv64) 31)))
-(ck! "RV64 still has more than twice x86-64's raw registers after reservation"
+;; Three scratch registers per file on RV64, one per file on x86-64, and the
+;; counts are forced by the ISAs rather than chosen. RV64 is load/store, so a
+;; spilled operand must be reloaded into a register, and its arithmetic is
+;; three-address, so one instruction can have three spilled operands at once.
+;; x86-64 is two-address and reads memory directly, so one scratch covers it.
+(ck! "rv64: 14 value, 8 raw, 29 float (t0-t2 and ft9-ft11 reserved as scratch)"
+     (and (= (value-count arch-rv64) 14) (= (raw-count arch-rv64) 8)
+          (= (float-count arch-rv64) 29)))
+(ck! "RV64 still has twice x86-64's raw registers after reservation"
      (and (> (value-count arch-rv64) (value-count arch-x86-64))
-          (> (raw-count arch-rv64) (* 2 (raw-count arch-x86-64)))))
+          (>= (raw-count arch-rv64) (* 2 (raw-count arch-x86-64)))))
 
 ;; Scratch is NOT allocatable. This is the bug the RV64 agent found: it used t0
 ;; as an address temporary while t0 sat at the head of the allocatable raw pool,
@@ -105,22 +110,22 @@
 (let* ([defs (map (lambda (i)
                     (list 'const (string->symbol (string-append "w" (number->string i)))
                           'raw-word i))
-                  (iota 8))]
+                  (iota 7))]
        [names (map (lambda (i) (string->symbol (string-append "w" (number->string i))))
-                   (iota 8))]
-       ;; one instruction using all nine at once: now they overlap
+                   (iota 7))]
+       ;; one instruction using all of them at once: now they overlap
        [many (append defs (list (append '(add sink raw-word) names)))]
        [cls (make-eq-hashtable)])
   (hashtable-set! cls 'sink 'raw-word)
   (for-each (lambda (i)
               (hashtable-set! cls (string->symbol (string-append "w" (number->string i)))
                               'raw-word))
-            (iota 9))
+            (iota 7))
   (let ([r (allocate arch-x86-64 many cls)])
-    (ck! "x86-64 spills with 8 simultaneous raw words plus a sink: it has 4"
+    (ck! "x86-64 spills with 7 simultaneous raw words plus a sink: it has 4"
          (not (null? (alloc-result-spills r)))))
   (let ([r (allocate arch-rv64 many cls)])
-    (ck! "RV64 does NOT spill the same program: 8 words plus a sink fit in 9"
+    (ck! "RV64 does NOT spill the same program: 7 words plus a sink fit in 8"
          (null? (alloc-result-spills r)))))
 
 ;; --- a physical name in an operand slot is NOT a vreg ----------------------

@@ -57,9 +57,14 @@
      (and (= 4 (arg-register-count ccx 'tagged))
           (= 4 (arg-register-count ccx 'raw-word))
           (= 8 (arg-register-count ccx 'raw-f64))))
-(ck! "rv64 has 8 tagged, 5 raw and 8 float argument registers"
+(ck! "rv64 has 8 tagged, 4 raw and 8 float argument registers"
      (and (= 8 (arg-register-count ccr 'tagged))
-          (= 5 (arg-register-count ccr 'raw-word))
+          ;; Four, not five: t2 joined t0/t1 as a scratch register. RV64's
+          ;; three-address arithmetic can put three spilled operands on one
+          ;; instruction, and being load/store it cannot leave any of them in
+          ;; memory, so it needs three scratches per file where x86-64 needs
+          ;; one.
+          (= 4 (arg-register-count ccr 'raw-word))
           (= 8 (arg-register-count ccr 'raw-f64))))
 
 (ck! "argument numbering is per class: the first tagged and the first raw

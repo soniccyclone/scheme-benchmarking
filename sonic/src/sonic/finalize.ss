@@ -147,8 +147,8 @@
        (if (eq? sc 'raw-f64) `((fsd ,reg sp ,off)) `((sd ,reg sp ,off))))
      (lambda (bytes) (if (zero? bytes) '() `((addi sp sp ,(- bytes)))))
      (lambda (bytes) (if (zero? bytes) '() `((addi sp sp ,bytes))))
-     '(t0 t1)
-     '(ft11)
+     '(t0 t1 t2)
+     '(ft9 ft10 ft11)
      ;; RV64 is load/store: no arithmetic instruction reads memory, so every
      ;; spilled operand costs a scratch. That is the trade the ISA makes, and it
      ;; is why RV64 reserves two integer scratches where x86-64 reserves one.

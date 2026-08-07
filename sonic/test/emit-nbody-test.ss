@@ -64,6 +64,14 @@
               boundary))
 
 ;; Every label referenced by the finalized listing but not defined in it.
+;; Pool entries are labels too, but they are defined by `extra-labels` at
+;; assembly time rather than by appearing in the listing -- a constant is not an
+;; instruction, so it has no position the label resolver could derive. Stubbing
+;; them would emit a `ret` where a double belongs.
+(define (pool-label? s)
+  (let ((n (symbol->string s)))
+    (and (> (string-length n) 6) (string=? (substring n 0 6) "%pool+"))))
+
 (define (undefined-labels arch body)
   (let ((defined (filter symbol? body)) (refs '()))
     (let walk ((x body))
@@ -79,18 +87,24 @@
                       (cdr x)))))
     (let loop ((r refs) (acc '()))
       (cond ((null? r) acc)
-            ((or (memq (car r) defined) (memq (car r) acc)) (loop (cdr r) acc))
+            ((or (memq (car r) defined) (memq (car r) acc) (pool-label? (car r)))
+             (loop (cdr r) acc))
             (else (loop (cdr r) (cons (car r) acc)))))))
 
 (define (build target arch sel ret)
-  (parameterize ((current-litpool (make-pool)))
+  ;; The allocator's class table is the authoritative one; selection must
+  ;; read the same one or the return move cannot tell rax from xmm0.
+  (parameterize ((current-litpool (make-pool)) (current-vreg-classes classes))
     (let* ((selected (select-program sel prog))
            (fns (finalize-program target arch selected (cadr prog) (caddr prog) classes))
            (body (apply append (map finalized-listing fns)))
            (undef (undefined-labels arch body))
            (listing (append body (apply append (map (lambda (s) (cons s ret)) undef))))
+           (extra (map (lambda (l) (cons (pool-label (lit-offset l)) (lit-offset l)))
+                       (pool-entries (current-litpool))))
            (o (assemble-function target 'nbody listing
-                                 (list (cons 'constants (pool-bytes (current-litpool)))))))
+                                 (list (cons 'constants (pool-bytes (current-litpool)))
+                                       (cons 'extra-labels extra)))))
       (list o fns undef))))
 
 (define (report target arch sel ret)

@@ -68,10 +68,19 @@
 
 ;; The middle instruction is now the dst = src1 case, which the rule emits as a
 ;; bare destructive operate. So the whole fixup costs two moves and no more.
+;; The trailing `movsd xmm0, v-r` is the RETURN MOVE: Lmach's `(ret v)` carries
+;; no storage class, so the rule reads it from `current-vreg-classes` and puts a
+;; double in xmm0. Without it every function returned whatever was already in
+;; the return register.
 (ck! "selection turns it into movsd/subsd/movsd, with subsd reading v-x"
-     (equal? (cadr (car (cadddr (select-program x86-64-selector fixed))))
-             '((movsd xmm15 v-a) (subsd xmm15 v-x) (movsd v-x xmm15)
-               (movsd v-r v-x) (ret))))
+     (parameterize ((current-vreg-classes
+                     (let ((h (make-eq-hashtable)))
+                       (for-each (lambda (v) (hashtable-set! h v 'raw-f64))
+                                 '(v-a v-b v-x v-r))
+                       h)))
+       (equal? (cadr (car (cadddr (select-program x86-64-selector fixed))))
+               '((movsd xmm15 v-a) (subsd xmm15 v-x) (movsd v-x xmm15)
+                 (movsd v-r v-x) (movsd xmm0 v-r) (ret)))))
 
 ;; The scratch is a physical register, so the output is still valid Lmach and
 ;; still passes back through the grammar. A datum that merely looks right is not
@@ -127,10 +136,18 @@
      (equal? (instrs-of (twoaddr arch-rv64 aliased))
              '((sub v-x raw-f64 v-a v-x) (move v-r raw-f64 v-x))))
 
+;; The second fsgnj.d is the RETURN MOVE -- `fmv.d fa0, v-r` -- for the same
+;; reason as on x86-64: the class comes from `current-vreg-classes`.
 (ck! "and the RV64 selector consumes the aliased form directly"
-     (equal? (cadr (car (cadddr (select-program rv64-selector
-                                               (twoaddr arch-rv64 aliased)))))
-             '((fsub.d v-x v-a v-x) (fsgnj.d v-r v-x v-x) (jalr zero ra 0))))
+     (parameterize ((current-vreg-classes
+                     (let ((h (make-eq-hashtable)))
+                       (for-each (lambda (v) (hashtable-set! h v 'raw-f64))
+                                 '(v-a v-b v-x v-r))
+                       h)))
+       (equal? (cadr (car (cadddr (select-program rv64-selector
+                                                 (twoaddr arch-rv64 aliased)))))
+               '((fsub.d v-x v-a v-x) (fsgnj.d v-r v-x v-x)
+                 (fsgnj.d fa0 v-r v-r) (jalr zero ra 0)))))
 
 ;; A back end nobody has written yet must not get a quiet #f here. Guessing
 ;; "three-address" for an unknown target emits wrong code for exactly the case

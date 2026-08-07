@@ -209,7 +209,7 @@
                (cond
                 ((fp? sc)
                  (let ((off (pool-intern-f64! (current-litpool) d)))
-                   `((movsd ,dst (mem rip #f 1 ,off)))))
+                   `((movsd ,dst (mem rip #f 1 (label ,(pool-label off)))))))
                 ;; The empty list is a real Scheme object, not an immediate --
                 ;; see the same case in target-rv64.ss. `r15` holds nil.
                 ((null? d) `((mov ,dst ,(arch-register-for arch-x86-64 'nil))))
@@ -260,8 +260,9 @@
              (let ((a (car srcs))
                    (off (pool-intern-sign-mask! (current-litpool) 'abs)))
                (if (eq? dst a)
-                   `((andpd ,dst (mem rip #f 1 ,off)))
-                   `((movsd ,dst ,a) (andpd ,dst (mem rip #f 1 ,off)))))))
+                   `((andpd ,dst (mem rip #f 1 (label ,(pool-label off)))))
+                   `((movsd ,dst ,a)
+                     (andpd ,dst (mem rip #f 1 (label ,(pool-label off)))))))))
 
      (cons 'sqrt
            (lambda (dst sc srcs)
@@ -348,7 +349,26 @@
      ;; `(ret v)` carries no storage class, so this rule cannot tell whether the
      ;; value should go to rax or to xmm0. The move belongs to a calling
      ;; convention pass that has the function's signature.
-     (cons 'ret (lambda (dst sc srcs) `((ret))))
+     ;; The returned value has to reach the return register, and the class it
+     ;; travels in decides WHICH register -- rax or xmm0. Lmach's `(ret v)`
+     ;; carries no storage class, which is why this rule used to emit a bare
+     ;; `ret` and leave the move to "a calling convention pass". There is no
+     ;; such pass, so every function returned whatever was already in rax.
+     ;;
+     ;; The class IS available: select-program parameterises
+     ;; `current-vreg-classes` over the whole program precisely so a rule can
+     ;; ask. A vreg with no class is a bug, not a default, so it raises.
+     (cons 'ret
+           (lambda (dst sc srcs)
+             (if (null? srcs)
+                 `((ret))
+                 (let* ((v (car srcs)) (c (vreg-class v)))
+                   (unless c
+                     (error 'x86-64-selector
+                            "the returned vreg has no storage class, so nothing says whether it goes to rax or xmm0"
+                            v))
+                   `((,(mov-for c) ,(return-register callconv-x86-64 c) ,v)
+                     (ret))))))
 
      ;; `(chk pn c v* ...)`: the framework hands the check name as `dst` and the
      ;; control as `sc`. `proved` never arrives; select.ss refuses it upstream.

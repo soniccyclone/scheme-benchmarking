@@ -176,8 +176,18 @@
 
   (define (x86-label? o) (and (pair? o) (eq? (car o) 'label)))
 
+  ;; Sizing pass: every label becomes a placeholder of the SAME encoded width
+  ;; it will have once resolved. A RIP displacement is always disp32, so 0 is
+  ;; the right stand-in; a branch is always rel32 for the same reason.
   (define (x86-blank i)
-    (map (lambda (o) (if (x86-label? o) '(rel 0) o)) i))
+    (map (lambda (o)
+           (cond
+            ((x86-label? o) '(rel 0))
+            ((and (pair? o) (eq? (car o) 'mem) (eq? (cadr o) 'rip)
+                  (pair? (list-ref o 4)) (eq? (car (list-ref o 4)) 'label))
+             (list 'mem 'rip #f (cadddr o) 0))
+            (else o)))
+         i))
 
   (define (instruction-size target i)
     (case (check-target 'instruction-size target)
@@ -202,7 +212,25 @@
           (error 'resolve-labels "undefined label" name i)))
     (case target
       ((x86-64)
-       (map (lambda (o) (if (x86-label? o) `(rel ,(- (at (cadr o)) (+ pc size))) o)) i))
+       (map (lambda (o)
+              (cond
+               ((x86-label? o) `(rel ,(- (at (cadr o)) (+ pc size))))
+               ;; A RIP-relative memory operand whose displacement is a LABEL
+               ;; rather than a number. This is how a pooled constant reaches
+               ;; its data: the selector cannot know the address, so it emits
+               ;; the pool entry's label and the displacement is computed here,
+               ;; from the END of the instruction, which is what RIP holds.
+               ;;
+               ;; Without this the displacement stayed at the pool OFFSET --
+               ;; correct only if the pool happened to sit at address zero
+               ;; relative to the next instruction, which it never does. The
+               ;; program assembled and read the wrong eight bytes.
+               ((and (pair? o) (eq? (car o) 'mem) (eq? (cadr o) 'rip)
+                     (pair? (list-ref o 4)) (eq? (car (list-ref o 4)) 'label))
+                (list 'mem 'rip #f (cadddr o)
+                      (- (at (cadr (list-ref o 4))) (+ pc size))))
+               (else o)))
+            i))
       ((rv64)
        (if (memq (car i) rv-branchy)
            (let* ((n (length i)) (t (list-ref i (- n 1))))
@@ -212,9 +240,85 @@
            i))))
 
   ;; -> a list of instructions with every label resolved, in listing order.
-  (define (resolve-labels target listing)
+  (define resolve-labels
+    (case-lambda
+      ((target listing) (resolve-labels target listing '()))
+      ((target listing extra) (resolve-labels* target listing extra))))
+
+  ;; `extra` is ((name . offset-past-the-code) ...): labels for data that is
+  ;; emitted AFTER the instructions and therefore has no position in the
+  ;; listing. The constant pool is the case -- a pooled double is referenced
+  ;; RIP-relative from inside the code and lives immediately past it -- and it
+  ;; cannot be spelled as a listing entry, because the resolver derives a
+  ;; label's address from the sizes of the instructions before it and a
+  ;; constant is not an instruction.
+  ;; --- RV64 branch relaxation ----------------------------------------------
+  ;;
+  ;; A B-type conditional branch reaches +/-4KiB. `jal` reaches +/-1MiB. nbody
+  ;; is 6KB of code, so a branch across the middle of it does not fit, and the
+  ;; encoder correctly refuses rather than truncating the displacement.
+  ;;
+  ;; The fix is the standard one: invert the condition and branch over an
+  ;; unconditional jump.
+  ;;
+  ;;     blt a, b, far        becomes    bge a, b, .skip
+  ;;                                     jal zero, far
+  ;;                                     .skip:
+  ;;
+  ;; It has to ITERATE. Expanding one branch moves everything after it, which
+  ;; can push a second branch out of range, and expanding that moves things
+  ;; again. Displacements only grow, so it settles -- but assuming one pass is
+  ;; how a relaxer emits an out-of-range branch on the second-largest function
+  ;; in a program.
+  (define rv-invert
+    '((beq . bne) (bne . beq) (blt . bge) (bge . blt)
+      (bltu . bgeu) (bgeu . bltu)))
+
+  (define (rv-branch-range? d) (and (<= -4096 d 4094) (even? d)))
+
+  (define (relax-rv64 listing)
+    (define (label-positions xs)
+      (let ((h (make-eq-hashtable)))
+        (let loop ((xs xs) (pc 0))
+          (cond ((null? xs) h)
+                ((symbol? (car xs)) (hashtable-set! h (car xs) pc) (loop (cdr xs) pc))
+                (else (loop (cdr xs) (+ pc 4)))))))
+    (let pass ((xs listing) (n 0))
+      (when (> n 20)
+        (error 'relax-rv64 "branch relaxation did not settle" n))
+      (let* ((pos (label-positions xs))
+             (changed #f)
+             (out
+              (let loop ((ys xs) (pc 0) (acc '()))
+                (cond
+                 ((null? ys) (reverse acc))
+                 ((symbol? (car ys)) (loop (cdr ys) pc (cons (car ys) acc)))
+                 (else
+                  (let* ((i (car ys))
+                         (t (and (memq (car i) rv-branchy)
+                                 (let ((x (list-ref i (- (length i) 1))))
+                                   (and (symbol? x) x))))
+                         (target (and t (hashtable-ref pos t #f))))
+                    (if (and target (assq (car i) rv-invert)
+                             (not (rv-branch-range? (- target pc))))
+                        (let ((skip (string->symbol
+                                     (string-append "%relax" (number->string pc)))))
+                          (set! changed #t)
+                          (loop (cdr ys) (+ pc 8)
+                                (cons skip
+                                      (cons `(jal zero ,t)
+                                            (cons (append
+                                                   (list (cdr (assq (car i) rv-invert)))
+                                                   (list-head (cdr i) (- (length i) 2))
+                                                   (list skip))
+                                                  acc)))))
+                        (loop (cdr ys) (+ pc 4) (cons i acc)))))))))
+        (if changed (pass out (+ n 1)) out))))
+
+  (define (resolve-labels* target listing extra)
     (check-target 'resolve-labels target)
-    (let ((labels (make-eq-hashtable)))
+    (let ((labels (make-eq-hashtable))
+          (listing (if (eq? target 'rv64) (relax-rv64 listing) listing)))
       (let pass1 ((xs listing) (pc 0))
         (cond ((null? xs) 'done)
               ((symbol? (car xs))
@@ -223,6 +327,17 @@
                (hashtable-set! labels (car xs) pc)
                (pass1 (cdr xs) pc))
               (else (pass1 (cdr xs) (+ pc (instruction-size target (car xs)))))))
+      ;; The code's total size is where the trailing data begins.
+      (let ((code-size
+             (let count ((xs listing) (pc 0))
+               (cond ((null? xs) pc)
+                     ((symbol? (car xs)) (count (cdr xs) pc))
+                     (else (count (cdr xs) (+ pc (instruction-size target (car xs)))))))))
+        (for-each (lambda (p)
+                    (when (hashtable-ref labels (car p) #f)
+                      (error 'resolve-labels "label defined twice" (car p)))
+                    (hashtable-set! labels (car p) (+ code-size (cdr p))))
+                  extra))
       (let pass2 ((xs listing) (pc 0) (acc '()))
         (cond ((null? xs) (reverse acc))
               ((symbol? (car xs)) (pass2 (cdr xs) pc acc))
@@ -257,7 +372,7 @@
               (consts (opt 'constants '()))
               (frame-bits (opt 'frame-bits '()))
               (state-of (opt 'state-of (lambda (i n) #f)))
-              (instrs (resolve-labels target listing))
+              (instrs (resolve-labels target listing (opt 'extra-labels '())))
               (e (make-emitter (gcmeta-target-for target) frame-bits)))
          (let loop ((is instrs) (n 0))
            (unless (null? is)

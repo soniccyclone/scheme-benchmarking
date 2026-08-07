@@ -57,6 +57,11 @@
                ;; because a pointer is tagged and nothing strips it before the
                ;; load. See numeric.ss `heap-element-disp`.
                (fld v-val t0 ,heap-element-disp)
+               ;; The return move. Lmach's `(ret v)` carries no class, so this
+               ;; rule reads it from `current-vreg-classes`; a double goes to
+               ;; fa0 via fsgnj.d, which is what `fmv.d` is. Without it the
+               ;; function returned whatever was already in a0.
+               (fsgnj.d fa0 v-val v-val)
                (jalr zero ra 0))))
 
 (define (mnemonics-of instrs) (map car instrs))
@@ -447,8 +452,8 @@
 (when asm-available?
   (let ((ref (assemble-listing "nbody" fixture-listing))
         (ours (encode-listing fixture-listing)))
-    (ck! "nbody's inner loop assembles to 7 rv64gc instructions"
-         (and (= (length ref) 7) (= (length ours) 28)))
+    (ck! "nbody's inner loop assembles to 8 rv64gc instructions"
+         (and (= (length ref) 8) (= (length ours) 32)))
     (ck! "and every byte of it matches binutils"
          (let loop ((rs ref) (i 0))
            (cond ((null? rs) #t)
@@ -461,7 +466,10 @@
                  (else #f))))
     (ck! "the fld is a real double load and the address arithmetic is explicit"
          (equal? (map caddr ref)
-                 '("addi" "mul" "add" "slli" "add" "fld" "jalr")))))
+                 ;; fsgnj.d is the return move: `fmv.d fa0, ft0` is an alias
+                 ;; for it, and binutils prints the real mnemonic under
+                 ;; -M no-aliases.
+                 '("addi" "mul" "add" "slli" "add" "fld" "fsgnj.d" "jalr")))))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
