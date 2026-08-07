@@ -163,6 +163,13 @@ reversal attached, never edited away.
 
 ## Errors found *in the sources*
 
+- **Pentagons Figure 3, now caught by construction rather than by reading.** The defective
+  widening was reconstructed and run against exhaustive concretization: it is **unsound on
+  33,744 pairs through the interval half and 25,216 through the `Sub` half**, and the same
+  harness reports it **clean on all 6,075 monotone-increasing pairs**. That second number is
+  the finding — it is the proof that a naive test suite, which is what a reader would write,
+  would have shipped the bug.
+
 - **ABCD's neutral-cycle rule is unsound as textbooks state it.** "Revisit an active vertex
   at the same slack, conclude true" assumes the cycle you closed was a loop iteration. It
   need not be: an equality edge pair, such as a length and its alias, is a zero-weight

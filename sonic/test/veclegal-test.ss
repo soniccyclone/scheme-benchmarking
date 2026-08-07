@@ -288,8 +288,13 @@
 (define nbody-verdicts (vectorize-legal (nbody-loops)))
 (for-each vl-report nbody-verdicts)
 
+;; Compared as a SET. Loop discovery order is not part of any contract -- it
+;; falls out of how loops.ss walks the letrec graph -- so asserting a sequence
+;; makes this fail on an unrelated change upstream, which it did.
 (check! "all three loops are found"
-        (map vl-loop nbody-verdicts) '(bodies pairs fields))
+        (list-sort (lambda (a b) (string<? (symbol->string a) (symbol->string b)))
+                   (map vl-loop nbody-verdicts))
+        '(bodies fields pairs))
 
 ;; THE ONE THAT MUST BE PERMITTED. Seven doubles per body, one unboxed read, no
 ;; write, no branch, and every check on the access discharged by elide.ss.
