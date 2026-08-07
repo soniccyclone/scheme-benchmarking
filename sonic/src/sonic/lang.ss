@@ -207,8 +207,15 @@
          (primcall pr ([pn* c*] ...) e* ...)
          (begin e* ... e))
       ;; Operands are now atoms only.
+      ;;
+      ;; `tailcall` is an Expr while an ordinary `call` is a SimpleExpr, and the
+      ;; split is the point of ANF rather than an accident. A non-tail call has
+      ;; its result named by the enclosing `let`; a tail call has no result to
+      ;; name because the frame is gone. Without this production a loop written
+      ;; as tail recursion is inexpressible, which is most loops in Scheme.
       (+ (if x e0 e1)
          (let ([x se]) body)
+         (tailcall x x* ...)
          (seq e0 e1)))
     ;; Simple expressions: what may appear on the right of a let.
     (SimpleExpr (se)
