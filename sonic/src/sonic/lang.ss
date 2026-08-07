@@ -12,6 +12,10 @@
 (library (sonic lang)
   (export Lcore unparse-Lcore
           Lanf  unparse-Lanf
+          Lssa  unparse-Lssa
+          Lrepr unparse-Lrepr
+          Lmach unparse-Lmach
+          storage-class? vreg? mach-op?
           primitive? control? policy-name? datum?
           check-name? all-check-names
           prim-checks prim-arity default-controls)
@@ -115,6 +119,37 @@
   (define (all-check-names) check-names)
   (define (policy-name? x) (check-name? x))
 
+  ;; --- storage classes, for Lrepr -------------------------------------------
+  ;; SBCL's IR2 is the reference: values get assigned to a specific storage
+  ;; class and register file, and that assignment is what makes unboxed f64 in
+  ;; registers possible at all.
+  ;;
+  ;; `tagged` and `raw` are not decoration: they ARE the register partition from
+  ;; sonic/doc/register-partition.md, so this is where D21's invariant enters the
+  ;; IR. A `tagged` value may only be allocated to the value class; the
+  ;; collector scavenges that class unconditionally, consulting no metadata.
+  (define storage-classes '(tagged raw-word raw-f64))
+  (define (storage-class? x) (and (memq x storage-classes) #t))
+
+  ;; --- machine-independent lowered ops, for Lmach ---------------------------
+  ;; Deliberately NOT target instructions. This is the last IR both back ends
+  ;; consume, so an op here must be expressible on x86-64 AND RV64. Anything
+  ;; that is not goes in the target-specific selector, not here.
+  (define mach-ops
+    '(add sub mul div neg sqrt abs                  ; arithmetic
+      cmp-lt cmp-le cmp-eq cmp-ge cmp-gt            ; comparison, sets a flag vreg
+      load store                                    ; memory, with a scale
+      move                                          ; data movement
+      branch branch-if jump                         ; control
+      call ret                                      ; calls
+      check-bounds check-type check-overflow))      ; checks not yet elided
+  (define (mach-op? x) (and (memq x mach-ops) #t))
+
+  ;; Virtual registers are symbols; the allocator maps them to real ones under
+  ;; the partition. Kept as symbols rather than a record so fixtures stay
+  ;; writable by hand, which is the whole point of freezing these contracts.
+  (define (vreg? x) (symbol? x))
+
   ;; --- Lcore ----------------------------------------------------------------
   ;; Surface syntax has already been expanded away. Still tree-shaped: operands
   ;; may be arbitrary expressions. A-normalization is a later pass.
@@ -182,4 +217,67 @@
          (lambda (x* ...) body)
          (call x x* ...)
          (primcall pr ([pn* c*] ...) x* ...))))
+
+  ;; --- Lssa -----------------------------------------------------------------
+  ;; Extended SSA. Adds phi at control-flow joins and SIGMA at branch edges.
+  ;;
+  ;; Sigma is what distinguishes e-SSA from plain SSA and it is why ABCD needs
+  ;; this language rather than the previous one: it gives the branch condition a
+  ;; NAME on each edge, so `i < n` on the true edge becomes a fact attached to a
+  ;; variable the analysis can refine. Without it the interval domain cannot see
+  ;; which side of a test it is on.
+
+  (define-language Lssa
+    (extends Lanf)
+    (Expr (e body)
+      (+ (phi ([x* e*] ...) body)
+         ;; (sigma x-out x-in cmp x-other) : x-out is x-in, refined by knowing
+         ;; (cmp x-in x-other) holds on this edge.
+         (sigma x0 x1 pr x2 body))))
+
+  ;; --- Lrepr ----------------------------------------------------------------
+  ;; Storage classes assigned. Every binding now says where its value lives.
+
+  (define-language Lrepr
+    (extends Lssa)
+    (terminals
+      (+ (storage-class (sc))))
+    (Expr (e body)
+      (- (let ([x se]) body))
+      (+ (let ([x sc se]) body))))
+
+  ;; --- Lmach ----------------------------------------------------------------
+  ;; Machine-independent lowered form. Virtual registers, explicit memory ops,
+  ;; a flat instruction list per block. Both back ends consume THIS.
+  ;;
+  ;; An op here must be expressible on x86-64 AND RV64. Anything that is not
+  ;; belongs in the target selector.
+
+  (define-language Lmach
+    (terminals
+      (symbol        (lbl))
+      (vreg          (v))
+      (mach-op       (op))
+      (storage-class (sc))
+      (policy-name   (pn))
+      (control       (c))
+      (datum         (d)))
+    (Prog (prog)
+      (program ([lbl* blk*] ...) lbl))
+    (Block (blk)
+      (block (i* ...) t))
+    (Instr (i)
+      (op v sc v* ...)
+      ;; `const` is a production rather than a mach-op: it takes a datum where
+      ;; every other op takes vregs, so folding it in would make (op v sc ...)
+      ;; ambiguous.
+      (const v sc d)
+      ;; A check that survived to codegen, still carrying WHY. `proved` never
+      ;; reaches here (the elision pass drops it); `unchecked` and `checked` do,
+      ;; and they are distinguishable so the report can say which.
+      (chk pn c v* ...))
+    (Transfer (t)
+      (jump lbl)
+      (branch-if v lbl0 lbl1)
+      (ret v)))
   )

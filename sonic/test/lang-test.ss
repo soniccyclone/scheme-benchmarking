@@ -98,6 +98,35 @@
 (reject! "primcall with non-atomic operands is refused in ANF"
   '(with-output-language (Lanf Expr) `(primcall fl+ ([fp-contract unchecked]) (primcall fl* ([fp-contract unchecked]) a b) c)))
 
+;; --- the downstream IR contracts -------------------------------------------
+;; The contract is that a pass author can CONSTRUCT valid input for their own
+;; stage with no upstream pass in existence. That is what converts the pipeline
+;; from a depth-13 chain into a wide DAG, so it is tested rather than assumed.
+
+(printf "\nDownstream IRs (constructible with no upstream pass):\n")
+
+(ok! "Lssa: sigma names the branch fact ABCD needs"
+     (lambda () (with-output-language (Lssa Expr)
+                  `(sigma i2 i fx< n (phi ([s (quote 0)]) s)))))
+
+(ok! "Lrepr: a binding carries its storage class"
+     (lambda () (with-output-language (Lrepr Expr)
+                  `(let ([t raw-f64 (primcall fl+ ([fp-contract unchecked]) a b)]) t))))
+
+(ok! "Lmach: a whole program, blocks and transfers"
+     (lambda () (with-output-language (Lmach Prog)
+                  `(program ([entry (block ((const v0 raw-word 0)
+                                            (chk bounds-check checked v0 v1)
+                                            (load v2 raw-f64 v1 v0))
+                                           (ret v2))])
+                     entry))))
+
+(reject! "Lmach refuses an op that is not machine-independent"
+  '(with-output-language (Lmach Instr) `(vfmadd231pd v0 raw-f64 v1 v2)))
+
+(reject! "Lrepr refuses a storage class that is not in the partition"
+  '(with-output-language (Lrepr Expr) `(let ([t xmm-hi (quote 1)]) t)))
+
 ;; --- the check vocabulary --------------------------------------------------
 
 (set! checks (+ checks 1))
