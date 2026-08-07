@@ -20,6 +20,8 @@
 (t! "nbody-inner-ssa"   nbody-inner-ssa)
 (t! "nbody-inner-repr"  nbody-inner-repr)
 (t! "nbody-inner-mach"  nbody-inner-mach)
+(t! "store-mach: pins the unused-destination shape" store-mach)
+(t! "flcmp-mach: pins f64 comparison as its own op"  flcmp-mach)
 
 ;; The lowered fixture is E2-LIR's acceptance criterion: BOTH target selectors
 ;; consume this same value, so its shape is a contract.

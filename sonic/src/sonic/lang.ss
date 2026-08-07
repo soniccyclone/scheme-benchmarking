@@ -137,9 +137,21 @@
   ;; that is not goes in the target-specific selector, not here.
   (define mach-ops
     '(add sub mul div neg sqrt abs                  ; arithmetic
-      cmp-lt cmp-le cmp-eq cmp-ge cmp-gt            ; comparison, sets a flag vreg
+      ;; Comparison is split by OPERAND type, not result type. The `sc` a
+      ;; selection rule receives is the class of the boolean RESULT, so a single
+      ;; cmp-lt cannot tell whether it is comparing two fixnums or two flonums,
+      ;; and the two need different instructions: x86-64 wants cmp + signed
+      ;; setcc for integers and ucomisd + UNSIGNED setcc for doubles, because
+      ;; IEEE comparison sets the carry flag. Without the split, flonum
+      ;; comparison is unselectable.
+      cmp-lt cmp-le cmp-eq cmp-ge cmp-gt            ; integer comparison
+      fcmp-lt fcmp-le fcmp-eq fcmp-ge fcmp-gt       ; f64 comparison
       load store                                    ; memory, with a scale
       move                                          ; data movement
+      ;; int<->float conversion. fl->fx and fx->fl were in the primitive table
+      ;; with no mach op to select from, so fcvt.d.l was encodable and
+      ;; unreachable.
+      cvt-f64-from-int cvt-int-from-f64
       branch branch-if jump                         ; control
       call ret                                      ; calls
       check-bounds check-type check-overflow))      ; checks not yet elided

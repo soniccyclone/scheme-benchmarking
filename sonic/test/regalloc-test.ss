@@ -8,15 +8,36 @@
                 (display "  FAIL ") (display name) (newline))))
 
 ;; --- the partition tables match the design doc ---------------------------
-(ck! "x86-64: 8 value, 5 raw, 16 float"
-     (and (= (value-count arch-x86-64) 8) (= (raw-count arch-x86-64) 5)
-          (= (float-count arch-x86-64) 16)))
-(ck! "rv64: 14 value, 11 raw, 32 float"
-     (and (= (value-count arch-rv64) 14) (= (raw-count arch-rv64) 11)
-          (= (float-count arch-rv64) 32)))
-(ck! "RV64 gives 75% more value and 120% more raw registers than x86-64"
-     (and (= (value-count arch-rv64) (+ (value-count arch-x86-64) 6))
+(ck! "x86-64: 8 value, 4 raw, 15 float (rax and xmm15 reserved as scratch)"
+     (and (= (value-count arch-x86-64) 8) (= (raw-count arch-x86-64) 4)
+          (= (float-count arch-x86-64) 15)))
+(ck! "rv64: 14 value, 9 raw, 31 float (t0, t1, ft11 reserved as scratch)"
+     (and (= (value-count arch-rv64) 14) (= (raw-count arch-rv64) 9)
+          (= (float-count arch-rv64) 31)))
+(ck! "RV64 still has more than twice x86-64's raw registers after reservation"
+     (and (> (value-count arch-rv64) (value-count arch-x86-64))
           (> (raw-count arch-rv64) (* 2 (raw-count arch-x86-64)))))
+
+;; Scratch is NOT allocatable. This is the bug the RV64 agent found: it used t0
+;; as an address temporary while t0 sat at the head of the allocatable raw pool,
+;; so linear scan would have handed it out and the address computation would
+;; have clobbered a live value.
+(ck! "scratch registers are outside every allocatable pool"
+     (let ([out? (lambda (a)
+                   (let ([sc (arch-scratch a)])
+                     (not (exists (lambda (r) (or (memq r (arch-value a))
+                                                  (memq r (arch-raw a))
+                                                  (memq r (arch-float a))))
+                                  sc))))])
+       (and (out? arch-x86-64) (out? arch-rv64))))
+(ck! "a scratch register classifies as scratch, not raw or float"
+     (and (eq? (reg-class arch-rv64 't0) 'scratch)
+          (eq? (reg-class arch-rv64 'ft11) 'scratch)
+          (eq? (reg-class arch-x86-64 'rax) 'scratch)))
+(ck! "and no storage class may be assigned to one"
+     (and (not (assignment-ok? arch-rv64 'raw-word 't0))
+          (not (assignment-ok? arch-rv64 'raw-f64 'ft11))
+          (not (assignment-ok? arch-x86-64 'raw-word 'rax))))
 
 ;; classes are disjoint: a register in two classes would make the collector's
 ;; unconditional scavenge of the value class unsound.
@@ -84,9 +105,9 @@
 (let* ([defs (map (lambda (i)
                     (list 'const (string->symbol (string-append "w" (number->string i)))
                           'raw-word i))
-                  (iota 9))]
+                  (iota 8))]
        [names (map (lambda (i) (string->symbol (string-append "w" (number->string i))))
-                   (iota 9))]
+                   (iota 8))]
        ;; one instruction using all nine at once: now they overlap
        [many (append defs (list (append '(add sink raw-word) names)))]
        [cls (make-eq-hashtable)])
@@ -96,10 +117,10 @@
                               'raw-word))
             (iota 9))
   (let ([r (allocate arch-x86-64 many cls)])
-    (ck! "x86-64 spills with 9 simultaneous raw words: it has only 5"
+    (ck! "x86-64 spills with 8 simultaneous raw words plus a sink: it has 4"
          (not (null? (alloc-result-spills r)))))
   (let ([r (allocate arch-rv64 many cls)])
-    (ck! "RV64 does NOT spill the same program: it has 11"
+    (ck! "RV64 does NOT spill the same program: 8 words plus a sink fit in 9"
          (null? (alloc-result-spills r)))))
 
 (newline)

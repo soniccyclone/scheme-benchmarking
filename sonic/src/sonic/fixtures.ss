@@ -13,7 +13,8 @@
 ;;; cannot be tested without another incomplete bead is drawn wrong.
 
 (library (sonic fixtures)
-  (export nbody-inner-anf
+  (export store-mach flcmp-mach
+          nbody-inner-anf
           nbody-inner-ssa
           nbody-inner-repr
           nbody-inner-mach
@@ -99,6 +100,31 @@
                                         ([type-check proved] [bounds-check proved])
                                         b idx)])
              val)))))
+
+  ;; PINS the shape of `store`. The x86-64 agent had to guess this and said so:
+  ;; `store` has no result, but the Instr production makes the destination slot
+  ;; mandatory, and `live-intervals` in regalloc.ss treats that slot as a
+  ;; DEFINITION. Putting the stored value there would record a def where there
+  ;; is a use and shorten its live range, which is a miscompile. So the slot is
+  ;; unused and the value rides in the sources.
+  (define (store-mach)
+    (with-output-language (Lmach Prog)
+      `(program
+        ([entry (block ((const v-i raw-word 0)
+                        (store v-unused raw-f64 v-b v-i v-val))
+                       (ret v-unused))])
+        entry)))
+
+  ;; PINS flonum comparison as distinct from integer comparison. Both targets
+  ;; need different instructions for it and a single cmp-lt could not say which.
+  (define (flcmp-mach)
+    (with-output-language (Lmach Prog)
+      `(program
+        ([entry (block ((fcmp-lt v-t raw-word v-a v-b))
+                       (branch-if v-t then else))]
+         [then (block () (ret v-a))]
+         [else (block () (ret v-b))])
+        entry)))
 
   ;; Lowered. THE fixture both target selectors must consume, per E2-LIR's
   ;; acceptance criterion.
