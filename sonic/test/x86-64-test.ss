@@ -71,9 +71,9 @@
 
 ;; A suppressed check must stay suppressed.
 (ck! "an `unchecked` chk emits nothing"
-     (null? (select-instr x86-64-selector '(chk bounds-check unchecked v0 v1))))
+     (null? (select-instr x86-64-selector '(chk bounds-check unchecked 0 v0 v1))))
 (ck! "a `checked` chk emits a compare and a trap branch"
-     (equal? (select-instr x86-64-selector '(chk bounds-check checked v0 v1))
+     (equal? (select-instr x86-64-selector '(chk bounds-check checked 0 v0 v1))
              '((cmp v0 v1) (jge (label sonic-bounds-error)))))
 
 ;; --- allocate the fixture onto real registers ------------------------------

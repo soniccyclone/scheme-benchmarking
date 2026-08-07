@@ -287,7 +287,7 @@
         (and ,t0 ,t0 ,t1)
         (blt ,t0 zero ,(rv64-trap-label 'overflow-check)))))
 
-  (define (emit-check who name srcs)
+  (define (emit-check who name srcs tag)
     (case name
       ((bounds-check)
        (arity-check! who 2 srcs)
@@ -296,22 +296,27 @@
        (arity-check! who 3 srcs)
        (overflow-check-seq (car srcs) (cadr srcs) (caddr srcs)))
       ((type-check)
-       ;; A type check needs the expected TAG, and Lmach's `chk` carries the
-       ;; check's NAME and nothing else. numeric.ss fixes a 3-bit primary tag
-       ;; with fixnum = 000, so the sequence would be `andi t0, v, 7` against
-       ;; some constant, and we have no way to learn which constant. Refuse.
-       (error who
-              "a type check needs the expected tag and Lmach's `chk` carries only the check name; there is no operand to compare against"
-              srcs))
+       ;; Lmach's chk NOW carries the expected tag, so this is selectable:
+       ;; mask the primary tag out of the value and compare it against the
+       ;; constant. numeric.ss fixes a 3-bit primary tag with fixnum = 000.
+       (unless (= (length srcs) 1)
+         (error who "type check expects one value" srcs))
+       (let ((v (car srcs)))
+         `((andi t0 ,v 7)
+           (addi t1 zero ,tag)
+           (bne t0 t1 %type-error))))
       (else (error who "no RV64 sequence for this check" name))))
 
   ;; (chk pn c v* ...) arrives as dst = pn, sc = c. select-instr already refuses
   ;; `proved`, so only checked and unchecked reach here.
+  ;; srcs is (expected-tag operand ...). Lmach's chk now carries the tag, so a
+  ;; type check finally has a constant to compare against.
   (define (r:chk pn c srcs)
-    (case c
-      ((unchecked) '())    ; the policy suppressed it; emitting it would be wrong
-      ((checked)   (emit-check 'rv64-select pn srcs))
-      (else (error 'rv64-select "unexpected control on a chk" c))))
+    (let ((tag (car srcs)) (ops (cdr srcs)))
+      (case c
+        ((unchecked) '())  ; the policy suppressed it; emitting it would be wrong
+        ((checked)   (emit-check 'rv64-select pn ops tag))
+        (else (error 'rv64-select "unexpected control on a chk" c)))))
 
   ;; The same three checks also exist as mach-ops.
   (define (check-op name)

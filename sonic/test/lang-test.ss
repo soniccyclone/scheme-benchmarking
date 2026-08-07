@@ -155,7 +155,7 @@
 (ok! "Lmach: a whole program, blocks and transfers"
      (lambda () (with-output-language (Lmach Prog)
                   `(program ([entry (block ((const v0 raw-word 0)
-                                            (chk bounds-check checked v0 v1)
+                                            (chk bounds-check checked 0 v0 v1)
                                             (load v2 raw-f64 v1 v0))
                                            (ret v2))])
                      entry))))

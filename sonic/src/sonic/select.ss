@@ -80,7 +80,7 @@
 
   (define (select-instr sel i)
     ;; `i` is an unparsed Lmach Instr. Three shapes: (op dst sc src ...),
-    ;; (const dst sc datum), (chk name control src ...).
+    ;; (const dst sc datum), (chk name control expected-tag src ...).
     (let ((head (car i)))
       (cond
        ((eq? head 'const)
@@ -99,6 +99,8 @@
                  i))
         (let ((r (rule-for sel 'chk)))
           (unless r (error 'select-instr "target has no rule for chk" (selector-name sel)))
+          ;; The expected tag is passed through as the first source, so a rule
+          ;; that needs it has it and one that does not can ignore it.
           (r (cadr i) (caddr i) (cdddr i))))
        (else
         (let ((r (rule-for sel head)))

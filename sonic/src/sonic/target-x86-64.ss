@@ -132,7 +132,7 @@
   ;; A check that survived the analysis. It branches to a runtime trap; the trap
   ;; labels are resolved with everything else.
 
-  (define (check-rule pn srcs)
+  (define (check-rule pn srcs tag)
     (case pn
       ((bounds-check)
        (unless (= (length srcs) 2)
@@ -266,12 +266,18 @@
      ;; the report can count it, so it must emit nothing. Emitting it would
      ;; quietly reinstate a check the programmer switched off, which is the
      ;; whole mechanism D5 exists to give them.
+     ;; srcs is (expected-tag operand ...). The tag is meaningful only for
+     ;; type-check, where it is the constant the value's tag is compared
+     ;; against; every other check passes 0. Splitting it here rather than
+     ;; leaving it in the operand list means check-rule keeps the operand
+     ;; positions it already documents.
      (cons 'chk
            (lambda (pn c srcs)
-             (case c
-               ((unchecked) '())
-               ((checked) (check-rule pn srcs))
-               (else (error 'x86-64-selector "unexpected check control" pn c)))))))
+             (let ((tag (car srcs)) (ops (cdr srcs)))
+               (case c
+                 ((unchecked) '())
+                 ((checked) (check-rule pn ops tag))
+                 (else (error 'x86-64-selector "unexpected check control" pn c))))))))
 
   (define x86-64-selector
     (make-selector 'x86-64 x86-64-rules arch-x86-64))

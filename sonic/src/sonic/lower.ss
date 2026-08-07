@@ -51,6 +51,10 @@
       (flvector-ref . load) (flvector-set! . store)
       (vector-ref . load) (vector-set! . store)))
 
+  ;; numeric.ss fixes a 3-bit tag scheme with fixnum at 000. A type check needs
+  ;; to name which tag it expects; the other checks have no such constant.
+  (define (expected-tag name) (if (eq? name 'type-check) 1 0))
+
   (define (op-for pr)
     (let ((p (assq pr prim->op)))
       (unless p (error 'lower "primitive has no machine op" pr))
@@ -85,7 +89,11 @@
                (loop (cdr cs) out))
               ((checked)
                (lower-stats-emitted-set! stats (+ 1 (lower-stats-emitted stats)))
-               (loop (cdr cs) (cons `(chk ,name checked ,@srcs) out)))
+               ;; The expected tag rides on the instruction. Only type-check
+               ;; uses it; everything else passes 0, because there is no
+               ;; constant a bounds or overflow check compares against.
+               (loop (cdr cs)
+                     (cons `(chk ,name checked ,(expected-tag name) ,@srcs) out)))
               (else (error 'lower "unknown control" ctl)))))))
 
   ;; --- the walk -------------------------------------------------------------

@@ -101,23 +101,29 @@
 ;; RISC-V has no flags register. numeric.ss describes a checked fx+ as "an add
 ;; followed by jo"; here it is four instructions and two scratches.
 (ck! "an overflow check becomes the sign-comparison idiom, not a flag test"
-     (equal? (sel1 '(chk overflow-check checked v-sum v-a v-b))
+     (equal? (sel1 '(chk overflow-check checked 0 v-sum v-a v-b))
              '((xor t0 v-a v-sum)
                (xor t1 v-b v-sum)
                (and t0 t0 t1)
                (blt t0 zero trap-overflow-check))))
 ;; One unsigned compare catches the negative index too.
 (ck! "a bounds check is a single bgeu"
-     (equal? (sel1 '(chk bounds-check checked v-i v-n))
+     (equal? (sel1 '(chk bounds-check checked 0 v-i v-n))
              '((bgeu v-i v-n trap-bounds-check))))
 (ck! "an unchecked check emits nothing, because the policy suppressed it"
-     (null? (sel1 '(chk bounds-check unchecked v-i v-n))))
+     (null? (sel1 '(chk bounds-check unchecked 0 v-i v-n))))
 
 ;; The refusals. Each names a thing Lmach does not carry rather than guessing.
 (ck! "a flonum constant is REFUSED: there is no literal pool to put it in"
      (raises-naming? (lambda () (sel1 '(const v-t raw-f64 1.5))) "literal pool"))
-(ck! "a type check is REFUSED: `chk` names the check but not the expected tag"
-     (raises-naming? (lambda () (sel1 '(chk type-check checked v-a))) "expected tag"))
+;; UPDATED: Lmach's chk now carries the expected TAG, so a type check is
+;; selectable. It masks the primary tag out of the value and compares it against
+;; the constant; numeric.ss fixes a 3-bit primary tag with fixnum = 000.
+(ck! "a type check now SELECTS, masking the tag and comparing it"
+     (let ((out (sel1 '(chk type-check checked 1 v-a))))
+       (and (equal? (car out) '(andi t0 v-a 7))
+            (equal? (cadr out) '(addi t1 zero 1))
+            (eq? (car (caddr out)) 'bne))))
 
 ;;; ==========================================================================
 ;;; 2. Register numbering

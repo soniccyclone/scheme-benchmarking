@@ -395,7 +395,16 @@
       ;; A check that survived to codegen, still carrying WHY. `proved` never
       ;; reaches here (the elision pass drops it); `unchecked` and `checked` do,
       ;; and they are distinguishable so the report can say which.
-      (chk pn c v* ...))
+      ;; A check that survived to codegen, carrying WHY (the control) and, for
+      ;; a type check, WHAT TAG was expected.
+      ;;
+      ;; The tag is not optional decoration. `chk type-check` names the check
+      ;; but, without it, there is no constant to compare the value against, so
+      ;; a surviving type check was unselectable on BOTH targets: numeric.ss
+      ;; fixes a 3-bit tag scheme, the constant exists, and `chk` simply could
+      ;; not say which one. `d` is that tag, and it is meaningless for the
+      ;; other checks, which pass 0.
+      (chk pn c d v* ...))
     (Transfer (t)
       (jump lbl)
       (branch-if v lbl0 lbl1)
