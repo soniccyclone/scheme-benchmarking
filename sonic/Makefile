@@ -26,6 +26,10 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/select-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/regalloc-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/essa-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss
