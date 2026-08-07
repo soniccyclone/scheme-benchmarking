@@ -105,10 +105,63 @@
           ((eq? j 'jbe) 'ja) ((eq? j 'ja) 'jbe)
           (else (error 'invert "no inverse for" j))))
 
+  ;; --- recover the sub-then-neg the two-address pass discards ---------------
+  ;;
+  ;; twoaddr.ss rewrites EVERY non-commutative op whose dst aliases src2 into
+  ;; move / operate / move, uniformly. For integer `sub` that is one instruction
+  ;; more than necessary: `sub dst, src1` followed by `neg dst` computes
+  ;; src1 - src2 into dst directly, and is exact in two's complement.
+  ;;
+  ;; The uniform rewrite was the right call in that pass: the alternative is a
+  ;; per-target, per-storage-class table of which cases a rule can serve in
+  ;; place, which duplicates the rule table's knowledge in a second file that
+  ;; will drift from it. Here, over the selected stream, the pattern is simply
+  ;; visible.
+  ;;
+  ;; NOT applied to floating point. `sub` then `neg` on doubles is not the same
+  ;; as subtraction: negating zero gives -0.0, so (0.0 - 0.0) would come out
+  ;; -0.0 instead of 0.0. That is exactly the divergence SPEC.md records and
+  ;; bench/nbody's oracle would catch it.
+  (define (fuse-sub-neg instrs stats)
+    (let loop ((is instrs) (out '()))
+      (cond
+       ((null? is) (reverse out))
+       ((and (pair? is) (pair? (cdr is)) (pair? (cddr is))
+             ;; move t <- src1 ; sub t <- t src2 ; move dst <- t
+             (eq? (car (car is)) 'mov)
+             (eq? (car (cadr is)) 'sub)
+             (eq? (car (caddr is)) 'mov)
+             (let ((t (cadr (car is))))
+               (and (eq? (cadr (cadr is)) t)
+                    (eq? (caddr (caddr is)) t)
+                    ;; the temp must be dead after
+                    (not (used-later? t (cdddr is))))))
+        (let* ((src1 (caddr (car is)))
+               (src2 (cadddr (cadr is)))
+               (dst  (cadr (caddr is))))
+          ;; Three instructions become two: the temp existed only to hold src1
+          ;; while the destructive sub ran, and if it is dead afterwards the
+          ;; destination can play that role itself.
+          ;;
+          ;;   mov t, src1 ; sub t, t, src2 ; mov dst, t
+          ;;   ->  mov dst, src1 ; sub dst, src2
+          ;;
+          ;; NOT `sub` then `neg`. That form is for the case where dst ALIASES
+          ;; src2, where `sub dst, src1` computes src2 - src1 and the neg
+          ;; corrects it. Applying it here would compute src2 - src1 and leave
+          ;; it negated wrongly, and it would be three instructions rather than
+          ;; two. Writing it that way first, and having no test that could tell
+          ;; the difference, is why this comment exists.
+          (peephole-stats-fused-set! stats (+ 1 (peephole-stats-fused stats)))
+          (loop (cdddr is)
+                (cons (list 'sub dst src2)
+                      (cons (list 'mov dst src1) out)))))
+       (else (loop (cdr is) (cons (car is) out))))))
+
   (define (peephole target instrs)
     (let ((stats (make-peephole-stats 0)))
       (values (if (needs-fusion? target)
-                  (fuse-compare-branch instrs stats)
+                  (fuse-sub-neg (fuse-compare-branch instrs stats) stats)
                   instrs)
               stats)))
   )

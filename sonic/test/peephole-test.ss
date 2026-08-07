@@ -62,6 +62,33 @@
              (begin (set! failures (+ failures 1))
                     (display "  FAIL unknown target silently skipped\n"))))
 
+
+;; --- sub through a dead temp collapses ------------------------------------
+;; twoaddr.ss emits move/operate/move uniformly. When the temp is dead the
+;; destination can play its role, and three instructions become two.
+(let* ([in '((mov v-t v-a) (sub v-t v-t v-b) (mov v-d v-t) (ret v-d))]
+       [r (run 'x86-64 in)])
+  (ck! "mov/sub/mov through a dead temp becomes mov/sub"
+       (equal? (car r) '((mov v-d v-a) (sub v-d v-b) (ret v-d))))
+  (ck! "which is TWO instructions, not three"
+       (= (length (car r)) 3)))   ; two plus the ret
+
+;; The operand order is the thing to get wrong, and it computes the negation of
+;; the right answer when you do. src1 must survive as the minuend.
+(let* ([in '((mov v-t v-a) (sub v-t v-t v-b) (mov v-d v-t) (ret v-d))]
+       [r (run 'x86-64 in)]
+       [sub (cadr (car r))])
+  (ck! "the destination is loaded with src1, and src2 is subtracted from it"
+       (and (equal? (car (car r)) '(mov v-d v-a))
+            (equal? sub '(sub v-d v-b))))
+  (ck! "no spurious neg is emitted: that form is for dst aliasing src2"
+       (not (memq 'neg (map car (car r))))))
+
+;; Live temp: the collapse would delete a value someone reads.
+(let* ([in '((mov v-t v-a) (sub v-t v-t v-b) (mov v-d v-t) (ret v-t))]
+       [r (run 'x86-64 in)])
+  (ck! "NO collapse when the temp is still live" (equal? (car r) in)))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))
