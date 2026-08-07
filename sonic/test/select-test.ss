@@ -68,6 +68,29 @@
       (begin (set! failures (+ failures 1))
              (display "  FAIL a discharged check was silently re-emitted\n"))))
 
+;; --- a rule that raises is not coverage -----------------------------------
+;; Both target agents used raising rules for what they could not implement yet,
+;; which is honest, but selector-covers? checked rule PRESENCE and so reported
+;; a target as ready when it would die on the first such op.
+(define owing
+  (make-selector 'owing
+    (list (cons '%owed '(mul))            ; declares what it cannot do yet
+          (cons 'const (lambda (d sc srcs) `((t.li ,d ,(car srcs)))))
+          (cons 'mul   (lambda (d sc srcs) (error 'mul "needs a literal pool")))
+          (cons 'add   (lambda (d sc srcs) `((t.add ,d ,@srcs))))
+          (cons 'load  (lambda (d sc srcs) `((t.ld ,d ,@srcs))))
+          (cons 'ret   (lambda (d sc srcs) `((t.ret ,@srcs)))))
+    'toy-partition))
+
+(ck! "a declared-owed op is reported as MISSING, not covered"
+     (memq 'mul (missing-rules owing (nbody-inner-mach))))
+(ck! "so the target does not claim to cover the program"
+     (not (selector-covers? owing (nbody-inner-mach))))
+(ck! "and selector-owed says exactly what it still owes"
+     (equal? (selector-owed owing) '(mul)))
+(ck! "a target owing nothing is unaffected"
+     (and (null? (selector-owed toy)) (selector-covers? toy (nbody-inner-mach))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))

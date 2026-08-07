@@ -23,7 +23,7 @@
 (library (sonic select)
   (export make-selector selector? selector-name selector-rules selector-partition
           select-instr select-block select-program
-          selector-covers?  missing-rules)
+          selector-covers?  missing-rules selector-owed)
   ;; (chezscheme) rather than the (rnrs ...) pieces: nanopass needs Chez's
   ;; syntax anyway, and importing both collides on syntax-rules.
   (import (chezscheme)
@@ -50,13 +50,29 @@
             ((pair? x) (walk (car x) (walk (cdr x) acc)))
             (else acc))))
 
+  ;; A rule that RAISES is not coverage. Both target agents used raising rules
+  ;; for the things they could not implement yet -- flonum constants needing a
+  ;; literal pool, integer division needing the rdx:rax pair -- which is honest,
+  ;; but it made `selector-covers?` overstate readiness: it checked rule
+  ;; PRESENCE, not success.
+  ;;
+  ;; A target declares those explicitly instead, so "I have no rule" and "I have
+  ;; a rule that cannot run yet" are different answers to a caller bringing up a
+  ;; second back end.
+  (define (selector-owed sel)
+    (let ((p (assq '%owed (selector-rules sel))))
+      (if p (cdr p) '())))
+
   (define (missing-rules sel prog)
     (let ((ops (filter mach-op? (program-ops prog))))
-      (let loop ((os ops) (missing '()))
-        (cond ((null? os) (reverse missing))
-              ((or (rule-for sel (car os)) (memq (car os) missing))
-               (loop (cdr os) missing))
-              (else (loop (cdr os) (cons (car os) missing)))))))
+      (let ((owed (selector-owed sel)))
+        (let loop ((os ops) (missing '()))
+          (cond ((null? os) (reverse missing))
+                ((memq (car os) missing) (loop (cdr os) missing))
+                ;; declared-owed counts as missing, because it is
+                ((memq (car os) owed) (loop (cdr os) (cons (car os) missing)))
+                ((rule-for sel (car os)) (loop (cdr os) missing))
+                (else (loop (cdr os) (cons (car os) missing))))))))
 
   (define (selector-covers? sel prog) (null? (missing-rules sel prog)))
 
