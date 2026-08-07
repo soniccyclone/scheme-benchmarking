@@ -197,5 +197,28 @@
        (guard (e (#t (heap-exhausted? e))) (nursery-alloc! n 100 HDR) #f)))
 
 (newline)
+;; --- the aliasing, asserted on the INSTRUCTIONS ---------------------------
+;; The behavioural tests above show the two exhaust together. This shows WHY:
+;; both paths end in the same comparison against the same limit. The allocation
+;; pointer grows up and the remembered-set pointer grows down, so `add` and
+;; `sub` are the only difference, and the store buffer's dedicated limit
+;; register and its bound check are both free because there is only one.
+(let* ([a (alloc-fast-path-mnemonics)]
+       [r (rs-push-path-mnemonics)]
+       [shared (filter (lambda (x) (memq x r)) a)])
+  (ck! "both paths end in the same comparison"
+          (and (memq 'bgt a) (memq 'bgt r) #t))
+  (ck! "allocation grows UP and the remembered set grows DOWN"
+          (and (memq 'add a) (memq 'sub r)
+               (not (memq 'sub a)) (not (memq 'add r))))
+  ;; If someone gives the store buffer its own limit register, this breaks:
+  ;; the paths stop sharing and the second bound check reappears.
+  (ck! "neither path carries a second limit load the other lacks"
+          (= (length (filter (lambda (x) (eq? x 'load)) a))
+             (length (filter (lambda (x) (eq? x 'load)) r)))))
+
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
-(if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))
+(if (> failures 0) (exit 1) (begin (display "PASS") 
+
+
+(newline) (exit 0)))
