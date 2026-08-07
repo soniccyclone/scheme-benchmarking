@@ -41,7 +41,18 @@
     ;; failures the shipped program did not have.
     (compile-sonic-to-file src externs exe)
     (system (string-append "chmod +x " exe))
-    (let ((code (system (string-append exe " > " tmp ".out 2>/dev/null"))))
+    ;; TIMEOUT, because this compiler emits programs that loop forever.
+    ;;
+    ;; That is not hypothetical: a self-tail-call once skipped its epilogue and
+    ;; leaked a frame per iteration, and a lost loop-control value turned an
+    ;; ordinary `when` into a spin. A bare `(system exe)` on either of those
+    ;; hangs the suite with no output and no clue -- which is what had runs
+    ;; being launched on top of each other in the first place.
+    ;;
+    ;; 20s is far longer than any program here needs; exit 124 says "hung",
+    ;; which is a result rather than a silence.
+    (let ((code (system (string-append "timeout --signal=KILL 20 "
+                                       exe " > " tmp ".out 2>/dev/null"))))
       (values code (read-doubles (string-append tmp ".out"))))))
 
 ;; `display` writes a double's eight raw bytes -- see runtime.ss on why that is

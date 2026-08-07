@@ -307,7 +307,23 @@
       ;; argument in position i IS the parameter in position i, and a single
       ;; pass would ask for a class still being computed. Classes are only ever
       ;; joined upward, and the lattice has three points, so it settles.
-      (let fix ()
+      ;; BOUNDED, like every other fixpoint in this compiler.
+      ;;
+      ;; The termination argument is real -- classes only ever join upward
+      ;; through a three-point lattice, so each round either adds information or
+      ;; stops -- but an argument is not a guard. `resolve-parallel-copy` had an
+      ;; equally real argument, with an unstated precondition, and when that
+      ;; precondition broke it consed until a single process held 31GB and the
+      ;; OOM killer took the machine.
+      ;;
+      ;; A pass that cannot make progress must FAIL. The ceiling is generous
+      ;; enough that only a genuinely stuck fixpoint reaches it, and it names
+      ;; itself so the next reader knows which pass to look at.
+      (let fix ((round 0))
+        (when (> round 200)
+          (error 'select-representations
+                 "storage-class fixpoint did not settle; this is a bug in the pass, not in the program"
+                 round))
         (let ((changed #f))
           (for-each (lambda (l)
                       (when (note! (car l) (class-of-simple (cdr l)))
@@ -342,7 +358,7 @@
                       (when (and pc (symbol? a) (note! a pc)) (set! changed #t))))
                   ps (cdr site)))))
            sites)
-          (when changed (fix))))
+          (when changed (fix (+ round 1)))))
       classes))
 
   ;; The class of an Lrepr/Lssa SimpleExpr given as a datum. A bare variable is

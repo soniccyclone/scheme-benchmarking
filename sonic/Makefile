@@ -1,15 +1,44 @@
 # SonicScheme
+#
+# NOTHING RUNS ON THE HOST. `make test` builds the image if needed and runs the
+# suite inside it, under the memory and wall-clock limits in
+# ../docker-compose.yml.
+#
+# That is not tidiness. An unguarded loop in a compiler pass once consed until a
+# single Chez process held 31GB -- the whole WSL VM -- and the OOM killer took
+# everything else with it, three times. A limit you have to remember to apply is
+# a limit that fails exactly when a bug is already eating the machine. The
+# container carries its own.
+#
+# `test-suite` is the real work and refuses to run outside a container, so there
+# is ONE way to run the tests and no second path for anyone to reach for.
 
 CHEZ ?= scheme
 LIBS  = --libdirs src:vendor/nanopass
+COMPOSE ?= docker compose -f ../docker-compose.yml
 
-.PHONY: help test clean
+.PHONY: help test test-suite shell clean
 
 help:
-	@echo "make test   run the test suite"
-	@echo "make clean  remove compiled artifacts"
+	@echo "make test        run the suite in its container (the only way)"
+	@echo "make shell       a shell in that container"
+	@echo "make test-suite  the suite itself -- refuses to run outside a container"
+	@echo "make clean       remove compiled artifacts"
 
 test:
+	@$(COMPOSE) run --rm sonic make test-suite
+
+shell:
+	@$(COMPOSE) run --rm --entrypoint /bin/bash sonic
+
+# The guard is mechanical rather than a comment, because a comment is advice and
+# this needs to be a wall: an agent reaching for `make test-suite` on the host is
+# reaching for the thing that took the machine down.
+test-suite:
+	@test -f /.dockerenv || { \
+	  echo "REFUSED: run 'make test' -- the suite runs in a container so that a"; \
+	  echo "runaway pass dies at 8g instead of taking the host with it."; \
+	  exit 1; }
 	@$(CHEZ) -q $(LIBS) --script test/lang-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/read-test.ss

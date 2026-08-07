@@ -1,0 +1,40 @@
+# Where the resource limits live.
+#
+# They are here rather than in a Makefile on purpose: a `docker run --memory=8g`
+# buried in a shell string is a limit someone forgets to copy, and the failure
+# mode of forgetting is the one that took the machine down. In a compose file
+# they are configuration, under version control, and they apply to every
+# invocation without anyone choosing to apply them.
+#
+# TRAP, and it is a quiet one: `deploy.resources.limits.memory` is IGNORED by
+# `docker compose` outside Swarm. Written that way this file would run with no
+# memory limit at all and say nothing. The service-level `mem_limit` and
+# `memswap_limit` keys below are the ones actually honoured.
+
+services:
+  sonic:
+    build:
+      context: .
+    image: sonic-scheme:dev
+    init: true                 # tini as PID 1: signals forwarded, zombies reaped
+
+    # 8g is far above what a real compile needs -- the suite runs in well under
+    # a gigabyte -- and far below what it takes to hurt the host, so it only
+    # ever fires on a runaway.
+    mem_limit: 8g
+    # MUST equal mem_limit. Left unset, Docker defaults swap to 2x memory, and
+    # the container thrashes its way to the same death instead of dying at the
+    # limit. This one line is the difference between a fast failure and a slow
+    # one.
+    memswap_limit: 8g
+
+    cpus: 8
+    pids_limit: 512            # a runaway that forks rather than conses
+
+    volumes:
+      - .:/work
+    working_dir: /work/sonic
+
+    # Raw doubles on stdout (see sonic/src/sonic/runtime.ss), so nothing here
+    # may allocate a tty and mangle them.
+    tty: false

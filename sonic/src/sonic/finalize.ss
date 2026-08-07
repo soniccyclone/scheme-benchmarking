@@ -381,6 +381,21 @@
       ;; called it. It runs here, after allocation, because that is the first
       ;; point at which the physical registers are known -- which is precisely
       ;; the reason callseq.ss could not do it.
+      ;; A move touching a SCRATCH register is not part of a parallel copy, and
+      ;; feeding one in is what took the VM down.
+      ;;
+      ;; The scratch is what breaks a cycle, so it has to be free. A move whose
+      ;; destination is the scratch makes the cycle-breaker rewrite that move
+      ;; into `(scratch . scratch)` -- a self-move it then spins on forever,
+      ;; consing. And such moves are common right here: the two-address fixup
+      ;; routes a left operand through xmm15, and if that sequence happens to
+      ;; sit just before a call it lands in this run.
+      ;;
+      ;; They are also not parallel in the first place. The fixup's moves are
+      ;; SEQUENTIAL by construction -- the whole point is `mov tmp, a` then
+      ;; operate on tmp -- so reordering them is wrong even when it terminates.
+      (define (scratchy? r) (eq? (reg-class arch r) 'scratch))
+
       (define (mov-of i)
         (and (pair? i)
              (memq (car i) '(mov movsd addi fsgnj.d))
@@ -388,6 +403,7 @@
                ((mov movsd)
                 (and (= (length i) 3) (symbol? (cadr i)) (symbol? (caddr i))
                      (reg-class arch (cadr i)) (reg-class arch (caddr i))
+                     (not (scratchy? (cadr i))) (not (scratchy? (caddr i)))
                      (cons (cadr i) (caddr i))))
                ;; RV64 spells a register move `addi rd, rs, 0` and a float one
                ;; `fsgnj.d rd, rs, rs`.
@@ -395,9 +411,13 @@
                 (and (= (length i) 4) (eqv? (cadddr i) 0)
                      (symbol? (cadr i)) (symbol? (caddr i))
                      (reg-class arch (cadr i)) (reg-class arch (caddr i))
+                     (not (scratchy? (cadr i))) (not (scratchy? (caddr i)))
                      (cons (cadr i) (caddr i))))
                ((fsgnj.d)
                 (and (= (length i) 4) (eq? (caddr i) (cadddr i))
+                     (symbol? (cadr i)) (symbol? (caddr i))
+                     (reg-class arch (cadr i)) (reg-class arch (caddr i))
+                     (not (scratchy? (cadr i))) (not (scratchy? (caddr i)))
                      (cons (cadr i) (caddr i))))
                (else #f))))
 
@@ -406,19 +426,39 @@
         (and (pair? i)
              (memq (car i) '(call jmp jal jalr ret))))
 
+      ;; The EPILOGUE sits between the argument moves and the jump on any
+      ;; function that has a frame, and it must not break the run.
+      ;;
+      ;; This is not a detail. Treating it as an ordinary instruction meant the
+      ;; argument setup of every function with a spill slot was left
+      ;; unresolved -- which is every interesting function, since a function
+      ;; with no frame is one with nothing live across a call. The functions
+      ;; that appeared to work were the ones with no frame.
+      (define (frame-adjust? i)
+        (and (pair? i)
+             (or (and (memq (car i) '(add sub)) (eq? (cadr i) 'rsp))
+                 (and (eq? (car i) 'addi) (eq? (cadr i) 'sp)))))
+
       (define (resolve-argument-moves xs)
-        (let loop ((xs xs) (run '()) (out '()))
+        (let loop ((xs xs) (run '()) (held '()) (out '()))
           (cond
-           ((null? xs) (append (reverse out) (reverse run)))
-           ((mov-of (car xs)) (loop (cdr xs) (cons (car xs) run) out))
+           ((null? xs) (append (reverse out) (reverse held) (reverse run)))
+           ((mov-of (car xs))
+            ;; A move after the epilogue would read a released frame, so the
+            ;; held epilogue stays after the whole run.
+            (loop (cdr xs) (cons (car xs) run) held out))
+           ((frame-adjust? (car xs))
+            (loop (cdr xs) run (cons (car xs) held) out))
            ((call-or-jump? (car xs))
             ;; The run before a transfer is the argument setup.
             (let-values (((resolved st)
                           (resolve-moves-in-block arch (reverse run) mov-of emit-mov)))
-              (loop (cdr xs) '() (cons (car xs) (append (reverse resolved) out)))))
+              (loop (cdr xs) '() '()
+                    (cons (car xs)
+                          (append (reverse held) (reverse resolved) out)))))
            (else
-            ;; Anything else ends the run and the run stays as written.
-            (loop (cdr xs) '() (cons (car xs) (append run out)))))))
+            (loop (cdr xs) '() '()
+                  (cons (car xs) (append held run out)))))))
 
       (define (emit-mov dst src)
         ;; `float-register?`, not membership in the allocatable pool: a cycle is

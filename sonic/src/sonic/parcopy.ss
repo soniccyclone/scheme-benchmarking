@@ -47,27 +47,53 @@
   ;; moves : ((dst . src) ...) all read from the pre-copy state.
   ;; scratch-for : a procedure from a register to a scratch of the same class.
   ;; Returns a list of (dst . src) pairs to be emitted IN ORDER.
+  ;; The termination argument in the header is CONDITIONAL, and the condition
+  ;; was neither stated nor checked. It cost 31GB and a VM.
+  ;;
+  ;; Breaking a cycle rewrites `(dst . src)` into `(dst . tmp)`. If `dst` is
+  ;; ALREADY the scratch for its class, that is `(tmp . tmp)` -- a self-move.
+  ;; Self-moves are filtered once, at entry, so this one is never removed: its
+  ;; destination is its own source, so it is never `ready`; the cycle branch
+  ;; fires again; `scratch-for` returns the same register; the state is
+  ;; identical. One cons per iteration, forever. The Linux OOM killer caught it
+  ;; at 31,204,756 kB resident.
+  ;;
+  ;; Two guards, and both are needed. The filter now runs every round, so a
+  ;; self-move created here is removed rather than spun on. And the iteration
+  ;; count is bounded, because a pass that cannot make progress must FAIL, not
+  ;; allocate -- a compiler that hangs is a compiler you debug by rebooting.
   (define (resolve-parallel-copy moves scratch-for stats)
-    ;; Self-moves are no-ops and would otherwise look like one-element cycles.
-    (let loop ((pending (filter (lambda (m) (not (eq? (car m) (cdr m)))) moves))
-               (out '()))
-      (if (null? pending)
-          (reverse out)
-          (let* ((srcs (map cdr pending))
-                 (ready (filter (lambda (m) (not (memq (car m) srcs))) pending)))
-            (if (pair? ready)
-                ;; This destination is nobody's source, so writing it is safe.
-                (let ((m (car ready)))
-                  (loop (drop-move m pending) (cons m out)))
-                ;; Everything left is in a cycle. Break one edge through the
-                ;; scratch register for that class, and the cycle becomes a
-                ;; chain the ready rule can then unwind.
-                (let* ((m (car pending))
-                       (tmp (scratch-for (cdr m))))
-                  (parcopy-stats-cycles-broken-set!
-                   stats (+ 1 (parcopy-stats-cycles-broken stats)))
-                  (loop (cons (cons (car m) tmp) (drop-move m pending))
-                        (cons (cons tmp (cdr m)) out))))))))
+    (define (no-self ms) (filter (lambda (m) (not (eq? (car m) (cdr m)))) ms))
+    ;; Each round either emits a move or breaks a cycle, and both strictly
+    ;; reduce the pending set, so 2n is a real ceiling rather than a guess.
+    (let ((limit (* 2 (+ 1 (length moves)))))
+      (let loop ((pending (no-self moves)) (out '()) (n 0))
+        (when (> n limit)
+          (error 'resolve-parallel-copy
+                 "parallel copy made no progress; this is a bug in the pass, not in the program"
+                 moves pending))
+        (if (null? pending)
+            (reverse out)
+            (let* ((srcs (map cdr pending))
+                   (ready (filter (lambda (m) (not (memq (car m) srcs))) pending)))
+              (if (pair? ready)
+                  ;; This destination is nobody's source, so writing it is safe.
+                  (let ((m (car ready)))
+                    (loop (drop-move m pending) (cons m out) (+ n 1)))
+                  ;; Everything left is in a cycle. Break one edge through the
+                  ;; scratch register for that class, and the cycle becomes a
+                  ;; chain the ready rule can then unwind.
+                  (let* ((m (car pending))
+                         (tmp (scratch-for (cdr m))))
+                    (when (eq? (car m) tmp)
+                      (error 'resolve-parallel-copy
+                             "a move's destination is the scratch register that would break its cycle; the scratch must be free, so this move never belonged in a parallel copy"
+                             m))
+                    (parcopy-stats-cycles-broken-set!
+                     stats (+ 1 (parcopy-stats-cycles-broken stats)))
+                    (loop (no-self (cons (cons (car m) tmp) (drop-move m pending)))
+                          (cons (cons tmp (cdr m)) out)
+                          (+ n 1)))))))))
 
   ;; Chez already binds `remq`, so this is named for what it does here.
   (define (drop-move x xs) (filter (lambda (y) (not (eq? x y))) xs))

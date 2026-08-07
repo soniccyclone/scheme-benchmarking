@@ -1,0 +1,40 @@
+# The suite, in the same container it runs in locally.
+#
+# "Same" is the whole point. Eighty-one x86-64 instructions are byte-verified
+# against `gas` and the RISC-V gate reads our own output back through
+# `riscv64-linux-gnu-objdump`; those tests compare us against a toolchain, so a
+# different toolchain here and there would turn a version difference into what
+# looks like a compiler bug. The image pins Chez, binutils, the RISC-V
+# cross-binutils and qemu, so a green run means the same thing in both places.
+#
+# The job also carries the same containment. `timeout-minutes` is the CI
+# equivalent of the ENTRYPOINT's `timeout`, and the container keeps its memory
+# limit, so a runaway pass fails one job instead of wedging a runner.
+
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive        # sonic/vendor/nanopass
+
+      - name: Build the toolchain image
+        run: docker compose build
+
+      # The limits come from docker-compose.yml, so they are the same numbers
+      # the developer ran under. Nothing is duplicated here to drift.
+      - name: Run the suite
+        run: docker compose run --rm sonic make test-suite
+
+      - name: RISC-V smoke gate
+        run: docker compose run --rm --workdir /work sonic bash harness/smoke-riscv.sh
