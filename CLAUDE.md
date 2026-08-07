@@ -29,6 +29,36 @@ any fresh clone or `git submodule update --init`, re-apply it. `make guard` does
 `git push origin main` on **this** repository is fine and expected; the rule is about
 remotes Nathan does not own.
 
+## HARD RULE: nothing runs on the host
+
+**Every Chez invocation, every test, and every binary this compiler emits runs
+inside the container.** `make test` from `sonic/` is the entry point;
+`make test-suite` refuses to run outside a container on purpose.
+
+This is not hygiene. On 2026-08-07 an unguarded loop in a compiler pass consed
+once per iteration until a single `scheme` process held 31 GB — the whole WSL
+VM — and the kernel OOM killer took everything else down with it, three times
+in one session:
+
+```
+Out of memory: Killed process 29843 (scheme)
+  total-vm:38339816kB anon-rss:31204756kB
+```
+
+This compiler is a dozen fixpoints and hand-rolled worklists. "A pass that does
+not terminate" is a *class* of bug here, not an incident, and it will recur. A
+limit you have to remember to apply fails exactly when a bug is already eating
+the machine, so the limit lives in `docker-compose.yml` and applies whether
+anyone remembers it or not — 8 GB, no swap, 512 pids, `timeout` as PID 1.
+
+**Do not add a second way to run things.** No `ulimit` wrapper, no bare
+`scheme` in a script, no "just this once on the host to check something". A
+prior fix did exactly that and was deleted, because two mechanisms for one
+guarantee is how a later agent picks the one without the guard.
+
+If you need a one-off: `make shell` from `sonic/`, or
+`docker compose run --rm --entrypoint bash sonic -c '...'`.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
 
@@ -87,13 +117,22 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Build & Test
 
-_Add your build and test commands here_
+All of these run in the container. See the hard rule above.
 
 ```bash
-# Example:
-# npm install
-# npm test
+cd sonic
+make test          # the whole suite, in its container
+make shell         # a shell in that container
+tools/diff-run.sh  # one source under SonicScheme AND Chez, answers compared
+                   #   (re-execs itself inside the container; reads the
+                   #    program on stdin)
 ```
+
+The container pins the toolchain, and that is load-bearing rather than tidy:
+81 x86-64 instructions are byte-verified against `gas`, and the RISC-V smoke
+gate reads our own output back through `riscv64-linux-gnu-objdump`. Those tests
+compare us against a toolchain, so an unpinned one turns a version difference
+into what looks like a compiler bug.
 
 ## Architecture Overview
 

@@ -19,6 +19,19 @@
 #         echo '(define (main) ...) (main)' | tools/diff-run.sh
 set -u
 here="$(cd "$(dirname "$0")/.." && pwd)"
+
+# NOTHING RUNS ON THE HOST -- see the hard rule in CLAUDE.md. This script both
+# compiles (a Chez process, the thing that once reached 31GB and took the VM)
+# and EXECUTES a binary this compiler emitted, and this compiler demonstrably
+# emits programs that loop forever. Both belong inside the limits.
+#
+# Re-exec rather than document, because a script that merely says "run me in a
+# container" is a script someone runs on the host. `-T` keeps stdin attached,
+# which matters: the program under test arrives on it.
+if [ ! -f /.dockerenv ]; then
+  exec docker compose -f "$here/../docker-compose.yml" run --rm -T \
+       --entrypoint bash sonic tools/diff-run.sh "$@"
+fi
 work="${TMPDIR:-/tmp}/sonic-diff.$$"
 mkdir -p "$work"
 trap 'rm -rf "$work"' EXIT

@@ -458,6 +458,15 @@
                           (append (reverse held) (reverse resolved) out)))))
            (else
             (loop (cdr xs) '() '()
+                  ;; No reversing here, and the asymmetry with the call branch
+                  ;; above is correct rather than an oversight.
+                  ;;
+                  ;; `out` is built so that `(reverse out)` is the final
+                  ;; sequence, and `run` and `held` are accumulated by `cons` in
+                  ;; that same reversed convention -- so they splice in as-is.
+                  ;; The call branch reverses because `resolved` comes back from
+                  ;; `resolve-moves-in-block` in FINAL order, which is the other
+                  ;; convention.
                   (cons (car xs) (append held run out)))))))
 
       (define (emit-mov dst src)

@@ -1,5 +1,62 @@
 # Agent Instructions
 
+## HARD RULE: never push to an upstream you do not own
+
+**Do not push, open a pull request, or otherwise send changes to any third-party
+repository. Ever. Ask Nathan first, every time, without exception.**
+
+This repository vendors `sonic/vendor/nanopass` as a git submodule pointing at
+`github.com/nanopass/nanopass-framework-scheme`. That is somebody else's project. We
+consume it read-only.
+
+**If you find yourself needing to modify nanopass, STOP.** The answer is never "push a fix
+upstream" and never "commit into the submodule and push". The answer is to change *how we
+vendor it* — a fork under Nathan's account, or a plain in-tree copy — and that is Nathan's
+decision to make, not yours. Bring him the problem, not a pull request.
+
+A local guard is in place so an accidental push fails loudly rather than succeeding:
+
+```
+git -C sonic/vendor/nanopass config remote.origin.pushurl \
+    "NO-PUSH-UPSTREAM--ask-Nathan-first--see-CLAUDE.md"
+```
+
+That guard lives in `.git/modules/...`, which is **local config and is not cloned**. After
+any fresh clone or `git submodule update --init`, re-apply it. `make guard` does this.
+
+`git push origin main` on **this** repository is fine and expected; the rule is about
+remotes Nathan does not own.
+
+## HARD RULE: nothing runs on the host
+
+**Every Chez invocation, every test, and every binary this compiler emits runs
+inside the container.** `make test` from `sonic/` is the entry point;
+`make test-suite` refuses to run outside a container on purpose.
+
+This is not hygiene. On 2026-08-07 an unguarded loop in a compiler pass consed
+once per iteration until a single `scheme` process held 31 GB — the whole WSL
+VM — and the kernel OOM killer took everything else down with it, three times
+in one session:
+
+```
+Out of memory: Killed process 29843 (scheme)
+  total-vm:38339816kB anon-rss:31204756kB
+```
+
+This compiler is a dozen fixpoints and hand-rolled worklists. "A pass that does
+not terminate" is a *class* of bug here, not an incident, and it will recur. A
+limit you have to remember to apply fails exactly when a bug is already eating
+the machine, so the limit lives in `docker-compose.yml` and applies whether
+anyone remembers it or not — 8 GB, no swap, 512 pids, `timeout` as PID 1.
+
+**Do not add a second way to run things.** No `ulimit` wrapper, no bare
+`scheme` in a script, no "just this once on the host to check something". A
+prior fix did exactly that and was deleted, because two mechanisms for one
+guarantee is how a later agent picks the one without the guard.
+
+If you need a one-off: `make shell` from `sonic/`, or
+`docker compose run --rm --entrypoint bash sonic -c '...'`.
+
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
 > **Architecture in one line:** Issues live in a local Dolt database
