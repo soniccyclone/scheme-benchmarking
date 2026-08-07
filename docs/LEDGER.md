@@ -54,6 +54,18 @@ reversal attached, never edited away.
 
 ## Corrections to our own claims
 
+- **`(fl- 0.0 px)` is not floating-point negation**, and every Scheme nbody config we wrote
+  uses it where `ref.c` writes `-px`. Verified: `(fl- 0.0 0.0)` is `0.0`, `(- 0.0)` is
+  `-0.0`, and the sign survives the division that follows. Latent rather than active, since
+  `px` is never exactly zero for five bodies, so the oracle passes today. It is still a
+  divergence from `SPEC.md` and a bit-exactness hazard the moment a momentum sum cancels.
+  Tracked as a bug bead; needs an `flneg` primitive and a normative spelling in `SPEC.md`.
+- **`Lcore`'s single control input discards what D5 argued for.** Five named checks and a
+  lexical `policy` form, but `primcall` carries one tri-state, so the IR cannot say
+  "bounds unchecked, type still checked" at a call site. D5 was ratified precisely on the
+  measurement that named granularity is free. Found by a subagent reviewing the frozen
+  table, and it is right.
+
 - **"The distro default `-march` is a trap; baseline should be `rv64gc`."** Wrong, and
   wrong in the expensive direction. Checked against current sources: **RVA23 makes the V
   extension mandatory** where RVA22 had it optional, **Ubuntu 26.04 LTS ships RVA23 images**

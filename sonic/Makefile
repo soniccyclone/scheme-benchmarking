@@ -14,6 +14,8 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/read-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/numeric-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss
