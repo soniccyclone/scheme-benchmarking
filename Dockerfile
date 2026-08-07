@@ -81,6 +81,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
         ca-certificates \
         libelf1 \
+        # perf's runtime deps.
+        # perf itself. `linux-tools-common` pulls `linux-perf`, whose binary
+        # works here even though it is built for a different kernel version --
+        # the counters we need are the architectural ones. The version wrapper
+        # would refuse, so nothing calls `perf` through it.
+        # `linux-perf` NAMED EXPLICITLY: linux-tools-common only RECOMMENDS it,
+        # and --no-install-recommends drops it -- the same trap that silently
+        # left out the riscv64 static libc. Its binary works here despite being
+        # built for a different kernel version, because the counters we need are
+        # the architectural ones; the version wrapper would refuse, so nothing
+        # calls it through the wrapper.
+        linux-perf \
+        libslang2 \
+        libunwind8 \
+        libdw1 \
+        libcap2 \
+        libnuma1 \
         libncurses-dev \
         libx11-dev \
         uuid-dev \

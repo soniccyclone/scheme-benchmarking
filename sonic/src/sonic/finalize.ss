@@ -59,7 +59,8 @@
           (sonic regs)
           (sonic regalloc)
           (sonic callconv)
-          (sonic parcopy))
+          (sonic parcopy)
+          (sonic peephole))
 
   ;; --- frame layout ---------------------------------------------------------
 
@@ -484,6 +485,24 @@
                      (cons (cadr i) (caddr i))))
                (else #f))))
 
+      ;; Peephole each straight-line RUN, never across a label.
+      ;;
+      ;; A label is a branch target, so anything arriving there did not execute
+      ;; the compare above it -- fusing a compare with a branch across one would
+      ;; hand the branch flags that some paths never set. Splitting at labels is
+      ;; the scope, not a convenience.
+      (define (peephole-runs target xs)
+        (let loop ((xs xs) (run '()) (out '()))
+          (define (flush)
+            (if (null? run)
+                out
+                (let-values (((done st) (peephole target (reverse run))))
+                  (append (reverse done) out))))
+          (cond
+           ((null? xs) (reverse (flush)))
+           ((symbol? (car xs)) (loop (cdr xs) '() (cons (car xs) (flush))))
+           (else (loop (cdr xs) (cons (car xs) run) out)))))
+
       ;; Resolve the maximal run of moves ending at each call or tail jump.
       (define (call-or-jump? i)
         (and (pair? i)
@@ -577,7 +596,18 @@
             ;; The run immediately preceding a call or a tail jump is argument
             ;; setup by construction -- callseq.ss emits the moves and then the
             ;; transfer, with nothing between -- so that is the run resolved.
-            (listing (resolve-argument-moves listing)))
+            (listing (resolve-argument-moves listing))
+            ;; PEEPHOLE. It has existed since the back end was written and
+            ;; nothing ever called it, so every `setcc`/`movzx`/`cmp $0`/`jne`
+            ;; sequence the selector emits for a branch survived into the final
+            ;; image -- four instructions where the flags from the compare were
+            ;; already sitting there.
+            ;;
+            ;; It runs HERE, after allocation and after the parallel copy,
+            ;; because fusing a compare with its branch is only valid once
+            ;; nothing can be inserted between them, and the spill code inserted
+            ;; above is exactly the thing that could.
+            (listing (peephole-runs target listing)))
         ;; ARGUMENT ARRIVAL.
         ;;
         ;; The convention puts argument k of class c in a fixed register, and

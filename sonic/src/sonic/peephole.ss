@@ -72,30 +72,56 @@
   ;; The pattern, over the SELECTED stream:
   ;;   (cmp a b) (setcc r) (movzx r r) ... (cmp r 0) (jne L)
   ;; collapses when nothing between them touches the flags or r, and r is dead.
+  ;; The selector widens a setcc's byte result before testing it, so the real
+  ;; sequence is FIVE instructions:
+  ;;
+  ;;     cmp a, b ; setl v ; movzx v, v ; cmp v, 0 ; jne L
+  ;;
+  ;; and the flags from the first `cmp` are already exactly what the branch
+  ;; wants. This matched a FOUR-instruction form with no widening, which is not
+  ;; what this compiler emits -- so wiring the peephole into the pipeline at all
+  ;; changed the instruction count by zero, on every branch in every program.
+  ;;
+  ;; Dropping the widening is safe for the same reason dropping the setcc is:
+  ;; the match already requires the boolean to be dead after the branch.
+  (define (widened? is)
+    (and (pair? is) (pair? (cdr is))
+         (eq? (car (cadr is)) 'movzx)
+         (eq? (cadr (cadr is)) (cadr (car is)))
+         (eq? (caddr (cadr is)) (cadr (car is)))))
+
   (define (fuse-compare-branch instrs stats)
     (let loop ((is instrs) (out '()))
-      (cond
-       ((null? is) (reverse out))
-       ;; look for setcc immediately after a cmp, with the branch next
-       ((and (pair? is) (pair? (cdr is)) (pair? (cddr is)) (pair? (cdddr is))
-             (eq? (car (car is)) 'cmp)
-             (jump-for (car (cadr is)))
-             (eq? (car (caddr is)) 'cmp)
-             (memq (car (cadddr is)) '(jne je))
-             ;; the setcc's destination is what the second cmp tests
-             (eq? (cadr (cadr is)) (cadr (caddr is)))
-             ;; and it is dead after the branch
-             (not (used-later? (cadr (cadr is)) (cddddr is))))
-        (let* ((cmp (car is))
-               (setcc (cadr is))
-               (branch (cadddr is))
-               (jmp (jump-for (car setcc)))
-               ;; (jne L) on a boolean means "branch when the cc held";
-               ;; (je L) means the opposite, so the jump inverts.
-               (j (if (eq? (car branch) 'jne) jmp (invert jmp))))
-          (peephole-stats-fused-set! stats (+ 1 (peephole-stats-fused stats)))
-          (loop (cddddr is) (cons (list j (cadr branch)) (cons cmp out)))))
-       (else (loop (cdr is) (cons (car is) out))))))
+      (if (null? is)
+          (reverse out)
+          ;; `tail` is what follows the setcc once any widening is skipped, and
+          ;; `n` is how many instructions the whole shape occupies in the input.
+          (let* ((setcc-at (and (pair? (cdr is)) (cdr is)))
+                 (widen? (and setcc-at (widened? setcc-at)))
+                 (tail (and setcc-at (if widen? (cddr setcc-at) (cdr setcc-at))))
+                 (n (if widen? 5 4)))
+            (cond
+             ((and setcc-at tail
+                   (eq? (car (car is)) 'cmp)
+                   (jump-for (car (car setcc-at)))
+                   (pair? tail) (pair? (cdr tail))
+                   (eq? (car (car tail)) 'cmp)
+                   (memq (car (cadr tail)) '(jne je))
+                   ;; the setcc's destination is what the second cmp tests
+                   (eq? (cadr (car setcc-at)) (cadr (car tail)))
+                   ;; and it is dead after the branch
+                   (not (used-later? (cadr (car setcc-at)) (cddr tail))))
+              (let* ((cmp (car is))
+                     (setcc (car setcc-at))
+                     (branch (cadr tail))
+                     (jmp (jump-for (car setcc)))
+                     ;; (jne L) on a boolean means "branch when the cc held";
+                     ;; (je L) means the opposite, so the jump inverts.
+                     (j (if (eq? (car branch) 'jne) jmp (invert jmp))))
+                (peephole-stats-fused-set! stats (+ 1 (peephole-stats-fused stats)))
+                (loop (list-tail is n)
+                      (cons (list j (cadr branch)) (cons cmp out)))))
+             (else (loop (cdr is) (cons (car is) out))))))))
 
   (define (invert j)
     (cond ((eq? j 'jl) 'jge) ((eq? j 'jge) 'jl)
