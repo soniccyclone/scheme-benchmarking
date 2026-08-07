@@ -89,9 +89,46 @@
 ;;; same filter that drops nursery-to-nursery stores, which is one more reason
 ;;; the filtering belongs at collection time.
 ;;;
+;;; ## The allocation assist, and the control loop that is deliberately absent
+;;;
+;;; The third copied mechanism, and the only one defined by a deletion.
+;;;
+;;; Go charges an allocating goroutine for collector work in proportion to the
+;;; bytes it allocates, and computes the proportion with a controller: `revise`
+;;; divides the scan work still outstanding by the heap distance still available
+;;; and republishes `assistWorkPerByte` as it goes. Biscuit deleted that
+;;; computation and put a constant in its place. Two reasons, both about the
+;;; tail rather than the mean. A control loop has transients, so the coefficient
+;;; right after a phase change is whatever the last interval happened to look
+;;; like. And because the coefficient is computed rather than bounded, the
+;;; charge for one allocation has no static upper bound -- which is survivable
+;;; in a goroutine and is not survivable when the allocation is inside a lock or
+;;; an interrupt handler, where the charge is paid with the lock held.
+;;;
+;;; So the rate here is a literal, fixed at design time, and `assist-charge`
+;;; takes exactly one argument: the size. It cannot consult the heap because the
+;;; heap is not in scope. The charge for an n-word allocation is n times the
+;;; rate, today and after a hundred collections, whatever survived them. That
+;;; makes the charge for a bounded allocation statically bounded, which is the
+;;; property the interrupt-handler case actually needs.
+;;;
+;;; The credit side is where a control loop would sneak back in, so it is a
+;;; constant too: each collection RESETS the credit to `assist-grant`, which is
+;;; a literal and not a function of what the collection reclaimed, promoted or
+;;; took. `gc-test.ss` runs two workloads with opposite survival rates and
+;;; asserts the post-collection credit and the marginal per-word charge are bit
+;;; for bit the same, which is the assertion a pacer fails.
+;;;
+;;; Honest scope note. Our collector stops the world, so there is no concurrent
+;;; marking for a mutator in debt to go and do; `gc-assist-due?` reports the
+;;; debt and nothing acts on it yet. The accounting is what an incremental
+;;; collector will consume, and the reason to fix the constant NOW rather than
+;;; when that lands is that a rate is only cheap to keep constant while nobody
+;;; has yet written the loop that varies it.
+;;;
 ;;; ## Reserving the collection worst case up front
 ;;;
-;;; The third copied mechanism. Two reserves, for two different failures.
+;;; The fourth copied mechanism. Two reserves, for two different failures.
 ;;;
 ;;; TO-SPACE is reserved by refusing to start. A minor collection promotes
 ;;; survivors into old space and in the limit everything survives, so the worst
@@ -144,6 +181,12 @@
           ;; the barrier
           gc-store! barrier-path barrier-mnemonics
           barrier-generation-check-free? barrier-tests-only-the-value?
+
+          ;; the assist
+          assist-work-per-word assist-grant assist-charge
+          assist-path assist-mnemonics
+          assist-feedback-free? assist-constant-rate? assist-charge-arity
+          gc-assist-credit gc-assist-debit! gc-assist-due? gc-assist-reset!
 
           ;; machine state and precise roots
           make-regfile regfile? regfile-value regfile-raw regfile-float
@@ -227,13 +270,20 @@
   ;; lookup. The nursery is `alloc.ss`'s, unmodified: this file installs itself
   ;; as its collector rather than reimplementing its pointers.
 
+  ;; `assist-credit` is the mutator's allocation credit, in collector work
+  ;; units. It lives here rather than in `alloc.ss` because it is a collector
+  ;; policy and `alloc.ss`'s fast path is a pointer bump and nothing else; in a
+  ;; real image it is a word in the thread block, which is what `assist-path`
+  ;; below says it loads.
   (define-record-type (gc-heap mk-gc-heap gc-heap?)
-    (fields nursery old-mem old-base old-limit (mutable old-free)))
+    (fields nursery old-mem old-base old-limit (mutable old-free)
+            (mutable assist-credit)))
 
   (define (make-gc-heap nursery-words reserve old-words)
     (let ((n (make-nursery nursery-words reserve)))
       (mk-gc-heap n (make-vector old-words 0)
-                  nursery-words (+ nursery-words old-words) nursery-words)))
+                  nursery-words (+ nursery-words old-words) nursery-words
+                  assist-grant)))
 
   (define (gc-nursery-addr? h a)
     (and (>= a (nursery-base (gc-heap-nursery h)))
@@ -262,6 +312,11 @@
     (let* ((n (gc-heap-nursery h))
            (nf (hdr-fields header))
            (a (nursery-alloc! n (+ 1 nf) header)))
+      ;; The assist charge, levied on every allocation and on nothing else. It
+      ;; is AFTER the claim because the charge is for the words we actually got:
+      ;; an allocation that raises `&heap-exhausted` never ran, and charging for
+      ;; it would make the ledger depend on failures.
+      (gc-assist-debit! h (+ 1 nf))
       (let loop ((i 0) (v inits))
         (when (< i nf)
           (heap-set! n (+ a 1 i) (if (pair? v) (car v) (word-fixnum 0)))
@@ -316,6 +371,89 @@
       (gc-set! h slot v)
       (unless (fixnum-word? v)
         (nursery-rs-push! (gc-heap-nursery h) slot))))
+
+  ;; --- the allocation assist ------------------------------------------------
+  ;;
+  ;; Two literals, and the fact that they are literals IS the mechanism.
+
+  ;; Collector work units owed per word allocated. Chosen at design time. It is
+  ;; two because a minor collection touches a surviving word twice, once to copy
+  ;; it and once to scan it, and in the limit everything survives; picking the
+  ;; limit rather than a measured rate is the same all-or-nothing habit as the
+  ;; to-space reserve below. Whether two is the right number is a tuning
+  ;; question. Whether it is a NUMBER is the design question, and it is settled
+  ;; here rather than recomputed at run time.
+  (define assist-work-per-word 2)
+
+  ;; The credit each collection hands back. Also a literal: it is deliberately
+  ;; NOT `(assist-charge (gc-worst-case h))`, because reading the heap to size
+  ;; the grant is how a controller starts. Nothing about a collection -- what it
+  ;; copied, what it promoted, how long it took -- reaches this number.
+  (define assist-grant 4096)
+
+  ;; THE charge. One argument, by construction: there is no parameter through
+  ;; which a feedback term could arrive, and the heap is not in scope. Linear
+  ;; and homogeneous, so `charge(a+b) = charge(a)+charge(b)` exactly, which is
+  ;; the algebraic form of "the rate does not depend on when you asked".
+  (define (assist-charge words) (* words assist-work-per-word))
+
+  ;; For the test that wants the no-feedback property structurally rather than
+  ;; behaviourally: the charge admits exactly one argument, so it cannot be
+  ;; passed a heap, a phase, a deadline or a residual.
+  (define (assist-charge-arity) (procedure-arity-mask assist-charge))
+
+  ;; The emitted shape. Five instructions on the allocation path, of which the
+  ;; second carries the rate as an IMMEDIATE. In Go that operand is a load of
+  ;; `gcController.assistWorkPerByte`, republished by `revise`; the difference
+  ;; between a load and an immediate there is the whole of this bead.
+  (define (assist-path)
+    '((load  c   (thread assist-credit))
+      (muli  w   size 2)                  ; the rate, as a literal operand
+      (sub   c1  c w)
+      (store (thread assist-credit) c1)
+      (blt   c1  zero assist)))
+
+  (define (assist-mnemonics) (map car (assist-path)))
+
+  ;; No load reaches anything but the thread block: no heap goal, no scan-work
+  ;; residual, no published rate. Same predicate shape as the barrier's, for the
+  ;; same reason -- the cost of the mechanism is decided by what it reads.
+  ;;
+  ;; The division check is not decoration. `revise` computes the rate by
+  ;; dividing outstanding scan work by remaining heap distance, so a `div` on
+  ;; this path is the controller arriving, whatever the operands are called.
+  (define (assist-feedback-free? path)
+    (and (for-all (lambda (i)
+                    (or (not (eq? (car i) 'load))
+                        (let ((src (caddr i)))
+                          (and (pair? src) (eq? (car src) 'thread)))))
+                  path)
+         (not (exists (lambda (i) (memq (car i) '(div divi udiv fdiv))) path))))
+
+  ;; And the rate operand is the literal, not a register. If this ever becomes a
+  ;; name, someone has plumbed a computed rate in and the bound on a single
+  ;; allocation's charge is gone with it.
+  (define (assist-constant-rate? path)
+    (let loop ((is path))
+      (cond ((null? is) #f)
+            ((eq? 'muli (car (car is)))
+             (let ((rate (cadddr (car is))))
+               (and (integer? rate) (= rate assist-work-per-word))))
+            (else (loop (cdr is))))))
+
+  ;; The ledger, executed. Debit on allocation, reset on collection, and nothing
+  ;; in between reads or writes it.
+  (define (gc-assist-credit h) (gc-heap-assist-credit h))
+
+  (define (gc-assist-debit! h words)
+    (gc-heap-assist-credit-set! h (- (gc-heap-assist-credit h) (assist-charge words)))
+    (gc-heap-assist-credit h))
+
+  (define (gc-assist-due? h) (negative? (gc-heap-assist-credit h)))
+
+  ;; A reset, not an adjustment. There is no term here for what the collection
+  ;; found, which is the whole point.
+  (define (gc-assist-reset! h) (gc-heap-assist-credit-set! h assist-grant))
 
   ;; --- machine state --------------------------------------------------------
   ;;
@@ -495,10 +633,20 @@
       ;; Build the condition object in the reserve. Allocating it from the space
       ;; we just failed to find would be the circularity that turns a
       ;; recoverable error into an abort.
-      (when p
-        (heap-set! n p (raw-hdr 'heap-exhausted 2))
-        (heap-set! n (+ p 1) (word-fixnum (gc-worst-case h)))
-        (heap-set! n (+ p 2) (word-fixnum (gc-old-used h))))
+      ;;
+      ;; If the reserve cannot supply three words, the one guarantee this whole
+      ;; mechanism exists to make has failed, and the reserve was sized wrong.
+      ;; Say that, loudly and distinctly. Raising `&heap-exhausted` here anyway
+      ;; would hand back a condition whose backing object was never built, which
+      ;; is a report that the mechanism worked when it did not.
+      (unless p
+        (error 'raise-exhausted!
+               "the reserve cannot back the exhaustion condition; it was sized wrong"
+               (nursery-reserve n) gc-condition-words
+               (- (nursery-top n) (reserve-ptr n))))
+      (heap-set! n p (raw-hdr 'heap-exhausted 2))
+      (heap-set! n (+ p 1) (word-fixnum (gc-worst-case h)))
+      (heap-set! n (+ p 2) (word-fixnum (gc-old-used h)))
       (raise (make-heap-exhausted n (gc-worst-case h)))))
 
   ;; Copy one word's referent into to-space if it is a nursery object, and
@@ -590,6 +738,10 @@
         ;;    proportional to what SURVIVED, not to what died.
         (nursery-alloc-ptr-set! n (nursery-base n))
         (nursery-rs-ptr-set! n (reserve-base n))
+        ;; 5. Hand the mutator its allocation credit back. A RESET to a literal:
+        ;;    `copied`, `honoured` and `dropped` are all sitting right here and
+        ;;    none of them is allowed to reach this line.
+        (gc-assist-reset! h)
         (mk-stats copied (- (gc-heap-old-free h) copy-start)
                   (length remembered) honoured dropped))))
 

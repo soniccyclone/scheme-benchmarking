@@ -355,6 +355,19 @@
        as much as it does in alloc.ss"
      (poll-free? (barrier-mnemonics)))
 
+;; Both of those predicates are worthless if nothing can fail them, and a
+;; predicate over the shape of emitted code is exactly the kind that quietly
+;; becomes a tautology. Hand each one the design it exists to refuse.
+(ck! "and both predicates have teeth: a path that reads a segment table is
+       rejected by the first, and a path that tests the OBJECT's tag instead of
+       the stored value's -- a generation check wearing a tag test's clothes --
+       is rejected by the second"
+     (and (barrier-generation-check-free? '((load t (thread rs-ptr))))
+          (not (barrier-generation-check-free?
+                '((load g (segment obj)) (and t g gen-mask))))
+          (barrier-tests-only-the-value? '((and t val tag-mask)))
+          (not (barrier-tests-only-the-value? '((and t obj tag-mask))))))
+
 ;; --- it catches a cross-generation store ------------------------------------
 ;;
 ;; The sharpest form of this test is the control. The same program, with the
@@ -499,6 +512,41 @@
                         (= gc-condition-words
                            (- (reserve-ptr n) (reserve-base n))))))))
 
+;; The reserve pointer moving proves a claim was made, not that anything was
+;; built. A reserve charged for a condition it never wrote is the same failure
+;; with a passing test in front of it, so read the words back.
+(let* ((h (make-gc-heap 96 8 16))
+       (obj (gc-alloc! h (tagged-hdr 'pair 1) (list (word-fixnum 1))))
+       (rf (regs-with (list obj)))
+       (st (state-with (list (word-fixnum 0)) (one-frame '(#f)) rf))
+       (n (gc-heap-nursery h))
+       (p (reserve-base n)))
+  (guard (e (#t #t)) (gc-collect! h st))
+  (let ((head (heap-ref n p)))
+    (ck! "and the object is really THERE: a parseable header and the two fields
+       the condition carries, at an address above both mutator pointers"
+         (and (hdr? head)
+              (eq? 'heap-exhausted (hdr-kind head))
+              (= 2 (hdr-fields head))
+              (= (word-fixnum 88) (heap-ref n (+ p 1)))
+              (>= p (nursery-rs-ptr n))
+              (> p (nursery-alloc-ptr n))))))
+
+;; The reserve holds two condition objects and no more. Spend it, and the third
+;; exhaustion has nowhere to build one.
+(let* ((h (make-gc-heap 96 8 16))
+       (obj (gc-alloc! h (tagged-hdr 'pair 1) (list (word-fixnum 1))))
+       (rf (regs-with (list obj)))
+       (st (state-with (list (word-fixnum 0)) (one-frame '(#f)) rf)))
+  (guard (e (#t #t)) (gc-collect! h st))
+  (guard (e (#t #t)) (gc-collect! h st))
+  (let ((third (guard (e (#t e)) (gc-collect! h st) #f)))
+    (ck! "with the reserve spent, exhaustion says the RESERVE was sized wrong
+       rather than handing back an &heap-exhausted whose object was never
+       built. Skipping the write silently would report success for the one
+       guarantee the reserve exists to make"
+         (and third (not (heap-exhausted? third))))))
+
 ;; ===========================================================================
 ;; 6. Wired to alloc.ss, not duplicating it.
 ;; ===========================================================================
@@ -541,6 +589,179 @@
        SAME comparison the allocator uses, and the program keeps running"
        (and (> (nursery-rs-ptr n) (nursery-alloc-ptr n))
             (pointer-word? (vector-ref (regfile-value rf) 0)))))
+
+;; ===========================================================================
+;; 7. The allocation assist, and the control loop that is not in it.
+;; ===========================================================================
+;;
+;; "Some assist happened" is not the property. Go has an assist too, and Go's is
+;; the design Biscuit deleted. What separates them is that Go's coefficient is
+;; republished by a controller and this one is a literal, so every check below
+;; is about the RATE holding still rather than about a charge being made.
+
+;; --- the charge, as a function --------------------------------------------
+
+(ck! "a zero-word allocation is charged zero: no fixed term is hiding in the
+       rate"
+     (= 0 (assist-charge 0)))
+
+(ck! "the charge is the size times the rate at every size, with no rounding,
+       no floor and no ceiling"
+     (let loop ((s 0))
+       (cond ((> s 512) #t)
+             ((= (assist-charge s) (* s assist-work-per-word)) (loop (+ s 1)))
+             (else #f))))
+
+(ck! "additive over every pair up to 64: charge(a+b) = charge(a) + charge(b).
+       A pacer fails this, because by the time it charges for b the rate it
+       charged a at has moved"
+     (let outer ((a 0))
+       (cond ((> a 64) #t)
+             (else (let inner ((b 0))
+                     (cond ((> b 64) (outer (+ a 1)))
+                           ((= (assist-charge (+ a b))
+                               (+ (assist-charge a) (assist-charge b)))
+                            (inner (+ b 1)))
+                           (else #f)))))))
+
+(ck! "and homogeneous, so the charge for an allocation of at most k words is at
+       most k times the rate -- a bound computable without running anything.
+       An unbounded charge is the one that cannot be paid inside a lock or an
+       interrupt handler, which is Biscuit's reason for deleting Go's"
+     (let loop ((s 0) (worst 0))
+       (if (> s 256)
+           (= worst (* 256 assist-work-per-word))
+           (loop (+ s 1) (max worst (assist-charge s))))))
+
+(ck! "the charge admits exactly one argument, the size. There is no parameter
+       through which a phase, a deadline or a residual could arrive"
+     (= (assist-charge-arity) (procedure-arity-mask (lambda (size) size))))
+
+;; --- the emitted shape ----------------------------------------------------
+
+(ck! "the emitted assist is five instructions and carries the rate as an
+       IMMEDIATE. In Go that operand is a load of the controller's published
+       assistWorkPerByte; immediate versus load is the whole of this bead"
+     (and (= 5 (length (assist-path)))
+          (assist-constant-rate? (assist-path))))
+
+(ck! "no load on the path reaches anything but the thread block, and there is
+       no division -- dividing outstanding scan work by remaining heap distance
+       is exactly how a controller computes a rate"
+     (assist-feedback-free? (assist-path)))
+
+(ck! "the predicates have teeth: a path that loads a published rate is
+       rejected, a path that divides to compute one is rejected even though all
+       its loads are thread-local, and a multiply against a REGISTER rate is
+       not a constant rate"
+     (and (not (assist-feedback-free?
+                '((load r (controller assist-work-per-byte))
+                  (mul  w size r))))
+          (not (assist-feedback-free?
+                '((load s (thread scan-work))
+                  (load d (thread heap-distance))
+                  (div  r s d)
+                  (mul  w size r))))
+          (not (assist-constant-rate? '((mul w size rate))))))
+
+(ck! "and the assist contains no poll, yield or safepoint: D21 holds here too"
+     (poll-free? (assist-mnemonics)))
+
+;; --- the ledger, wired to allocation --------------------------------------
+
+(ck! "a fresh heap starts at the grant, and each allocation debits its own word
+       count times the rate -- header included, because the header is a word
+       the collector will copy"
+     (let ((h (fresh-heap)))
+       (and (= assist-grant (gc-assist-credit h))
+            (begin (gc-alloc! h (tagged-hdr 'pair 3) '())
+                   (= (- assist-grant (assist-charge 4)) (gc-assist-credit h)))
+            (begin (gc-alloc! h (tagged-hdr 'box 1) '())
+                   (= (- assist-grant (assist-charge 4) (assist-charge 2))
+                      (gc-assist-credit h))))))
+
+(ck! "the debt is REPORTED, not acted on. Our collector stops the world, so
+       there is no concurrent marking a mutator in debt could go and do; what
+       is fixed now is the accounting an incremental collector will consume"
+     (let ((h (fresh-heap)))
+       (and (not (gc-assist-due? h))
+            (begin (gc-assist-debit! h (+ 1 (div assist-grant assist-work-per-word)))
+                   (gc-assist-due? h)))))
+
+;; --- the discriminating test: two histories, one rate ----------------------
+;;
+;; Run the same allocation sequence twice, once dropping everything and once
+;; keeping a live set in the value registers so every collection promotes. The
+;; two runs differ in collection count and in how much old space they fill,
+;; which is precisely the input a pacer feeds back on. Sample the marginal
+;; charge for a fixed size all the way through both.
+
+(define (assist-run live? iters)
+  (let* ((h (make-gc-heap 96 8 2048))
+         (rf (regs-with '()))
+         (st (state-with (list (word-fixnum 0)) (one-frame '(#f)) rf))
+         (ncoll 0) (rates '()) (grants '()))
+    ;; The state thunk is called once per collection, so it doubles as the
+    ;; collection counter without the collector knowing it is being watched.
+    (gc-install! h (lambda () (set! ncoll (+ ncoll 1)) st))
+    (let loop ((i 0))
+      (when (< i iters)
+        (let* ((c0 ncoll)
+               (before (gc-assist-credit h))
+               (w (gc-alloc! h (tagged-hdr 'pair 3) (list (word-fixnum i))))
+               (after (gc-assist-credit h)))
+          (when live? (vector-set! (regfile-value rf) (mod i 8) w))
+          (if (= c0 ncoll)
+              ;; No collection intervened: the difference IS the marginal
+              ;; charge for a four-word object.
+              (set! rates (cons (- before after) rates))
+              ;; A collection intervened, so the credit was reset and then
+              ;; debited. Undo the debit and what is left is the grant.
+              (set! grants (cons (+ after (assist-charge 4)) grants)))
+          (loop (+ i 1)))))
+    (list (reverse rates) (reverse grants) ncoll (gc-old-used h))))
+
+(define dead (assist-run #f 100))
+(define live (assist-run #t 100))
+
+(define (all-equal? xs v) (for-all (lambda (x) (= x v)) xs))
+
+(ck! "the two runs really did have different histories: both collected several
+       times and one filled old space while the other left it empty. Without
+       this the rest of this section proves nothing"
+     (and (> (caddr dead) 1) (> (caddr live) 1)
+          (= 0 (cadddr dead)) (> (cadddr live) 0)))
+
+(ck! "and across both, EVERY marginal charge for a four-word object is the same
+       number. Not a mean, not a tolerance: every sample, in a run that copied
+       nothing and a run that promoted at every collection"
+     (and (> (length (car dead)) 20)
+          (> (length (car live)) 20)
+          (all-equal? (car dead) (assist-charge 4))
+          (all-equal? (car live) (assist-charge 4))))
+
+(ck! "the credit handed back at each collection is the same literal every time
+       too. copied, honoured and dropped are all in scope at the line that
+       resets it, and none of them reaches the number"
+     (and (pair? (cadr dead)) (pair? (cadr live))
+          (all-equal? (cadr dead) assist-grant)
+          (all-equal? (cadr live) assist-grant)))
+
+;; The control. Without it "all the samples are equal" is a sentence about a
+;; multiplication, not about a design.
+(define (pacer-rates)
+  ;; Go's shape: outstanding scan work over remaining heap distance, revised as
+  ;; the interval runs, times the size. Same size every step.
+  (let loop ((i 0) (scan 400) (dist 88) (acc '()))
+    (if (>= i 20)
+        (reverse acc)
+        (loop (+ i 1) (- scan 4) (- dist 4)
+              (cons (* 4 (div scan (max dist 1))) acc)))))
+
+(ck! "the control: a pacer charged for the SAME size at every step returns a
+       different number as it runs, so the equality assertions above are
+       assertions rather than restatements of arithmetic"
+     (not (all-equal? (pacer-rates) (car (pacer-rates)))))
 
 (newline)
 (printf "~a checks, ~a failures\n" checks failures)
