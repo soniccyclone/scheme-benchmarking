@@ -1,7 +1,7 @@
 ;;; How far does a real program get? Reported as a number, not an impression.
 (import (chezscheme) (nanopass) (sonic lang) (sonic pipeline)
         (sonic read) (sonic expand) (sonic parse) (sonic policy)
-        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide))
+        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide) (sonic repr))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -19,6 +19,7 @@
 (ck! "the SonicScheme nbody variant exists" (and src #t))
 
 (define elide-stats #f)
+(define repr-counts #f)
 
 (define r
   (run-pipeline src
@@ -32,20 +33,23 @@
           (cons 'essa   (lambda (a) (essa-program a)))
           (cons 'elide  (lambda (a)
                           (let-values ([(o st) (elide-program a)])
-                            (set! elide-stats st) o))))))
+                            (set! elide-stats st) o)))
+          (cons 'repr   (lambda (a)
+                          (let-values ([(o rp) (select-representations-program a)])
+                            (set! repr-counts (repr-report-counts rp)) o))))))
 
 (for-each (lambda (p)
             (display "       ") (display (if (cdr p) "ok  " "STOP"))
             (display "  ") (display (car p)) (newline))
           (pipeline-result-stages r))
 
-(ck! "all nine stages compose on the real program"
-     (= (pipeline-result-reached r) 9))
+(ck! "all ten stages compose on the real program"
+     (= (pipeline-result-reached r) 10))
 (ck! "and nothing stopped" (not (pipeline-result-stopped-at r)))
 
 ;; What parse actually produced. These numbers are the shape of the program and
 ;; a change in them is a change in the front end worth noticing.
-(when (= (pipeline-result-reached r) 9)
+(when (= (pipeline-result-reached r) 10)
   ;; The first end-to-end measurement of SonicScheme on a real program. These
   ;; are the numbers the whole project exists to produce, and a change in them
   ;; is a change in what the analysis can prove.
@@ -60,7 +64,17 @@
        (= (elide-unchecked elide-stats) 0))
   ;; A pass that proved everything would be unsound, not brilliant.
   (ck! "it does not claim to prove everything"
-       (> (elide-kept elide-stats) 0)))
+       (> (elide-kept elide-stats) 0))
+
+  ;; Representation is where the unboxing shows up. A binding in raw-f64 lives
+  ;; in a float register, is never scavenged and needs no GC metadata, which is
+  ;; what lets nbody's inner loop carry none at all.
+  (display "       repr ") (write repr-counts) (newline)
+  (let ([g (lambda (c) (cdr (assq c repr-counts)))])
+    (ck! "most bindings are UNBOXED, not tagged"
+         (> (+ (g 'raw-f64) (g 'raw-word)) (* 8 (g 'tagged))))
+    (ck! "and doubles dominate, which is what nbody is"
+         (> (g 'raw-f64) (g 'raw-word)))))
 
 (when #f
   (let* ([u (unparse-Lcore (pipeline-result-note r))]
