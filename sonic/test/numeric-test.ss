@@ -625,5 +625,47 @@
     (check! "kernel is bit-identical checked vs proved"    (fl-identical? a r))))
 
 (newline)
+;; --- immediates -------------------------------------------------------------
+;;
+;; Everything above this point tests fixnums and flonums, which were the only
+;; things numeric.ss assigned tags to. The empty list, the booleans and the
+;; unspecified value had no bit pattern at all -- not a gap you can leave open
+;; once a merge can force a raw word into the tagged class.
+
+(check! "every immediate carries the immediate primary tag"
+     (for-all sonic-immediate?
+              (list sonic-false sonic-true sonic-null sonic-unspecified sonic-eof)))
+
+(check! "and no immediate collides with another"
+     (let ((is (list sonic-false sonic-true sonic-null sonic-unspecified sonic-eof)))
+       (let dedupe ((xs is) (seen '()))
+         (cond ((null? xs) #t)
+               ((member (car xs) seen) #f)
+               (else (dedupe (cdr xs) (cons (car xs) seen)))))))
+
+;; THE constraint that makes tagging a comparison result cheap. A raw boolean is
+;; 0 or 1, so its tagged form must be reachable by `(x << 3) | 7` -- which means
+;; #f and #t have to be adjacent with #f low. Anything else turns a shift and an
+;; or into a branch.
+(check! "a raw 0/1 tags to #f/#t by (x << 3) | 7, with no branch"
+     (and (= (bitwise-ior (bitwise-arithmetic-shift-left 0 3) imm-tag) sonic-false)
+          (= (bitwise-ior (bitwise-arithmetic-shift-left 1 3) imm-tag) sonic-true)))
+
+;; No immediate may be mistaken for a heap pointer. Heap objects are 8-byte
+;; aligned, so a pointer's low three bits are zero; 111 is the one tag that
+;; survives ANY partial mask a buggy check might apply.
+(check! "no immediate can be mistaken for an 8-byte-aligned heap pointer"
+     (for-all (lambda (i) (not (zero? (bitwise-and i #b111))))
+              (list sonic-false sonic-true sonic-null sonic-unspecified sonic-eof)))
+
+;; And no immediate may be mistaken for a FIXNUM, whose tag is 000.
+(check! "no immediate can be mistaken for a fixnum"
+     (for-all (lambda (i) (not (zero? (bitwise-and i #b111))))
+              (list sonic-false sonic-true sonic-null sonic-unspecified sonic-eof)))
+
+(check! "sonic-boolean-tag maps the host's booleans onto them"
+     (and (= (sonic-boolean-tag #t) sonic-true)
+          (= (sonic-boolean-tag #f) sonic-false)))
+
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))

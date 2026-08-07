@@ -112,12 +112,11 @@
                (xor t1 v-b v-sum)
                (and t0 t0 t1)
                (blt t0 zero trap-overflow-check))))
-;; The mach-op spelling of a type check has no operand for the expected tag and
-;; would pass 0 -- which is FIXNUM, a real tag rather than a no-answer marker.
-;; Emitting it would turn "check this is something" into "check this is a
-;; fixnum": a branch that always traps for any other type.
-(ck! "a type check through the mach-op spelling is REFUSED, not defaulted to fixnum"
-     (raises-naming? (lambda () (sel1 '(check-type v raw-word v-a))) "expected tag"))
+;; There is only ONE spelling of a check now -- see the note in lang.ss.
+(ck! "the mach-op spelling of a check no longer exists"
+     (and (not (mach-op? 'check-bounds))
+          (not (mach-op? 'check-type))
+          (not (mach-op? 'check-overflow))))
 ;; One unsigned compare catches the negative index too.
 (ck! "a bounds check is a single bgeu"
      (equal? (sel1 '(chk bounds-check checked 0 v-i v-n))

@@ -369,18 +369,6 @@
       ((overflow-check)
        (arity-check! who 3 srcs)
        (overflow-check-seq (car srcs) (cadr srcs) (caddr srcs)))
-      ;; A type check needs to know WHICH type. `chk` carries the tag; the
-      ;; mach-op spelling has no operand for it and passes 0, and 0 is fixnum
-      ;; -- a real tag, not a "no answer" marker. Emitting it would compile
-      ;; "check this is something" into "check this is a fixnum", which for
-      ;; a flonum check is a branch that always traps.
-      ((type-check-no-tag)
-       (error who
-              (string-append
-               "a type check through the mach-op spelling has no operand for "
-               "the expected tag, and 0 is fixnum rather than a no-answer "
-               "marker; use `chk`, which carries it")
-              srcs))
       ((type-check)
        ;; Lmach's chk NOW carries the expected tag, so this is selectable:
        ;; mask the primary tag out of the value and compare it against the
@@ -403,16 +391,6 @@
         ((unchecked) '())  ; the policy suppressed it; emitting it would be wrong
         ((checked)   (emit-check 'rv64-select pn ops tag))
         (else (error 'rv64-select "unexpected control on a chk" c)))))
-
-  ;; The same three checks also exist as mach-ops.
-  (define (check-op name)
-    ;; The mach-op spelling. Unlike `chk` these carry no expected tag, because a
-    ;; mach-op check-bounds has no operand to put one in, so type-check through
-    ;; this path passes 0 and emit-check refuses it rather than guessing.
-    (lambda (dst sc srcs)
-      (emit-check 'rv64-select
-                  (if (eq? name 'type-check) 'type-check-no-tag name)
-                  srcs 0)))
 
   (define rv64-rules
     (list
@@ -443,9 +421,7 @@
      (cons 'tailcall r:tailcall)
      (cons 'ret    r:ret)
      (cons 'chk    r:chk)
-     (cons 'check-bounds   (check-op 'bounds-check))
-     (cons 'check-type     (check-op 'type-check))
-     (cons 'check-overflow (check-op 'overflow-check))))
+     ))
 
   (define rv64-selector (make-selector 'rv64 rv64-rules arch-rv64))
   )

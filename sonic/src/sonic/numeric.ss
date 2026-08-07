@@ -187,6 +187,10 @@
 (library (sonic numeric)
   (export ;; representation
           fx-tag-bits fx-value-bits fx-word-bits
+          ;; immediates
+          imm-tag imm-tag-bits imm-sec-bits make-immediate sonic-immediate?
+          sonic-false sonic-true sonic-null sonic-unspecified sonic-eof
+          sonic-boolean-tag
           fx-least fx-greatest
           sonic-fixnum? sonic-flonum?
           fx-fits? fx-wrap
@@ -221,6 +225,56 @@
   ;; everything else in the file is a consequence of them.
 
   (define fx-word-bits  64)
+  ;; --- immediates -----------------------------------------------------------
+  ;;
+  ;; Everything above assigns exactly one primary tag: 000, to fixnums. That
+  ;; left the empty list, the booleans and the unspecified value with no bit
+  ;; pattern at all, which is not a gap you can leave open once a merge can
+  ;; force a raw word into the tagged class -- a comparison's 0/1 would land in
+  ;; the value class, and under D21 the collector scavenges that unconditionally
+  ;; and chases address 0 or 1.
+  ;;
+  ;; Primary tag 111 is the immediate tag, with a secondary tag above it:
+  ;;
+  ;;   63                        8   7     3   2 1 0
+  ;;  +---------------------------+-----+---+---+---+
+  ;;  |  payload                  | secondary | 1 1 1 |
+  ;;  +---------------------------+-----+---+---+---+
+  ;;
+  ;; 111 rather than one of the low tags for two reasons. It is the one pattern
+  ;; that cannot be mistaken for an 8-byte-aligned heap pointer under ANY
+  ;; partial mask, so a bug that checks fewer bits than it should still fails
+  ;; closed. And it keeps 001..110 contiguous for the heap types, which is what
+  ;; makes a heap-type dispatch a jump table rather than a chain of compares.
+  ;;
+  ;; The booleans are adjacent and #f is the LOW one on purpose: a raw
+  ;; comparison result is 0 or 1, so tagging it is `(x << 3) | 7` -- a shift and
+  ;; an or, with no branch and no table. That is the conversion an eventual
+  ;; representation-conversion pass will emit.
+  ;;
+  ;; The empty list has an encoding here even though `null?` never reads it:
+  ;; regs.ss dedicates a register to nil on both targets, so the test is a
+  ;; register compare. The register still has to be INITIALIZED to something,
+  ;; and that something is this.
+  (define imm-tag        #b111)
+  (define imm-tag-bits   3)
+  (define imm-sec-bits   5)          ; secondary tag occupies bits 3..7
+
+  (define (make-immediate sec) (bitwise-ior (bitwise-arithmetic-shift-left sec 3) imm-tag))
+
+  (define sonic-false        (make-immediate 0))   ;  7
+  (define sonic-true         (make-immediate 1))   ; 15
+  (define sonic-null         (make-immediate 2))   ; 23
+  (define sonic-unspecified  (make-immediate 3))   ; 31
+  (define sonic-eof          (make-immediate 4))   ; 39
+  ;; Secondary tags 5..31 are unassigned. A character will take one, with the
+  ;; code point as the payload above bit 8.
+
+  (define (sonic-immediate? w)
+    (= (bitwise-and w #b111) imm-tag))
+
+  (define (sonic-boolean-tag b) (if b sonic-true sonic-false))
+
   (define fx-tag-bits    3)
   (define fx-value-bits (- fx-word-bits fx-tag-bits))       ; 61, sign included
 

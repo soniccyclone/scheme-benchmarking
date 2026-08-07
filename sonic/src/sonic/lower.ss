@@ -32,6 +32,7 @@
           lower-stats-unchecked lower-stats-emitted)
   (import (chezscheme)
           (sonic repr)
+          (sonic numeric)
           (nanopass)
           (sonic lang))
 
@@ -298,22 +299,13 @@
           ((quote) (let ((v (fresh! "k")))
                      (values (reverse (cons `(const ,v ,(const-class (cadr e)) ,(cadr e)) acc))
                              v lbl)))
-          ;; The unspecified value.
-          ;;
-          ;; Materialised as a raw ZERO, not as the datum `()`. numeric.ss
-          ;; assigns tags to fixnums and flonums and to nothing else, so there
-          ;; is no immediate encoding for unspecified yet, and neither selector
-          ;; can turn `()` into bits. Picking one here would be an object-
-          ;; representation decision made in the wrong file.
-          ;;
-          ;; Zero is sound in the raw class because `raw-word` promises only an
-          ;; untagged machine word that the collector never scavenges, and
-          ;; repr.ss classifies `(void)` raw-word. If it ever merged with a
-          ;; tagged value the join would raise rather than hand the collector a
-          ;; zero to chase. Open question: immediates (booleans, nil,
-          ;; unspecified) still need tag assignments.
+          ;; The unspecified value. numeric.ss assigns it an immediate
+          ;; encoding, so it is a real object with a real bit pattern rather
+          ;; than a placeholder zero -- which matters the moment it merges with
+          ;; anything, since the collector reads the value class unconditionally.
           ((void)  (let ((v (fresh! "k")))
-                     (values (reverse (cons `(const ,v raw-word 0) acc)) v lbl)))
+                     (values (reverse (cons `(const ,v raw-word ,sonic-unspecified) acc))
+                             v lbl)))
           ;; Control flow. The accumulated straight-line instructions become the
           ;; current block, ending in a branch; each arm gets a label; both
           ;; converge on a join block whose only job is to be the continuation.
@@ -523,9 +515,7 @@
         ;; datum's own type, which is what catches a flonum lowered as a word.
         ((quote) (values `((const ,dst ,(if (eq? sc 'raw-word) (const-class (cadr se)) sc)
                                   ,(cadr se))) dst))
-        ;; Raw zero, not the datum `()` -- see the note at the `void` case in
-        ;; `lower-expr`: no immediate encoding for unspecified exists yet.
-        ((void)  (values `((const ,dst ,sc 0)) dst))
+        ((void)  (values `((const ,dst ,sc ,sonic-unspecified)) dst))
         ((primcall)
          (let* ((pr (cadr se))
                 (controls (caddr se))

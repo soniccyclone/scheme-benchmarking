@@ -52,11 +52,28 @@
   (define f64-prims
     '(fl+ fl- fl* fl/ flneg flabs flsqrt fx->fl flvector-ref))
 
-  (define word-prims
+  ;; `raw-word` is one STORAGE class -- an untagged machine word, same register
+  ;; file -- but it is two different things when it has to become tagged, and
+  ;; conflating them was a live memory-corruption bug.
+  ;;
+  ;; A fixnum-valued word tags by shifting left 3 (numeric.ss, fixnum tag 000).
+  ;; A boolean-valued word is 0 or 1 and tags to sonic-false/sonic-true, which
+  ;; are 7 and 15. Shifting a boolean gives the FIXNUMS 0 and 1; leaving it
+  ;; alone in the value class gives the collector addresses 0 and 1 to chase.
+  (define fixnum-word-prims
     '(fx+ fx- fx* fxneg fxquotient fxremainder fxmodulo
-      fx< fx<= fx= fx>= fx> fl< fl<= fl= fl>= fl>
-      fl->fx flvector-length vector-length
+      fl->fx flvector-length vector-length))
+
+  (define boolean-word-prims
+    '(fx< fx<= fx= fx>= fx> fl< fl<= fl= fl>= fl>
       null? pair? fixnum? flonum? vector? flvector? eq?))
+
+  (define word-prims (append fixnum-word-prims boolean-word-prims))
+
+  (define (word-kind pr)
+    (cond ((memq pr fixnum-word-prims) 'fixnum)
+          ((memq pr boolean-word-prims) 'boolean)
+          (else #f)))
 
   (define tagged-prims
     '(make-flvector make-vector vector-ref cons car cdr error))
@@ -112,6 +129,7 @@
           (results (make-eq-hashtable))     ; procedure -> result class
           (lets '())                        ; (x . simple-expr)
           (merges '())                      ; (x . (expr ...)) from phi/sigma
+          (booleans (make-eq-hashtable))    ; raw words that hold 0/1, not a fixnum
           (sites '()))                      ; (name . (arg ...))
 
       ;; Merging two classes.
@@ -136,7 +154,32 @@
       (define (join-class v a b)
         (cond
          ((eq? a b) a)
-         ((and (memq a '(tagged raw-word)) (memq b '(tagged raw-word))) 'tagged)
+         ((and (memq a '(tagged raw-word)) (memq b '(tagged raw-word)))
+          ;; A FIXNUM-valued raw word joins to tagged for free: its tagged form
+          ;; is the value shifted left 3, so where the raw side is a literal the
+          ;; constant is simply materialised already shifted and no conversion
+          ;; instruction is needed.
+          ;;
+          ;; A BOOLEAN-valued raw word does not. It holds 0 or 1 and its tagged
+          ;; form is sonic-false or sonic-true -- 7 and 15 -- so the conversion
+          ;; is `(x << 3) | 7`, two real instructions that something has to
+          ;; emit. Nothing does yet.
+          ;;
+          ;; Answering `tagged` here regardless is what the join used to do, and
+          ;; it is memory corruption rather than a wrong number: a comparison's
+          ;; 0/1 lands in the VALUE class, and under D21 the collector scavenges
+          ;; that unconditionally and chases address 0 or 1. So it raises, and
+          ;; names the conversion that is missing.
+          (when (hashtable-ref booleans v #f)
+            (error 'select-representations
+                   (string-append
+                    "a boolean-valued raw word is being merged with a tagged "
+                    "value, which needs the conversion (x << 3) | 7 to reach "
+                    "sonic-false/sonic-true; no pass inserts representation "
+                    "conversions yet, and answering `tagged` without one puts "
+                    "0 or 1 in the value class for the collector to chase")
+                   v a b))
+          'tagged)
          (else
           (error 'select-representations
                  (string-append
@@ -235,8 +278,11 @@
       (let walk ((x form))
         (when (pair? x)
           (case (car x)
-            ((let) (let ((b (car (cadr x))))
-                     (set! lets (cons (cons (car b) (cadr b)) lets))))
+            ((let) (let* ((b (car (cadr x))) (se (cadr b)))
+                     (when (and (pair? se) (eq? (car se) 'primcall)
+                                (eq? (word-kind (cadr se)) 'boolean))
+                       (hashtable-set! booleans (car b) #t))
+                     (set! lets (cons (cons (car b) se) lets))))
             ;; phi and sigma BIND names, and nothing else in this walk sees
             ;; them. Missing them left every join variable unclassified, which
             ;; then propagated: a procedure whose tail is a phi had no result

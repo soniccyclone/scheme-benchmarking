@@ -177,8 +177,23 @@
       ;; operand as an already-materialised limit.
       vlen
       branch branch-if jump                         ; control
-      call ret                                      ; calls
-      check-bounds check-type check-overflow))      ; checks not yet elided
+      call ret))                                    ; calls
+  ;; There is deliberately NO mach-op spelling of a check.
+  ;;
+  ;; `check-bounds`, `check-type` and `check-overflow` used to live here
+  ;; alongside the `chk` production, and the duplication was pure cost. `chk`
+  ;; carries the CONTROL -- whether the analysis proved the check, a policy
+  ;; suppressed it, or it survived -- and the EXPECTED TAG. The mach-ops
+  ;; carried neither, and there was nowhere to put them: a mach-op is
+  ;; (op v sc v* ...) and every slot is spoken for.
+  ;;
+  ;; So a type check through that spelling had no tag and passed 0, which is
+  ;; not a no-answer marker but the fixnum tag: "check this is something"
+  ;; compiled to "check this is a fixnum", a branch that always traps for any
+  ;; other type. That, plus an arity skew between the two spellings that Chez
+  ;; warned about on every build, was bd 5hs.
+  ;;
+  ;; Nothing ever emitted them. lower.ss produces `chk` and only `chk`.
   (define (mach-op? x) (and (memq x mach-ops) #t))
 
   ;; Virtual registers are symbols; the allocator maps them to real ones under

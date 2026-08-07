@@ -86,10 +86,19 @@
          (not (equal? (list-ref (caddr (car n)) 4)
                       (list-ref (caddr (car a)) 4))))))
 
-;; The mach-op spelling of a type check has no operand for the expected tag and
-;; would pass 0 -- which is FIXNUM, a real tag rather than a no-answer marker.
-(ck! "a type check through the mach-op spelling is REFUSED, not defaulted to fixnum"
-     (raises? (lambda () (select-instr x86-64-selector '(check-type v raw-word v-a)))))
+;; There is only ONE spelling of a check now. The mach-ops check-bounds,
+;; check-type and check-overflow are gone from lang.ss: they could carry
+;; neither the control nor the expected tag, so a type check through that path
+;; passed 0 -- the FIXNUM tag, not a no-answer marker -- and compiled "check
+;; this is something" into "check this is a fixnum". Asserted as absence, so
+;; reintroducing the duplication fails here.
+(ck! "the mach-op spelling of a check no longer exists"
+     (and (not (mach-op? 'check-bounds))
+          (not (mach-op? 'check-type))
+          (not (mach-op? 'check-overflow))
+          (not (assq 'check-bounds x86-64-rules))
+          (not (assq 'check-type x86-64-rules))
+          (not (assq 'check-overflow x86-64-rules))))
 
 ;; A suppressed check must stay suppressed.
 (ck! "an `unchecked` chk emits nothing"
