@@ -151,6 +151,34 @@
           (not (physical? arch-x86-64 'v-idx))))
 
 
+
+;; --- a call's callee is a LABEL, not a vreg -------------------------------
+;; physical? skips register names and nothing skipped labels, so a call target
+;; got a live interval and was then allocated: the allocator would rewrite a
+;; branch target into a register name. That is a wrong-code bug, not a slow one,
+;; and the likelier symptom was allocate dying on "vreg has no storage class"
+;; and hiding the real defect behind a confusing message.
+(let* ([instrs '((const v-a raw-word 1)
+                 (call v-r raw-word energy v-a)
+                 (move v-o raw-word v-r))]
+       [cls (make-eq-hashtable)])
+  (for-each (lambda (p) (hashtable-set! cls (car p) (cdr p)))
+            '((v-a . raw-word) (v-r . raw-word) (v-o . raw-word)))
+  (ck! "the callee label gets no live interval"
+       (not (assq 'energy (live-intervals/arch instrs arch-rv64))))
+  (let* ([r (allocate arch-rv64 instrs cls)] [m (alloc-result-map r)])
+    (ck! "and the allocator does not rewrite it into a register"
+         (not (hashtable-ref m 'energy #f)))
+    (ck! "while the call's arguments and result still allocate"
+         (and (hashtable-ref m 'v-a #f) (hashtable-ref m 'v-r #f)))))
+
+(ck! "jump and branch-if targets are labels too"
+     (and (label-operand? '(jump L1) 0)
+          (label-operand? '(branch-if v L1 L2) 1)
+          (label-operand? '(branch-if v L1 L2) 2)
+          ;; but the tested value is NOT a label
+          (not (label-operand? '(branch-if v L1 L2) 0))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))

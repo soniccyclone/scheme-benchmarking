@@ -84,6 +84,25 @@
   (ck! "fx< lowers to cmp-lt and fl< to fcmp-lt, not the same op"
        (and (equal? (ops pi) '(cmp-lt)) (equal? (ops pf) '(fcmp-lt)))))
 
+
+;; --- a literal's storage class follows its TYPE ---------------------------
+;; (define days-per-year 365.24) lowered to (const t raw-word 365.24): a double
+;; declared an integer. The allocator would put it in a GPR and every
+;; instruction reading it would be the integer one, operating on a bit pattern
+;; that is an IEEE double.
+(define (const-class-of prog)
+  (caddr (car (cadr (cadr (car (cadr prog)))))))
+
+(let-values ([(p st) (lower-program '(let ([x raw-word (quote 365.24)]) x) 'e)])
+  (ck! "a flonum literal is raw-f64 even when the binding said raw-word"
+       (eq? (const-class-of p) 'raw-f64)))
+(let-values ([(p st) (lower-program '(let ([x raw-word (quote 7)]) x) 'e)])
+  (ck! "an exact integer literal stays raw-word"
+       (eq? (const-class-of p) 'raw-word)))
+(let-values ([(p st) (lower-program '(let ([x raw-f64 (quote 1.5)]) x) 'e)])
+  (ck! "and a declared raw-f64 binding is left alone"
+       (eq? (const-class-of p) 'raw-f64)))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))

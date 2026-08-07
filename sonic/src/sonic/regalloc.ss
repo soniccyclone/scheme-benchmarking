@@ -17,7 +17,7 @@
 ;;; here than usual.
 
 (library (sonic regalloc)
-  (export allocate live-intervals live-intervals/arch physical?
+  (export allocate live-intervals live-intervals/arch physical? label-operand?
           make-alloc-result alloc-result? alloc-result-map
           alloc-result-spills alloc-result-arch)
   (import (chezscheme)
@@ -31,6 +31,10 @@
   ;; last-use]. Straight-line only, which is what a basic block is; extending to
   ;; a whole CFG is a later bead and needs the loop structure from E4-LOOP so a
   ;; vreg live across a back edge stays live to the end of the loop.
+
+  (define (for-each-indexed f xs)
+    (let loop ([xs xs] [k 0])
+      (unless (null? xs) (f (car xs) k) (loop (cdr xs) (+ k 1)))))
 
   (define (live-intervals instrs) (live-intervals/arch instrs #f))
 
@@ -47,9 +51,11 @@
                 (if e
                     (set-cdr! e (max (cdr e) i))
                     (hashtable-set! tbl dst (cons i i)))))
-            (for-each
-             (lambda (s)
-               (when (and (symbol? s) (not (and arch (physical? arch s))))
+            (for-each-indexed
+             (lambda (s k)
+               (when (and (symbol? s)
+                          (not (and arch (physical? arch s)))
+                          (not (label-operand? ins k)))
                  (let ([e (hashtable-ref tbl s #f)])
                    (if e
                        (set-cdr! e (max (cdr e) i))
@@ -90,6 +96,26 @@
   ;; the adapter twoaddr.ss had to carry.
   (define (physical? arch r)
     (and (symbol? r) (reg-class arch r) #t))
+
+  ;; A CALL's callee is a block label, not a virtual register.
+  ;;
+  ;; `physical?` skips register names and nothing skipped labels, so a call's
+  ;; target was given a live interval and then allocated -- the allocator would
+  ;; rewrite a branch target into a register name, which is a wrong-code bug and
+  ;; not a slow one. Labels have no storage class either, so the more likely
+  ;; symptom was `allocate` dying on "vreg has no storage class" and hiding the
+  ;; real defect behind a confusing message.
+  ;;
+  ;; A call's first source is its callee. Everything after is an argument and is
+  ;; an ordinary vreg.
+  (define (label-operand? instr i)
+    (and (pair? instr)
+         (memq (car instr) '(call jump branch-if))
+         (case (car instr)
+           ((call) (= i 0))               ; (call dst sc callee arg ...)
+           ((jump) (= i 0))               ; (jump lbl)
+           ((branch-if) (>= i 1))         ; (branch-if v then else)
+           (else #f))))
 
   ;; `classes` maps vreg -> storage class, which is what Lrepr carries.
   (define (allocate arch instrs classes)

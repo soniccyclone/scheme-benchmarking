@@ -64,6 +64,20 @@
   ;; to name which tag it expects; the other checks have no such constant.
   (define (expected-tag name) (if (eq? name 'type-check) 1 0))
 
+  ;; A literal's storage class follows its TYPE, and hardcoding raw-word was a
+  ;; real bug: (define days-per-year 365.24) lowered to (const t raw-word
+  ;; 365.24), so a double was declared an integer. The allocator would then put
+  ;; it in a GPR and every arithmetic instruction reading it would be the wrong
+  ;; one -- integer add on a bit pattern that is an IEEE double.
+  ;;
+  ;; Same rule as repr.ss's datum-class, restated here rather than imported
+  ;; because lower.ss must not depend on an analysis pass: the two are checked
+  ;; against each other in repr-test.ss.
+  (define (const-class d)
+    (cond ((flonum? d) 'raw-f64)
+          ((and (integer? d) (exact? d)) 'raw-word)
+          (else 'tagged)))
+
   (define (op-for pr)
     (let ((p (assq pr prim->op)))
       (unless p (error 'lower "primitive has no machine op" pr))
@@ -164,7 +178,7 @@
              (let-values (((is v) (lower-simple se x sc stats)))
                (walk body (append (reverse is) acc)))))
           ((quote) (let ((v (fresh! "k")))
-                     (values (reverse (cons `(const ,v raw-word ,(cadr e)) acc)) v)))
+                     (values (reverse (cons `(const ,v ,(const-class (cadr e)) ,(cadr e)) acc)) v)))
           ((void)  (let ((v (fresh! "k")))
                      (values (reverse (cons `(const ,v raw-word ()) acc)) v)))
           ;; Control flow. The accumulated straight-line instructions become the
@@ -269,7 +283,11 @@
      ((not (pair? se)) (error 'lower "not a simple expression" se))
      (else
       (case (car se)
-        ((quote) (values `((const ,dst ,sc ,(cadr se))) dst))
+        ;; The binding's declared class wins where it is not raw-word, since
+        ;; repr.ss computed it from the same rule; otherwise fall back to the
+        ;; datum's own type, which is what catches a flonum lowered as a word.
+        ((quote) (values `((const ,dst ,(if (eq? sc 'raw-word) (const-class (cadr se)) sc)
+                                  ,(cadr se))) dst))
         ((void)  (values `((const ,dst ,sc ())) dst))
         ((primcall)
          (let* ((pr (cadr se))
