@@ -266,9 +266,15 @@
             (reverse out)
             (let* ((iv (hashtable-ref acc (car ks) #f))
                    (lo (interval-lo iv)) (hi (interval-hi iv)))
+              ;; PARTIALLY unbounded ranges are kept, not dropped.
+              ;;
+              ;; `j >= 0` with no upper bound is still worth stating -- it is
+              ;; half of every bounds proof, and it is what widening produces on
+              ;; its way to a fixpoint. Dropping it made widening destroy the
+              ;; very facts it was supposed to accelerate. Only a wholly unknown
+              ;; range says nothing.
               (loop (cdr ks)
-                    ;; Only a bounded range is worth stating.
-                    (if (and (integer? lo) (integer? hi))
-                        (cons (list (car ks) 'interval lo hi) out)
-                        out)))))))
+                    (if (iv-top? iv)
+                        out
+                        (cons (list (car ks) 'interval lo hi) out))))))))
   )

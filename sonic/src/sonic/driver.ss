@@ -133,20 +133,37 @@
       ;; of the fact is to bound an index. So after a few rounds of ascent, any
       ;; interval that is still widening is abandoned and the ones that settled
       ;; are kept.
+      ;; Cousot's widen-then-narrow, which is the whole reason this terminates.
+      ;;
+      ;; A loop variable ascends one integer per round -- [0,0], [0,1], [0,2] --
+      ;; toward a bound its guard will eventually impose. Waiting it out costs a
+      ;; round per iteration of the loop, which for `n = 1000` is hopeless.
+      ;; Widening jumps to infinity on whichever side is still growing;
+      ;; narrowing then walks the infinite side back in using the guard, and for
+      ;; `j < n-bodies` it lands on [0,5] two rounds later.
+      ;;
+      ;; The first attempt here simply DROPPED any fact that changed, which
+      ;; destroyed facts that were ascending correctly and left every loop
+      ;; unbounded. Dropping is sound and useless; widening is the operator that
+      ;; is both.
       (define ascent-rounds 4)
-      (define (widen prev cand)
-        (if (null? prev)
-            cand
-            (filter (lambda (f)
-                      (let ((old (assq (car f) prev)))
-                        (or (not old) (equal? old f))))
-                    cand)))
+      (define (combine op prev cand)
+        (map (lambda (f)
+               (let ((old (assq (car f) prev)))
+                 (if (not old)
+                     f
+                     (let ((iv (op (make-interval (caddr old) (cadddr old))
+                                   (make-interval (caddr f) (cadddr f)))))
+                       (list (car f) 'interval (interval-lo iv) (interval-hi iv))))))
+             cand))
       (let loop ((facts base) (round 0))
         (let-values (((p1 st) (elide-program ssa facts)))
           (let* ((argivs (elide-stats-argivs st))
                  (raw (interval-facts-from argivs params))
                  (prev (filter (lambda (f) (eq? (cadr f) 'interval)) facts))
-                 (more (if (< round ascent-rounds) raw (widen prev raw)))
+                 (more (cond ((< round ascent-rounds) raw)
+                             ((= round ascent-rounds) (combine iv-widen prev raw))
+                             (else (combine iv-narrow prev raw))))
                  (next (append base more)))
             (cond
              ((or (> round 12) (equal? next facts))
