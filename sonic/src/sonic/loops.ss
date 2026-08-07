@@ -268,11 +268,16 @@
       ;; A header phi is a phi whose operands are exactly this lambda's
       ;; parameters, in order. Anything else is a diamond's join.
       (let ([hdr (nanopass-case (Lssa Expr) body
-                   [(phi ([,x* ,e*] ...) ,body2)
+                   ;; phi now carries per-predecessor operands: each binding is
+                   ;; (x (pred val) ...). A HEADER phi is one whose sole `entry`
+                   ;; operand is this lambda's corresponding parameter.
+                   [(phi ([,x* (,lbl** ,e**) ...] ...) ,body2)
                     (and (= (length x*) (length p*))
-                         (let same ([es e*] [ps p*])
-                           (cond [(null? es) #t]
-                                 [(eq? (var-of (car es)) (car ps)) (same (cdr es) (cdr ps))]
+                         (let same ([ess e**] [ps p*])
+                           (cond [(null? ess) #t]
+                                 [(and (pair? (car ess))
+                                       (eq? (var-of (caar ess)) (car ps)))
+                                  (same (cdr ess) (cdr ps))]
                                  [else #f]))
                          (list x* body2))]
                    [else #f])])
@@ -336,9 +341,11 @@
          (let ([g (edge-guard pr b x0 x2 fn)])
            (walk body fn (if g (cons g guards) guards) facts))]
 
-        [(phi ([,x* ,e*] ...) ,body)
+        ;; phi bindings are now (x (pred val) ...), so the operand lists are
+        ;; nested one level deeper than before.
+        [(phi ([,x* (,lbl** ,e**) ...] ...) ,body)
          (for-each (lambda (x) (record-def! x '(join) fn)) x*)
-         (for-each (lambda (e) (walk e fn guards facts)) e*)
+         (for-each (lambda (es) (for-each (lambda (e) (walk e fn guards facts)) es)) e**)
          (walk body fn guards facts)]
 
         [(tailcall ,x ,x* ...) (site! x x* fn guards #t)]

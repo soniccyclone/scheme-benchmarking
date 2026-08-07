@@ -118,8 +118,15 @@
   (check! "the phi's name is what the join returns"
           (car (car (cadr (car (collect 'phi out)))))    ; (phi ([j <if>]) j) -> j
           (caddr (car (collect 'phi out))))              ; body is that same j
-  (check! "the merged value is the conditional itself"
+  ;; phi bindings are now (x (pred val) ...). A value-position diamond carries
+  ;; ONE operand on a `join` edge, because Lanf's `if` is not a SimpleExpr and
+  ;; there is no syntactic point where the arms' values are named. See the note
+  ;; in essa.ss.
+  (check! "the diamond's single operand is labelled join"
           (car (cadr (car (cadr (car (collect 'phi out))))))
+          'join)
+  (check! "and the value under it is the conditional itself"
+          (car (cadr (cadr (car (cadr (car (collect 'phi out)))))))
           'if)
   (check! "definitions are uniquely named" (all-distinct? (binders out)) #t))
 
@@ -154,8 +161,13 @@
        [hdr (caddr lam)])
   (check! "the loop header body is a phi" (car hdr) 'phi)
   (check! "the header phi merges both parameters" (length (cadr hdr)) 2)
+  ;; A header phi's operands are now per-predecessor: each is (entry param).
+  ;; That is the fix for cqs.13 -- ABCD needs to know which edge a value came
+  ;; from, and before this the phi named only the merge.
+  (check! "each header operand is labelled with its predecessor edge"
+          (map caadr (cadr hdr)) '(entry entry))
   (check! "the header phi's operands are the parameters, in order"
-          (map cadr (cadr hdr)) (cadr lam))
+          (map (lambda (b) (cadr (cadr b))) (cadr hdr)) (cadr lam))
   (check! "the header phi names are fresh, not the parameters"
           (all-distinct? (append (map car (cadr hdr)) (cadr lam))) #t)
   (check! "header phi plus the tail join, and no others"

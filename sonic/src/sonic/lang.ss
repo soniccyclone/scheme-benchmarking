@@ -168,7 +168,10 @@
 
   (define-language Lcore
     (terminals
-      (symbol      (x))
+      ;; `lbl` is a second meta-variable for the same terminal, used where a
+      ;; symbol names a control-flow predecessor rather than a variable. Lmach
+      ;; uses it the same way.
+      (symbol      (x lbl))
       (primitive   (pr))
       (control     (c))
       (policy-name (pn))
@@ -284,7 +287,23 @@
   (define-language Lssa
     (extends Lanf)
     (Expr (e body)
-      (+ (phi ([x* e*] ...) body)
+      ;; phi carries PER-PREDECESSOR operands, not just the merged name.
+      ;;
+      ;; (phi ([x (pred val) ...] ...) body) : x is the merge of val from each
+      ;; labelled predecessor.
+      ;;
+      ;; The earlier shape named the merge and not the incoming values, which
+      ;; the loop pass reported as costing something specific. A header phi was
+      ;; recoverable anyway, because a tailcall's argument list is positionally
+      ;; parallel to the lambda's parameter list, so the back-edge operands
+      ;; could be found by indexing call sites. But a VALUE-position diamond
+      ;; carried nothing: an induction variable stepped inside a conditional,
+      ;; `i2 = if c then i+1 else i+2` or any loop with a `continue`, had an
+      ;; opaque back-edge operand and came back `unknown` forever.
+      ;;
+      ;; ABCD needs per-predecessor operands for its constraint graph, so this
+      ;; had to land before that bead rather than after.
+      (+ (phi ([x* (lbl* e*) ...] ...) body)
          ;; (sigma x-out x-in cmp x-other negated?) : x-out is x-in, refined by
          ;; knowing that (cmp x-in x-other) HELD on this edge when negated? is
          ;; #f, and that it FAILED when negated? is #t.

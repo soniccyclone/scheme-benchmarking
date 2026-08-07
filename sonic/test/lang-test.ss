@@ -127,9 +127,13 @@
 
 (printf "\nDownstream IRs (constructible with no upstream pass):\n")
 
+(ok! "Lssa: phi carries per-predecessor operands"
+     (lambda () (with-output-language (Lssa Expr)
+                  `(phi ([i2 (entry i0) (back i1)]) i2))))
+
 (ok! "Lssa: sigma names the branch fact ABCD needs"
      (lambda () (with-output-language (Lssa Expr)
-                  `(sigma i2 i fx< n #f (phi ([s (quote 0)]) s)))))
+                  `(sigma i2 i fx< n #f (phi ([s (entry (quote 0))]) s)))))
 
 ;; The false edge of the same test. Sigma carries the comparison AS WRITTEN plus
 ;; a negation flag rather than an opposite primitive, because for flonums there
@@ -138,7 +142,7 @@
 ;; it.
 (ok! "Lssa: sigma can carry a NEGATED comparison"
      (lambda () (with-output-language (Lssa Expr)
-                  `(sigma a2 a fl< b #t (phi ([s (quote 0)]) s)))))
+                  `(sigma a2 a fl< b #t (phi ([s (entry (quote 0))]) s)))))
 
 (ok! "Lrepr: a binding carries its storage class"
      (lambda () (with-output-language (Lrepr Expr)

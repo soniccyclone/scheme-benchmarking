@@ -247,7 +247,32 @@
                           ,(wrap-t (Expr e0 env-t facts val?))
                           ,(wrap-f (Expr e1 env-f facts val?)))])
            (if val?
-               (let ([j (fresh-name 'join)]) `(phi ([,j ,node]) ,j))
+               ;; A value-position diamond. Both arms merge here, and phi now
+               ;; names WHICH arm each incoming value came from, so a consumer
+               ;; can tell an induction variable stepped inside a conditional
+               ;; from one stepped unconditionally. Before this the whole node
+               ;; was one opaque operand and such a loop was unanalysable.
+               ;; A value-position diamond, and the ONE case per-predecessor
+               ;; operands do not fix.
+               ;;
+               ;; Lanf's `if` is not a SimpleExpr, so there is no syntactic
+               ;; point where the two arms' values are named and flow onward.
+               ;; The arms are whole expressions, so labelling them would mean
+               ;; either duplicating the `if` into both operands (which doubles
+               ;; the code and breaks unique naming outright -- tried, it does)
+               ;; or introducing a join continuation, which is a different
+               ;; lowering and a separate bead.
+               ;;
+               ;; So this carries ONE operand on a `join` edge. The consequence
+               ;; stands as loops.ss reported it: an induction variable stepped
+               ;; inside a conditional has an opaque back-edge operand and comes
+               ;; back `unknown`. Counted loops, which is what stage 10 needs,
+               ;; are unaffected because their phis are HEADER phis and those
+               ;; now carry real per-predecessor operands.
+               (let* ([j (fresh-name 'join)]
+                      [lbls (list 'join)]
+                      [vals (list node)])
+                 `(phi ([,j (,lbls ,vals) ...]) ,j))
                node)))]
 
       [(let ([,x ,se]) ,body)
@@ -275,9 +300,19 @@
                                         [env3 (append (map cons x** h*) env2)]
                                         [in* (map (lambda (p)
                                                     (with-output-language (Lssa Expr) `,p))
-                                                  p*)])
+                                                  p*)]
+                                        ;; One operand per binding, on the
+                                        ;; `entry` edge. The back edge's
+                                        ;; operands live on the tailcall and are
+                                        ;; recovered positionally by loops.ss.
+                                        [lbl** (map (lambda (_) '(entry)) p*)]
+                                        [in**  (map list in*)])
+                                   ;; The header phi. `entry` is the incoming
+                                   ;; edge; the back edge's operands live on the
+                                   ;; tailcall and are still recovered by
+                                   ;; position, which is what loops.ss does.
                                    `(lambda (,p* ...)
-                                      (phi ([,h* ,in*] ...)
+                                      (phi ([,h* (,lbl** ,in**) ...] ...)
                                         ,(Expr body2 env3 facts #t))))
                                  `(lambda (,p* ...) ,(Expr body2 env2 facts #t))))]
                           [else (Expr rhs env1 facts #t)])))

@@ -72,7 +72,7 @@
        (let ([hi (quote ,upto)])
          (let ([by (quote ,by)])
            (letrec ([lp (lambda (i.p n.p)
-                          (phi ([i i.p] [n n.p])
+                          (phi ([i (entry i.p)] [n (entry n.p)])
                             (let ([c (primcall fx< () i n)])
                               (if c
                                   (sigma i.g i fx< n #f
@@ -92,7 +92,7 @@
        (let ([hi (quote ,upto)])
          (let ([one (quote 1)])
            (letrec ([lp (lambda (i.p n.p)
-                          (phi ([i i.p] [n n.p])
+                          (phi ([i (entry i.p)] [n (entry n.p)])
                             (let ([c (primcall fx>= () i n)])
                               (if c
                                   (quote 0)
@@ -111,7 +111,7 @@
        (let ([hi (quote 10)])
          (let ([one (quote 1)])
            (letrec ([lp (lambda (i.p n.p)
-                          (phi ([i i.p] [n n.p])
+                          (phi ([i (entry i.p)] [n (entry n.p)])
                             (let ([c (primcall fx< () i n)])
                               (if c
                                   (sigma i.g i fx< n #f
@@ -131,7 +131,7 @@
     `(let ([lo (quote 0)])
        (let ([hi (quote 10)])
          (letrec ([lp (lambda (i.p n.p)
-                        (phi ([i i.p] [n n.p])
+                        (phi ([i (entry i.p)] [n (entry n.p)])
                           (let ([c (primcall fx< () i n)])
                             (if c
                                 (sigma i.g i fx< n #f
@@ -151,13 +151,13 @@
            (let ([one (quote 1)])
              (letrec ([outer
                        (lambda (i.p n.p)
-                         (phi ([i i.p] [n n.p])
+                         (phi ([i (entry i.p)] [n (entry n.p)])
                            (let ([c1 (primcall fx< () i n)])
                              (if c1
                                  (sigma i.g i fx< n #f
                                    (letrec ([inner
                                              (lambda (k.p m.p)
-                                               (phi ([k k.p] [m m.p])
+                                               (phi ([k (entry k.p)] [m (entry m.p)])
                                                  (let ([c2 (primcall fx< () k m)])
                                                    (if c2
                                                        (sigma k.g k fx< m #f
@@ -192,14 +192,14 @@
            (let ([one (quote 1)])
              (letrec ([bodies
                        (lambda (i.p n.p)
-                         (phi ([i i.p] [n n.p])
+                         (phi ([i (entry i.p)] [n (entry n.p)])
                            (let ([c1 (primcall fx< () i n)])
                              (if c1
                                  (sigma i.g i fx< n #f
                                    (letrec
                                      ([pairs
                                        (lambda (j.p q.p)
-                                         (phi ([j j.p] [q q.p])
+                                         (phi ([j (entry j.p)] [q (entry q.p)])
                                            (let ([c3 (primcall fx< () j q)])
                                              (if c3
                                                  (sigma j.g j fx< q #f
@@ -210,7 +210,7 @@
                                                  (quote 0)))))]
                                       [fields
                                        (lambda (k.p m.p)
-                                         (phi ([k k.p] [m m.p])
+                                         (phi ([k (entry k.p)] [m (entry m.p)])
                                            (let ([c2 (primcall fx< () k m)])
                                              (if c2
                                                  (sigma k.g k fx< m #f
@@ -239,11 +239,11 @@
     `(let ([zero (quote 0)])
        (let ([one (quote 1)])
          (letrec ([ping (lambda (a.p)
-                          (phi ([a a.p])
+                          (phi ([a (entry a.p)])
                             (let ([a2 (primcall fx+ ([overflow-check checked]) a one)])
                               (tailcall pong a2))))]
                   [pong (lambda (b.p)
-                          (phi ([b b.p])
+                          (phi ([b (entry b.p)])
                             (let ([b2 (primcall fx+ ([overflow-check checked]) b one)])
                               (tailcall ping b2))))])
            (let ([r1 (call ping zero)])
@@ -320,7 +320,7 @@
                       (let ([hi (quote 0)])
                         (let ([one (quote 1)])
                           (letrec ([lp (lambda (i.p n.p)
-                                         (phi ([i i.p] [n n.p])
+                                         (phi ([i (entry i.p)] [n (entry n.p)])
                                            (let ([c (primcall fx> () i n)])
                                              (if c
                                                  (sigma i.g i fx> n #f
@@ -367,7 +367,7 @@
                       (let ([hi (quote 10)])
                         (let ([one (quote 1)])
                           (letrec ([lp (lambda (i.p n.p)
-                                         (phi ([i i.p] [n n.p])
+                                         (phi ([i (entry i.p)] [n (entry n.p)])
                                            (let ([c (primcall fx< () i n)])
                                              (if c
                                                  (sigma i.g i fx< n #f
@@ -395,7 +395,7 @@
                        (let ([hi (quote 10)])
                          (let ([one (quote 1)])
                            (letrec ([lp (lambda (i.p n.p)
-                                          (phi ([i i.p] [n n.p])
+                                          (phi ([i (entry i.p)] [n (entry n.p)])
                                             (let ([c (primcall fx< () i n)])
                                               (if c
                                                   (sigma i.g i fx< n #f
@@ -419,7 +419,7 @@
                    `(let ([lo (quote 0)])
                       (let ([one (quote 1)])
                         (letrec ([lp (lambda (i.p n.p)
-                                       (phi ([i i.p] [n n.p])
+                                       (phi ([i (entry i.p)] [n (entry n.p)])
                                          (let ([c (primcall fx< () i n)])
                                            (if c
                                                (sigma i.g i fx< n #f
