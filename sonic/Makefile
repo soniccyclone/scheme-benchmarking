@@ -54,6 +54,8 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/object-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/peephole-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/interval-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/analyze-test.ss
