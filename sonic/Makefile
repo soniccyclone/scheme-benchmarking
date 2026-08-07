@@ -72,6 +72,8 @@ test:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/pipeline-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/emit-nbody-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/abcd-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/elide-test.ss

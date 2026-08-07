@@ -129,7 +129,20 @@
   ;; in as its IEEE754 bit pattern and an exact integer as a two's complement
   ;; word, which is the same distinction Lmach's storage classes already draw.
 
+  ;; A bytevector passes through untouched.
+  ;;
+  ;; litpool.ss owns the pool's byte layout -- entry sizes, alignment, and the
+  ;; padding, which it zeroes deliberately so two builds of the same program
+  ;; produce the same bytes. A 16-byte sign mask is not eight bytes and its
+  ;; datum is the SYMBOL `neg` rather than a number, so re-deriving the layout
+  ;; from a list of values here cannot work and should not be attempted. Callers
+  ;; with a real pool pass `pool-bytes`; the list form remains for fixtures.
   (define (constants->bytevector consts)
+    (if (bytevector? consts)
+        consts
+        (constants-list->bytevector consts)))
+
+  (define (constants-list->bytevector consts)
     (let* ((n (length consts))
            (bv (make-bytevector (* 8 n) 0)))
       (let loop ((cs consts) (i 0))

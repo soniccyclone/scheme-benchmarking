@@ -62,6 +62,34 @@
       (null? . call) (pair? . call) (eq? . call)
       (fixnum? . call) (flonum? . call) (vector? . call) (flvector? . call)))
 
+  ;; WHICH runtime routine. This is not decoration.
+  ;;
+  ;; `(call dst sc callee arg ...)` -- the callee is the FIRST source. Lowering
+  ;; a primitive to `call` without naming one left the first ARGUMENT sitting in
+  ;; the callee slot, so `(make-flvector 15)` lowered to a call to 15. It
+  ;; type-checked, it selected, it allocated, and it only surfaced at assembly
+  ;; as "undefined label" naming a vreg that held a literal.
+  ;;
+  ;; The `%` prefix marks a runtime entry point rather than a user procedure,
+  ;; which the reader of a disassembly needs and which keeps these out of the
+  ;; source namespace.
+  (define prim->runtime
+    '((make-flvector . %make-flvector) (make-vector . %make-vector)
+      (cons . %cons) (car . %car) (cdr . %cdr) (error . %error)
+      (null? . %null?) (pair? . %pair?) (eq? . %eq?)
+      (fixnum? . %fixnum?) (flonum? . %flonum?)
+      (vector? . %vector?) (flvector? . %flvector?)))
+
+  (define (runtime-entry pr)
+    (let ((p (assq pr prim->runtime)))
+      (unless p
+        (error 'lower
+               (string-append
+                "this primitive lowers to a runtime call but names no runtime "
+                "entry point, so the first argument would be used as the callee")
+               pr))
+      (cdr p)))
+
   ;; numeric.ss fixes a 3-bit tag scheme with fixnum at 000. A type check needs
   ;; to name which tag it expects; the other checks have no such constant.
   (define (expected-tag name) (if (eq? name 'type-check) 1 0))
@@ -522,7 +550,28 @@
                 (srcs (cdddr se))
                 (op (op-for pr)))
            (let-values (((pre post) (checks->instrs controls srcs dst stats)))
-             (values (append pre (list `(,op ,dst ,sc ,@srcs)) post) dst))))
+             (values (append pre
+                             (list (cond
+                                    ((eq? op 'call)
+                                     `(call ,dst ,sc ,(runtime-entry pr) ,@srcs))
+                                    ;; A STORE's storage class must describe the
+                                    ;; VALUE, not the result. `flvector-set!`
+                                    ;; and `vector-set!` have no useful result
+                                    ;; and repr.ss classifies them raw-word so
+                                    ;; the dead destination does not pull a
+                                    ;; value register -- but the selector reads
+                                    ;; `sc` to pick the mnemonic and the scale,
+                                    ;; so a double was being stored with the
+                                    ;; integer `mov`. The encoder caught it as
+                                    ;; "bad mov operands"; had the mnemonic been
+                                    ;; encodable it would have written the wrong
+                                    ;; eight bytes.
+                                    ((eq? op 'store)
+                                     `(store ,dst ,(vreg-class-of (car (reverse srcs)))
+                                             ,@srcs))
+                                    (else `(,op ,dst ,sc ,@srcs))))
+                             post)
+                     dst))))
         ((call) (values `((call ,dst ,sc ,@(cdr se))) dst))
         (else (error 'lower "cannot lower simple expression" se))))))
 

@@ -402,9 +402,42 @@
                         [else (expire (cdr as) (cons (car as) keep))]))])
                 (let ([pool (hashtable-ref free sc '())])
                   (if (null? pool)
-                      (begin
-                        (set! spills (cons v spills))
-                        (scan (cdr is) still-active))
+                      ;; SPILL. Poletto & Sarkar spill the active interval with
+                      ;; the FURTHEST endpoint, which may be this one or one
+                      ;; already holding a register.
+                      ;;
+                      ;; This used to always spill the current interval and
+                      ;; never evict, and the difference is not marginal: one
+                      ;; long-lived value hogging a register makes every short
+                      ;; interval that begins while it is live spill, so nbody's
+                      ;; inner loop spilled 30 values for a peak pressure of 8
+                      ;; against 4 registers. Evicting the long one instead
+                      ;; costs one spill and serves all of them.
+                      ;;
+                      ;; Only intervals of the SAME storage class are candidates.
+                      ;; The partition is not a preference: taking a raw
+                      ;; register from a tagged value would hide a GC root
+                      ;; (regs.ss), so a class with no registers left cannot
+                      ;; borrow from a class that has some.
+                      (let* ([same (filter (lambda (a)
+                                             (eq? (hashtable-ref classes (car a) #f) sc))
+                                           still-active)]
+                             [furthest (and (pair? same)
+                                            (fold-left (lambda (best a)
+                                                         (if (> (caddr a) (caddr best)) a best))
+                                                       (car same) (cdr same)))])
+                        (if (and furthest (> (caddr furthest) (caddr iv)))
+                            ;; Evict it and give its register to this interval.
+                            (let ([r (hashtable-ref assign (car furthest) #f)])
+                              (hashtable-delete! assign (car furthest))
+                              (set! spills (cons (car furthest) spills))
+                              (check-assignment! arch sc r)
+                              (hashtable-set! assign v r)
+                              (scan (cdr is)
+                                    (cons iv (remq furthest still-active))))
+                            (begin
+                              (set! spills (cons v spills))
+                              (scan (cdr is) still-active))))
                       (let ([r (car pool)])
                         ;; THE assertion. Not a warning.
                         (check-assignment! arch sc r)
