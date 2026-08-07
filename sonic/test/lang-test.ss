@@ -39,7 +39,7 @@
 
 (ok! "primcall carries a control input"
      (lambda () (with-output-language (Lcore Expr)
-                  `(primcall flvector-ref checked v (quote 0)))))
+                  `(primcall flvector-ref ([type-check checked] [bounds-check proved]) v (quote 0)))))
 
 (ok! "policy scopes a named check"
      (lambda () (with-output-language (Lcore Expr)
@@ -60,22 +60,33 @@
 ;; --- the rejections that make the contract real ---------------------------
 
 (reject! "a primitive that is not in the table"
-  '(with-output-language (Lcore Expr) `(primcall not-a-primitive checked (quote 1))))
+  '(with-output-language (Lcore Expr) `(primcall not-a-primitive ([type-check checked]) (quote 1))))
 
 (reject! "a control input that is not checked/unchecked/proved"
-  '(with-output-language (Lcore Expr) `(primcall fl+ maybe (quote 1) (quote 2))))
+  '(with-output-language (Lcore Expr) `(primcall fl+ ([fp-contract maybe]) (quote 1) (quote 2))))
 
 (reject! "a policy naming a check that does not exist"
   '(with-output-language (Lcore Expr) `(policy ([no-such-check #f]) (quote 1))))
 
-(reject! "primcall with NO control input at all"
-  '(with-output-language (Lcore Expr) `(primcall fl+ (quote 1) (quote 2))))
+(reject! "primcall with a malformed control list"
+  '(with-output-language (Lcore Expr) `(primcall fl+ ([fp-contract]) (quote 1) (quote 2))))
+
+(ok! "per-check granularity: bounds elided, type still checked"
+     (lambda () (with-output-language (Lcore Expr)
+                  `(primcall flvector-ref ([type-check checked] [bounds-check proved]) v i))))
+
+(ok! "flneg exists and is not (fl- 0.0 x)"
+     (lambda () (with-output-language (Lcore Expr) `(primcall flneg () x))))
+
+(ok! "type predicates exist, so config-2c is expressible"
+     (lambda () (with-output-language (Lcore Expr)
+                  `(if (primcall flvector? () b) (quote 1) (primcall error () (quote 2))))))
 
 (printf "\nLanf:\n")
 
 (ok! "let binds a simple expression"
      (lambda () (with-output-language (Lanf Expr)
-                  `(let ([t (primcall fl+ proved a b)]) t))))
+                  `(let ([t (primcall fl+ ([fp-contract unchecked]) a b)]) t))))
 
 (ok! "if tests an atom, not an expression"
      (lambda () (with-output-language (Lanf Expr)
@@ -85,7 +96,7 @@
   '(with-output-language (Lanf Expr) `(if (primcall fl< checked a b) (quote 1) (quote 2))))
 
 (reject! "primcall with non-atomic operands is refused in ANF"
-  '(with-output-language (Lanf Expr) `(primcall fl+ proved (primcall fl* proved a b) c)))
+  '(with-output-language (Lanf Expr) `(primcall fl+ ([fp-contract unchecked]) (primcall fl* ([fp-contract unchecked]) a b) c)))
 
 ;; --- the check vocabulary --------------------------------------------------
 
@@ -96,6 +107,24 @@
       (printf "\n  ok   check vocabulary complete: ~a\n" names)
       (begin (set! failures (+ failures 1))
              (printf "\n  FAIL check vocabulary incomplete: ~a\n" names))))
+
+(set! checks (+ checks 1))
+(if (and (equal? (prim-checks 'flvector-ref) '(type-check bounds-check))
+         (null? (prim-checks 'fl/))
+         (memq 'div-check (prim-checks 'fxquotient))
+         (= (prim-arity 'flvector-set!) 3)
+         (equal? (default-controls 'fx+) '((overflow-check checked))))
+    (printf "  ok   prim table: checks, arity and defaults\n")
+    (begin (set! failures (+ failures 1))
+           (printf "  FAIL prim table wrong: ~a ~a\n"
+                   (prim-checks 'flvector-ref) (prim-arity 'flvector-set!))))
+
+(set! checks (+ checks 1))
+(if (and (primitive? 'flneg) (primitive? 'fl>) (primitive? 'flvector?)
+         (primitive? 'error) (primitive? 'fxquotient))
+    (printf "  ok   flneg, fl>, predicates, error and integer division present\n")
+    (begin (set! failures (+ failures 1))
+           (printf "  FAIL table still missing primitives\n")))
 
 (set! checks (+ checks 1))
 (if (and (control? 'proved) (control? 'unchecked) (not (control? 'elided)))

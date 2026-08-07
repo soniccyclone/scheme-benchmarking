@@ -42,6 +42,13 @@ Initial state. Velocities as given are per day and **must be multiplied by
 
 ## Procedure
 
+**0. Negation is IEEE negation, not subtraction from zero.** `ref.c` writes `-px`. A
+Scheme port that writes `(fl- 0.0 px)` is **not** equivalent: the two disagree at
+`px = 0.0`, where subtraction gives `0.0` and negation gives `-0.0`, and the sign survives
+the division that follows. It does not bite for these five bodies, because the momentum sum
+never cancels exactly, but it is a divergence from this specification and it would bite the
+moment one did. SonicScheme spells it `flneg`.
+
 **1. Offset momentum, once, before anything else.** Sum `v * mass` over all five bodies
 componentwise, then set the Sun's velocity to the negated sum divided by `SOLAR_MASS`.
 This puts the barycentre at rest. Skipping it still conserves energy but reports a
