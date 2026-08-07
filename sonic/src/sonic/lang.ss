@@ -177,7 +177,17 @@
       ;; operand as an already-materialised limit.
       vlen
       branch branch-if jump                         ; control
-      call ret))                                    ; calls
+      call ret                                      ; calls
+      ;; Access to a TOP-LEVEL binding, which is storage rather than a value in
+      ;; flight. Its operand is the cell's name, not a vreg.
+      ;;
+      ;; These exist because a top-level binding is defined in one function and
+      ;; read in others -- nbody's `pos` is written by the entry code and read
+      ;; inside `main` -- and register allocation is per function. Left as an
+      ;; ordinary vreg, the reading function sees a use with no definition and
+      ;; is handed a register unrelated to the one the writer used. What comes
+      ;; out is whatever that register held.
+      gref gset))                                   ; globals
   ;; There is deliberately NO mach-op spelling of a check.
   ;;
   ;; `check-bounds`, `check-type` and `check-overflow` used to live here

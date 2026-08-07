@@ -284,6 +284,32 @@
                   `((fsd ,val ,t ,heap-element-disp))
                   `((sd ,val ,t ,heap-element-disp))))))
 
+  ;; A top-level binding's cell. RV64 has no absolute addressing, so the
+  ;; address is materialised with lui/addi and then loaded through -- three
+  ;; instructions where x86-64 needs one, for the same reason indexed loads cost
+  ;; three: the ISA has one addressing mode and it is register plus a 12-bit
+  ;; immediate.
+  ;;
+  ;; The +#x800 is the carry correction, as in `r:const`: addi sign-extends its
+  ;; 12 bits, so a low half above #x7ff borrows one from the high half.
+  (define (rv64-address-of name t)
+    (let* ((a (global-address name))
+           (lo (- (bitwise-and (+ a #x800) #xfff) #x800))
+           (hi (bitwise-and (ash (- a lo) -12) #xfffff)))
+      (if (zero? lo)
+          `((lui ,t ,hi))
+          `((lui ,t ,hi) (addi ,t ,t ,lo)))))
+
+  (define (r:gref dst sc srcs)
+    (let ((t (rv64-addr-scratch)))
+      (append (rv64-address-of (car srcs) t)
+              (if (float? sc) `((fld ,dst ,t 0)) `((ld ,dst ,t 0))))))
+
+  (define (r:gset dst sc srcs)
+    (let ((t (rv64-addr-scratch)))
+      (append (rv64-address-of (car srcs) t)
+              (if (float? sc) `((fsd ,dst ,t 0)) `((sd ,dst ,t 0))))))
+
   ;; --- control --------------------------------------------------------------
   ;; Reached from `select-block` with dst and sc both #f.
 
@@ -438,7 +464,13 @@
      ;; it. See `tail-call-instr` in sonic/src/sonic/select.ss.
      (cons 'tailcall r:tailcall)
      (cons 'ret    r:ret)
+     ;; int -> double. `fcvt.d.l` was encodable long before anything could
+     ;; select it; see the note at the top of this file.
+     (cons 'cvt-f64-from-int
+           (lambda (dst sc srcs) `((fcvt.d.l ,dst ,(car srcs)))))
      (cons 'chk    r:chk)
+     (cons 'gref   r:gref)
+     (cons 'gset   r:gset)
      ))
 
   (define rv64-selector (make-selector 'rv64 rv64-rules arch-rv64))

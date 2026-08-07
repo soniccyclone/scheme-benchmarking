@@ -120,12 +120,21 @@
   (define (instr-def instr)
     (case (car instr)
       ((chk) #f)
+      ;; `gset` writes MEMORY. Its first slot is the value being stored, which
+      ;; is a use, not a definition -- reading it as one would end the value's
+      ;; live range at the store rather than extending it to it.
+      ((gset) #f)
       (else (and (symbol? (cadr instr)) (cadr instr)))))
 
   (define (instr-uses instr)
     (case (car instr)
       ((const) '())                       ; the datum is not an operand
-      ((chk)   (filter symbol? (cdddr instr)))   ; skips the tag
+      ((chk)   (filter symbol? (list-tail instr 4)))
+      ;; The operand of a global access is a CELL NAME, not a vreg. Reading it
+      ;; as one asks the allocator to place `%g-pos` in a register, which it
+      ;; cannot classify and would rewrite into the instruction if it could.
+      ((gref)  '())
+      ((gset)  (if (symbol? (cadr instr)) (list (cadr instr)) '()))
       (else
        (let loop ((xs (cdddr instr)) (k 0) (acc '()))
          (if (null? xs)

@@ -27,7 +27,7 @@
 ;;; number as "how many did the programmer switch off".
 
 (library (sonic lower)
-  (export lower-program lower-expr lower-toplevel lowered-classes
+  (export lower-program lower-expr lower-toplevel lowered-classes lowered-params
           make-lower-stats lower-stats? lower-stats-proved
           lower-stats-unchecked lower-stats-emitted)
   (import (chezscheme)
@@ -236,7 +236,8 @@
     (record-classes! (reverse instrs))
     (set! blocks (cons (list lbl (list 'block (reverse instrs) transfer)) blocks)))
   (define (reset-blocks!)
-      (reset-classes!) (set! blocks '()))
+      (reset-classes!)
+      (reset-params!) (set! blocks '()))
 
   ;; --- what class is a vreg in --------------------------------------------
   ;;
@@ -265,6 +266,22 @@
   ;; (op v sc ...) never sees it, and the allocator dies on a vreg it is being
   ;; asked to place.
   (define (lowered-classes) vreg-classes)
+
+  ;; Each function's PARAMETER LIST, in order: label -> (param ...).
+  ;;
+  ;; Lmach's `(program ([lbl blk] ...) lbl)` records no signatures, and without
+  ;; one nothing downstream can emit the moves that bring arguments out of the
+  ;; convention's registers into whatever the allocator gave the parameters. A
+  ;; function then reads its first argument from wherever its own scan happened
+  ;; to place the vreg -- `rdx`, say, while the caller put it in `rcx`.
+  ;;
+  ;; This is the same gap the return move had, at the other end of the call.
+  ;; Order matters and liveness cannot supply it: the entry block's live-in set
+  ;; says WHICH vregs arrive, not in which argument position.
+  (define fn-params (make-eq-hashtable))
+  (define (reset-params!) (set! fn-params (make-eq-hashtable)))
+  (define (note-params! lbl ps) (hashtable-set! fn-params lbl ps))
+  (define (lowered-params) fn-params)
 
   (define (vreg-class-of v)
     (or (hashtable-ref vreg-classes v #f)
@@ -499,6 +516,8 @@
            (for-each
             (lambda (b)
               (let ((x (car b)) (v (cadr b)))
+                (when (and (pair? v) (eq? (car v) 'lambda))
+                  (note-params! x (cadr v)))
                 (let-values (((is r xl) (walk (if (and (pair? v) (eq? (car v) 'lambda))
                                                   (caddr v) v)
                                               '() x #t)))
@@ -601,6 +620,7 @@
     (let ((stats (make-lower-stats 0 0 0)))
       (reset-blocks!)
       (reset-classes!)
+      (reset-params!)
       (let-values (((instrs result exit) (lower-into e stats name #t)))
         (unless exit
           (error 'lower-program
@@ -628,6 +648,7 @@
           (entry (fresh! (string-append (symbol->string name) ".entry"))))
       (reset-blocks!)
       (reset-classes!)
+      (reset-params!)
       (let* ((form (if (pair? p) p (unparse-Lrepr p))))
         ;; Seed from repr.ss, which owns storage classes. This is where LAMBDA
         ;; PARAMETERS come from: they have no defining instruction here, so
@@ -648,10 +669,12 @@
              (let ((x (car b)) (v (cadr b)))
                (if (and (pair? v) (eq? (car v) 'lambda))
                    ;; A defined procedure: its own block, named for the binding.
-                   (let-values (((is r xl) (lower-into (caddr v) stats x #t)))
-                     (when xl
-                       (record-classes! is)
-                       (emit-block! xl (reverse is) (list 'ret r))))
+                   (begin
+                     (note-params! x (cadr v))
+                     (let-values (((is r xl) (lower-into (caddr v) stats x #t)))
+                       (when xl
+                         (record-classes! is)
+                         (emit-block! xl (reverse is) (list 'ret r)))))
                    ;; A value: initialization, in source order.
                    (let-values (((is r) (lower-simple-or-expr v x stats)))
                      (set! init (append init is))))))

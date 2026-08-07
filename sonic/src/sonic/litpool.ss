@@ -88,7 +88,7 @@
 ;;; constant has a home the moment `chk` can name one.
 
 (library (sonic litpool)
-  (export current-litpool pool-label
+  (export current-litpool pool-label current-globals global-address
           make-pool pool?
           pool-intern! pool-intern-f64! pool-intern-i64!
           pool-intern-sign-mask! pool-intern-tag!
@@ -208,6 +208,24 @@
   ;; next instruction, so the program assembled and read the wrong eight bytes.
   (define (pool-label off)
     (string->symbol (string-append "%pool+" (number->string off))))
+
+  ;; Where each top-level binding's cell lives: cell name -> absolute address.
+  ;;
+  ;; Absolute rather than RIP-relative because the cells are in the WRITABLE
+  ;; segment and the code is not, so the two are megabytes apart and the
+  ;; displacement would depend on the final layout. The addresses are fixed by
+  ;; the driver before selection, which is the same shape as `current-litpool`:
+  ;; the selector cannot know a layout it does not own.
+  (define current-globals (make-parameter #f))
+
+  (define (global-address name)
+    (let ((tbl (current-globals)))
+      (unless tbl
+        (error 'global-address
+               "no global layout is in effect; the driver must parameterize `current-globals` before selection"
+               name))
+      (or (hashtable-ref tbl name #f)
+          (error 'global-address "no cell was reserved for this global" name))))
 
   (define (pool-intern! p kind key datum)
     (let ((k (cons kind key)))

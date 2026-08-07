@@ -21,7 +21,7 @@
         (sonic policy) (sonic anf) (sonic assign) (sonic inline) (sonic essa)
         (sonic elide) (sonic repr) (sonic lower) (sonic select) (sonic regs)
         (sonic regalloc) (sonic finalize) (sonic litpool) (sonic object)
-        (sonic target-rv64) (sonic target-x86-64))
+        (sonic target-rv64) (sonic target-x86-64) (sonic globals) (sonic runtime))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -37,8 +37,13 @@
              (parse-program (expand-program (read-all-from-file src)) nbody-externs))))))
 (define-values (p1 elide-st) (elide-program (essa-program p0)))
 (define-values (p2 rp) (select-representations-program p1))
-(define-values (prog lower-st) (lower-toplevel (unparse-Lrepr p2) 'main (repr-report-classes rp)))
+(define-values (prog0 lower-st) (lower-toplevel (unparse-Lrepr p2) 'main (repr-report-classes rp)))
 (define classes (lowered-classes))
+;; Top-level bindings are STORAGE: written by the entry code, read from any
+;; function, and register allocation is per function. Without cells, a reading
+;; function is handed a register unrelated to the one the writer used.
+(define cells (global-cells (unparse-Lrepr p2)))
+(define prog (globalize prog0 cells classes))
 
 ;; A call whose callee is not a block of this program is the runtime boundary.
 ;; Naming them is the point: a primitive that lowers to a call and names no
@@ -94,9 +99,12 @@
 (define (build target arch sel ret)
   ;; The allocator's class table is the authoritative one; selection must
   ;; read the same one or the return move cannot tell rax from xmm0.
-  (parameterize ((current-litpool (make-pool)) (current-vreg-classes classes))
+  (parameterize ((current-litpool (make-pool)) (current-vreg-classes classes)
+                 (current-globals
+                  (assign-global-cells
+                   (map global-cell-name (vector->list (hashtable-keys cells))))))
     (let* ((selected (select-program sel prog))
-           (fns (finalize-program target arch selected (cadr prog) (caddr prog) classes))
+           (fns (finalize-program target arch selected (cadr prog) (caddr prog) classes (lowered-params)))
            (body (apply append (map finalized-listing fns)))
            (undef (undefined-labels arch body))
            (listing (append body (apply append (map (lambda (s) (cons s ret)) undef))))

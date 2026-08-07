@@ -57,7 +57,8 @@
           finalized-frame finalized-spills)
   (import (chezscheme)
           (sonic regs)
-          (sonic regalloc))
+          (sonic regalloc)
+          (sonic callconv))
 
   ;; --- frame layout ---------------------------------------------------------
 
@@ -192,7 +193,12 @@
   ;; classes    : vreg -> storage class
   ;; own-labels : the labels belonging to this function, so an intra-function
   ;;              jump is not mistaken for a tail call
-  (define (finalize-function target arch name blocks alloc classes own-labels)
+  ;; `params` is this function's parameter list, in order, or '().
+  (define (finalize-function target arch name blocks alloc classes own-labels . opt)
+    (finalize-function* target arch name blocks alloc classes own-labels
+                        (if (pair? opt) (car opt) '())))
+
+  (define (finalize-function* target arch name blocks alloc classes own-labels params)
     (let* ((sp (spiller-for target))
            (assign (alloc-result-map alloc))
            (spills (alloc-result-spills alloc))
@@ -363,13 +369,96 @@
                                                     post)))
                                                instrs)))))
                          blocks))))
-        (make-finalized name
-                        (append ((spiller-prologue sp) bytes) listing)
-                        frame
-                        spills))))
+        ;; ARGUMENT ARRIVAL.
+        ;;
+        ;; The convention puts argument k of class c in a fixed register, and
+        ;; the allocator put the parameter wherever its own scan had room. The
+        ;; two are not the same register, and nothing bridged them: a function
+        ;; read its first argument from whatever the allocator picked, while the
+        ;; caller had written the convention's. `outer` read `i` from rdx while
+        ;; its caller wrote rcx, so the loop compared an unrelated register
+        ;; against its bound and fell straight out.
+        ;;
+        ;; This is the same gap the RETURN move had, at the other end of the
+        ;; call, and it failed the same way: silently, with a plausible value.
+        ;;
+        ;; The moves go after the prologue, so a spilled parameter's store lands
+        ;; in a frame that exists.
+        ;;
+        ;; Before it, the only way to execute it is to fall in from whatever
+        ;; precedes the function in the image -- and every call jumps straight
+        ;; to the label, skipping it. The frame is then never reserved, so every
+        ;; spill slot writes below the stack pointer, over the return address
+        ;; the call just pushed. That is a segfault at best.
+        (let* ((cc (callconv-by-name target))
+               (arrivals
+                (let loop ((ps params) (n (make-eq-hashtable)) (acc '()))
+                  (if (null? ps)
+                      (reverse acc)
+                      (let* ((p (car ps))
+                             (c (or (hashtable-ref classes p #f)
+                                    (error 'finalize-function
+                                           "a parameter with no storage class; nothing says which argument register it arrives in"
+                                           name p)))
+                             (k (hashtable-ref n c 0)))
+                        (hashtable-set! n c (+ k 1))
+                        (loop (cdr ps) n
+                              (cons (list 'move p c (arg-register cc c k)) acc))))))
+               ;; Each arrival is an Lmach `move`, so it goes through the same
+               ;; selection and the same spill machinery as any other.
+               ;; A parameter the allocator never placed is one this function
+               ;; never READS -- it has no live interval, so the scan never saw
+               ;; it. Its arrival move is dead, and emitting it would put a
+               ;; virtual register name in front of the encoder.
+               ;;
+               ;; Dropped rather than raised, because an unused parameter is
+               ;; ordinary: `inner` takes the vector its caller threads through
+               ;; even on the iteration that only compares indices.
+               (arrival-instrs
+                (apply append
+                       (map (lambda (m)
+                              (let* ((p (cadr m)) (c (caddr m)) (r (cadddr m)))
+                                (if (not (or (hashtable-ref assign p #f) (spilled? p)))
+                                    '()
+                                (let* ((parts (do-instr
+                                             (if (eq? c 'raw-f64)
+                                                 (if (eq? target 'rv64)
+                                                     `(fsgnj.d ,p ,r ,r)
+                                                     `(movsd ,p ,r))
+                                                 (if (eq? target 'rv64)
+                                                     `(addi ,p ,r 0)
+                                                     `(mov ,p ,r))))))
+                                  (append (car parts) (list (cadr parts)) (caddr parts))))))
+                            arrivals)))
+               (head (append ((spiller-prologue sp) bytes) arrival-instrs)))
+          ;; The prologue goes AFTER the function's entry label, not before it.
+          ;;
+          ;; Before it, the only way to execute it is to fall in from whatever
+          ;; precedes the function in the image -- and every call jumps straight
+          ;; to the label, skipping it. The frame is then never reserved, so
+          ;; every spill slot writes below the stack pointer, over the return
+          ;; address the call just pushed.
+          (make-finalized name
+                          (if (and (pair? listing) (symbol? (car listing)))
+                              (cons (car listing) (append head (cdr listing)))
+                              (append head listing))
+                          frame
+                          spills)))))
 
-  ;; A jump whose destination is a block of THIS function is an ordinary edge.
-  ;; Only a jump out of it is a tail call, and only that needs the epilogue.
+  ;; A jump whose destination is a block of this function is an ordinary edge
+  ;; and needs no epilogue. A jump to a function ENTRY is a tail call and does.
+  ;;
+  ;; The function's OWN entry is a tail-call target, not an ordinary edge, and
+  ;; conflating the two is a stack leak that looks like nothing else. A loop is
+  ;; a procedure that tail-calls itself, so the jump lands on its own entry
+  ;; label; treating that as an intra-function edge skips the epilogue, and the
+  ;; prologue at the entry then reserves ANOTHER frame. The stack grows by the
+  ;; frame size every iteration until it runs out -- which for a loop with no
+  ;; spills at all is zero bytes and no symptom, and for one with spills is a
+  ;; segfault whose backtrace points at whatever was executing when the guard
+  ;; page was hit.
+  ;;
+  ;; So `own-labels` excludes the entry.
   (define (own-label? i own-labels)
     (let ((t (let loop ((xs (cdr i)))
                (cond ((null? xs) #f)
@@ -379,16 +468,21 @@
       (and t (memq t own-labels) #t)))
 
   ;; The whole program: one finalized listing per function.
-  (define (finalize-program target arch selected blocks entry classes)
+  (define (finalize-program target arch selected blocks entry classes . opt)
+    (finalize-program* target arch selected blocks entry classes
+                       (if (pair? opt) (car opt) (make-eq-hashtable))))
+
+  (define (finalize-program* target arch selected blocks entry classes params)
     (let ((by-label (make-eq-hashtable)))
       (for-each (lambda (b) (hashtable-set! by-label (car b) (cadr b)))
                 (cadddr selected))
       (map (lambda (fn)
-             (let* ((labels (map car (cdr fn)))
+             (let* ((labels (remq (car fn) (map car (cdr fn))))
                     (sel-blocks (map (lambda (b)
                                        (list (car b) (hashtable-ref by-label (car b) '())))
                                      (cdr fn)))
                     (alloc (allocate-program arch (cdr fn) classes)))
-               (finalize-function target arch (car fn) sel-blocks alloc classes labels)))
+               (finalize-function target arch (car fn) sel-blocks alloc classes labels
+                                  (hashtable-ref params (car fn) '()))))
            (partition-into-functions blocks entry))))
   )

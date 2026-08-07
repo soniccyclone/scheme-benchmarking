@@ -316,8 +316,26 @@
                 ,(mem/disp (car srcs) (cadr srcs) heap-element-disp)
                 ,(caddr srcs)))))
 
+     ;; int -> double. `cvtsi2sd` was encodable and byte-verified long before
+     ;; anything could select it, which is the shape of gap `missing-rules`
+     ;; exists to report.
+     (cons 'cvt-f64-from-int
+           (lambda (dst sc srcs) `((cvtsi2sd ,dst ,(car srcs)))))
+
      (cons 'move
            (lambda (dst sc srcs) `((,(mov-for sc) ,dst ,(car srcs)))))
+
+     ;; A top-level binding's cell. Absolute addressing: the cells are in the
+     ;; writable segment, megabytes from the code, so a RIP displacement would
+     ;; depend on the final layout. `(mem #f ...)` is mod=00 rm=100 with a SIB
+     ;; naming no base -- the absolute disp32 form, which is exactly what
+     ;; `(mem rip ...)` is NOT (see encode-x86-64.ss).
+     (cons 'gref
+           (lambda (dst sc srcs)
+             `((,(mov-for sc) ,dst (mem #f #f 1 ,(global-address (car srcs)))))))
+     (cons 'gset
+           (lambda (dst sc srcs)
+             `((,(mov-for sc) (mem #f #f 1 ,(global-address (car srcs))) ,dst))))
 
      (cons 'jump   (lambda (dst sc srcs) `((jmp (label ,(car srcs))))))
      (cons 'branch (lambda (dst sc srcs) `((jmp (label ,(car srcs))))))

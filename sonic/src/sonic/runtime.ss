@@ -47,7 +47,8 @@
   (export runtime-listing runtime-labels
           heap-base-address heap-size
           runtime-data-size
-          heap-pointer-cell out-buffer-cell)
+          heap-pointer-cell out-buffer-cell
+          globals-base globals-span assign-global-cells)
   (import (chezscheme)
           (sonic numeric))
 
@@ -60,9 +61,27 @@
   (define data-base      #x600000)
   (define heap-pointer-cell data-base)              ; 8 bytes: the bump pointer
   (define out-buffer-cell   (+ data-base 8))        ; 8 bytes: one double
-  (define heap-base-address (+ data-base 64))
+  ;; The top-level bindings' cells sit between the runtime's own words and the
+  ;; heap. Reserving a fixed span rather than sizing it to the program keeps the
+  ;; heap's base a constant, which the entry code stores without arithmetic.
+  (define globals-base      (+ data-base 64))
+  (define globals-span      1024)                   ; 128 cells
+  (define heap-base-address (+ globals-base globals-span))
   (define heap-size      (* 1 1024 1024))
-  (define runtime-data-size (+ 64 heap-size))
+  (define runtime-data-size (+ 64 globals-span heap-size))
+
+  ;; cell name -> absolute address, in the order the program declares them.
+  (define (assign-global-cells names)
+    (let ((tbl (make-eq-hashtable)))
+      (let loop ((ns names) (at globals-base))
+        (cond
+         ((null? ns) tbl)
+         ((>= (- at globals-base) globals-span)
+          (error 'assign-global-cells
+                 "more top-level bindings than the reserved span holds"
+                 (length names) globals-span))
+         (else (hashtable-set! tbl (car ns) at)
+               (loop (cdr ns) (+ at 8)))))))
 
   ;; Linux x86-64 syscall numbers.
   (define sys-write 1)
