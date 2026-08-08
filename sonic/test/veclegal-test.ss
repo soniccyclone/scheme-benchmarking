@@ -28,7 +28,8 @@
 (import (chezscheme) (nanopass) (sonic lang) (sonic fixtures)
         (sonic loops) (sonic elide) (sonic alias) (sonic veclegal)
         (sonic read) (sonic expand) (sonic parse) (sonic policy)
-        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic pipeline))
+        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic pipeline)
+        (sonic driver))
 
 (define failures 0)
 (define checks 0)
@@ -479,7 +480,12 @@
                    (bv (get-bytevector-all p)))
               (close-port p)
               (utf8->string bv)))
-       (vs (vectorize-legal (real-ssa src nbody-externs))))
+       ;; ELIDED, which is the IR the back end sees. One `elide-program` call
+       ;; discharges 68 of nbody's 227 checks; this fixpoint discharges nearly
+       ;; all of them, and a legality pass looking at the un-fixed IR refuses
+       ;; every loop for checks the compiled program does not contain.
+       (vs (let-values (((el st) (elide-to-fixpoint (real-ssa src nbody-externs))))
+             (vectorize-legal el))))
   (check! "nbody yields a verdict per loop" (length vs) 7)
   (check! "and NONE of them is refused for a body this file could not find"
           (fold-left (lambda (a v) (or a (vl-refused-for? v 'loop-body-not-found)))
@@ -487,8 +493,15 @@
           #f)
   ;; What they ARE refused for, which is the analysis actually running. These
   ;; are the three that stand between nbody and milestone 4.
-  (check! "every one gives at least one substantive reason"
-          (fold-left (lambda (a v) (and a (pair? (vl-reasons v)))) #t vs)
+  ;; Every REFUSED loop gives a reason, and no legal one carries a stray reason
+  ;; it was not actually refused for. Written over the refused set rather than
+  ;; over all of them because a licensed loop has nothing to explain -- which
+  ;; is how this check first failed, and it was right to.
+  (check! "every refused loop gives at least one substantive reason"
+          (fold-left (lambda (a v)
+                       (and a (if (vl-legal? v) (null? (vl-reasons v))
+                                  (pair? (vl-reasons v)))))
+                     #t vs)
           #t)
   ;; THE WALK REACHES THE ARRAY ACCESSES, which is the thing a refusal for
   ;; `control-flow-in-body` prevented. essa wraps a loop's exit test in a phi
@@ -531,6 +544,25 @@
   ;; is the failure mode this whole pass exists to avoid.
   ;;
   ;; It matters for milestone 4: the axis worth vectorizing in nbody is not j.
+  ;; THE FIRST LOOP THIS COMPILER HAS EVER LICENSED.
+  ;;
+  ;; nbody's position update, `p[3i+k] += dt * v[3i+k]` over three components.
+  ;; Getting here needed four separate things to be true at once, and each was
+  ;; false: the loop had to be FOUND, its body REACHED, its checks discharged
+  ;; by the same fixpoint the back end uses, its arrays known distinct, and its
+  ;; subscripts compared by affine form rather than by name.
+  ;;
+  ;; Asserted with the widths, because "legal" without a width is not an answer
+  ;; a back end can use, and because a width above what the trip count supports
+  ;; is the specific failure veclegal's header is written against.
+  (check! "nbody's position update is LEGAL to vectorize, at 128 and 256 bits"
+          (let find ((xs vs))
+            (cond ((null? xs) #f)
+                  ((eq? (vl-loop (car xs)) 'loop%35.293)
+                   (list (vl-legal? (car xs)) (vl-widths (car xs))
+                         (vl-elt-class (car xs))))
+                  (else (find (cdr xs)))))
+          '(#t (128 256) raw-f64))
   (check! "and the inner loop is refused for being SHORT, not for being unknown"
           (let loop ((xs vs))
             (cond ((null? xs) #f)

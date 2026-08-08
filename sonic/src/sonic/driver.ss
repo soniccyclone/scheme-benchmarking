@@ -27,6 +27,12 @@
   ;; `(chezscheme)` exports both `compile-program` and `compile-to-file`, and
   ;; shadowing them in a library body is an error rather than a shadow.
   (export compile-sonic compile-sonic-to-file
+          ;; Exported so the LEGALITY pass can be run on the same IR the back
+          ;; end sees. One `elide-program` call discharges 68 of nbody's 227
+          ;; checks; this fixpoint discharges nearly all of them, and a
+          ;; vectorizer looking at the un-fixed IR refuses every loop for
+          ;; checks the compiled program does not contain.
+          elide-to-fixpoint
           compiled? compiled-image compiled-code compiled-pool
           compiled-entry compiled-listing compiled-functions
           compiled-globals compiled-lift-report)

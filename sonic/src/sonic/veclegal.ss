@@ -470,7 +470,88 @@
 
   ;; --- the verdict -----------------------------------------------------------
 
-  (define (distinct? tbl x y) (and tbl (must-not-alias? tbl x y)))
+  ;; Two arrays are distinct if an alias table says so, OR if the program SAID
+  ;; so. `declare-distinct` is this compiler's spelling of C99 `restrict`, and
+  ;; nbody's kernels carry `(declare-distinct (p v m) ...)` precisely so this
+  ;; question has an answer -- see the header of bench/nbody/config-sonic.sps.
+  ;;
+  ;; Reading it from the IR is not a shortcut around alias analysis, it is the
+  ;; only thing that works today: `alias-analyze` walks Lanf and essa renames
+  ;; every binding, so a table built before essa has keys that no longer name
+  ;; anything here. The declaration survives because it IS in the IR, at the
+  ;; renamed names, which is the whole advantage of a premise the language can
+  ;; state over one an analysis has to rediscover.
+  ;;
+  ;; Collected program-wide rather than by scope, which is sound because essa
+  ;; makes every binding unique: a name belongs to at most one declaration, so
+  ;; there is no scope in which a group could mean something else.
+  (define (distinct? tbl groups x y)
+    (or (and tbl (must-not-alias? tbl x y))
+        (and (not (eq? x y))
+             (let loop ([gs groups])
+               (cond [(null? gs) #f]
+                     [(and (memq x (car gs)) (memq y (car gs))) #t]
+                     [else (loop (cdr gs))])))))
+
+  ;; --- the dependence distance ----------------------------------------------
+  ;;
+  ;; Two accesses to the same array used to refuse whenever their subscripts
+  ;; were different NAMES, which is not a dependence test -- it is a test for
+  ;; whether SSA happened to give one value two names.
+  ;;
+  ;; nbody's position update is the case. It steps three components per body,
+  ;; so its subscripts are 3i, 3i+1 and 3i+2, and after essa the read and the
+  ;; write of the middle component are `t.311` and `t.309` -- both `3i+1`,
+  ;; different names. Every one of the nine accesses was reported as carrying a
+  ;; dependence on every other, including `p[3i+2]` against `p[3i]`, which can
+  ;; never be the same element at any distance.
+  ;;
+  ;; (sonic loops) already computes the affine form of every derived induction
+  ;; variable, base and coefficient and offset, so the exact test is available:
+  ;; two accesses at `c*i + a` and `c*i + b` collide at iteration distance d
+  ;; when `c*d = a - b`. That has a solution only when c divides a - b, and it
+  ;; is a CARRIED dependence only when the resulting d is nonzero. For offsets
+  ;; 0, 1 and 2 against a coefficient of 3, no nonzero d exists at all.
+  ;;
+  ;; Restricted to the single-index affine case on purpose. Anything else --
+  ;; different bases, an unknown coefficient, a subscript with no linear form --
+  ;; answers `unknown` and refuses, because a dependence test that guesses is
+  ;; the one failure this whole pass is built to avoid.
+  (define (iv-form l x)
+    (let loop ([ivs (loop-ivs l)])
+      (cond [(null? ivs) #f]
+            [(eq? (iv-name (car ivs)) x) (car ivs)]
+            [else (loop (cdr ivs))])))
+
+  (define (dependence l a b)
+    (if (eq? a b)
+        ;; The same name is the same element in the same iteration. That is a
+        ;; dependence WITHIN an iteration, which vectorizing does not reorder.
+        'independent
+        (let ([fa (iv-form l a)] [fb (iv-form l b)])
+          (if (not (and fa fb
+                        (eq? (iv-base fa) (iv-base fb))
+                        (integer? (iv-coeff fa)) (integer? (iv-coeff fb))
+                        (integer? (iv-offset fa)) (integer? (iv-offset fb))
+                        (= (iv-coeff fa) (iv-coeff fb))
+                        (not (zero? (iv-coeff fa)))))
+              'unknown
+              (let ([diff (- (iv-offset fa) (iv-offset fb))]
+                    [c (iv-coeff fa)])
+                (if (and (zero? (remainder diff c))
+                         (not (zero? (quotient diff c))))
+                    'carried
+                    'independent))))))
+
+  ;; Every `declare-distinct` group in the program.
+  (define (distinct-groups e)
+    (let ([acc '()])
+      (each-expr e
+                 (lambda (t)
+                   (nanopass-case (Lssa Expr) t
+                     [(declare-distinct (,x* ...) ,body) (set! acc (cons x* acc))]
+                     [else (void)])))
+      acc))
 
   (define vectorize-legal-loop
     (case-lambda
@@ -478,7 +559,8 @@
       [(e l tbl) (vectorize-legal-loop* e l tbl)]))
 
   (define (vectorize-legal-loop* e l tbl)
-    (let* ([f (loop-name l)]
+    (let* ([groups (distinct-groups e)]
+           [f (loop-name l)]
            [t (loop-trip l)]
            [body (loop-lambda-body e f)]
            [carried (apply append (loop-back-edges l))]
@@ -522,10 +604,19 @@
                   (unless (eq? w o)
                     (cond
                      [(eq? (acc-array w) (acc-array o))
-                      (unless (eq? (acc-index w) (acc-index o))
-                        (refuse! 'loop-carried-memory-dependence
-                                 (list (acc-array w) (acc-index w) (acc-index o))))]
-                     [(distinct? tbl (acc-array w) (acc-array o)) (void)]
+                      (case (dependence l (acc-index w) (acc-index o))
+                        [(independent) (void)]
+                        [(carried)
+                         (refuse! 'loop-carried-memory-dependence
+                                  (list (acc-array w) (acc-index w) (acc-index o)))]
+                        [else
+                         ;; No linear form for one of the subscripts, so no
+                         ;; claim either way. Refused under the same reason:
+                         ;; the detail says which pair could not be decided.
+                         (refuse! 'loop-carried-memory-dependence
+                                  (list (acc-array w) (acc-index w) (acc-index o)
+                                        'no-linear-form))])]
+                     [(distinct? tbl groups (acc-array w) (acc-array o)) (void)]
                      [else (refuse! 'may-alias (list (acc-array w) (acc-array o)))])))
                 accs)))
            accs)
