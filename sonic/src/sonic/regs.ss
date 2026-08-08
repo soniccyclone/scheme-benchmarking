@@ -66,11 +66,27 @@
       '(rbx r8 r9 r12 r13 r14)                      ; value: 6
       '(rcx rdx rsi rdi r10 r11)                    ; raw: 6
       '(xmm0 xmm1 xmm2 xmm3 xmm4 xmm5 xmm6 xmm7
-        xmm8 xmm9 xmm10 xmm11 xmm12 xmm13 xmm14)      ; float: 15, xmm15 is scratch
+        xmm8 xmm9 xmm10 xmm11 xmm12 xmm13)            ; float: 14, xmm14/15 scratch
       '((rsp . stack) (rbp . frame) (r15 . nil))
-      ;; rax: the two-address fixup for subsd/divsd needs somewhere to put the
-      ;; left operand when dst aliases src2, and xmm15 is the float equivalent.
-      '(rax xmm15)))
+      ;; TWO float scratches, not one, and the reason is three-address VEX.
+      ;;
+      ;; A two-address `addsd d, s` has two operands: if d is spilled it needs a
+      ;; scratch, and s can ride in memory, so one scratch covers it. The
+      ;; three-address `vaddsd d, a, b` has three, and `a` rides in the VEX
+      ;; prefix's vvvv field, which holds a register number and has no memory
+      ;; form -- so d and a can both need a register at once.
+      ;;
+      ;; The alternative was to refuse, which this pass does when it runs out of
+      ;; scratches, and refusing is what it did: nbody's `energy` hit
+      ;; `(vaddsd t.71 e%57.60 t.70)` with two of the three spilled. Spending a
+      ;; second float register is the cheap answer here and only here -- the
+      ;; float class has fourteen left and was never the class under pressure.
+      ;; That is a measured claim: nbody has 179 raw-f64 values against 196
+      ;; raw-word ones, and it was the raw-word pool that was spilling.
+      ;;
+      ;; rax stays the sole integer scratch: the integer ops are still
+      ;; two-address, so nothing there gained an operand.
+      '(rax xmm14 xmm15)))
 
   ;; --- RV64 -----------------------------------------------------------------
   ;; tp already means current-thread in the standard ABI, so using it costs
@@ -154,7 +170,7 @@
   ;; that breaks the first time a register is renamed.
   (define (float-scratch-name? target r)
     (case target
-      ((x86-64) (memq r '(xmm15)))
+      ((x86-64) (memq r '(xmm14 xmm15)))
       ((rv64)   (memq r '(ft9 ft10 ft11)))
       (else #f)))
 

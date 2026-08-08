@@ -249,6 +249,43 @@ a function needs its NAME (a top-level lambda arrives as an Expr, so a SimpleExp
 never sees it) or its parameters, because then the top-level case is the same line as the
 letrec case and cannot drift from it.
 
+### D33 --- the baseline guard is aimed at FUSION, not at the letter v
+
+`encode-x86-64.ss` refused every VEX-shaped mnemonic by name. That was a fair approximation
+while the encoder had none, and it is the wrong rule now that it does.
+
+D24 makes FP contraction a named permission that is off by default, because a fused
+multiply-add rounds differently from the reference C and the bit-exact oracle would be
+comparing two different programs. That argument applies to `vfmadd*` and `vfmsub*`. It does
+not apply to `vmulsd`, which computes exactly what `movsd` + `mulsd` computes --- same
+operands, same rounding, same bits --- in one instruction rather than two. The only
+difference is that VEX has a second source field, so the destination need not be one of the
+inputs.
+
+So the guard now admits the five three-address scalar forms by name and refuses the fused
+ones by name. Both halves are tested: a guard that refused everything would pass the refusal
+checks while making the three-address forms unreachable.
+
+**This raises the ISA floor** from baseline SSE2 to AVX for the scalar back end. That is a
+real cost and it is accepted rather than overlooked: the vector path already emits AVX-512,
+so the project had accepted AVX hardware before this, and the floor is Sandy Bridge, 2011.
+A machine that cannot run our vector output cannot run our scalar output either, and
+pretending otherwise would have meant carrying two scalar back ends to serve a CPU nobody is
+measuring on.
+
+Worth 29 of 119 instructions in nbody's pairwise force loop --- every binary float op was
+paying a `movsd` to stand its left operand up in the destination --- and it removes the one
+case that had no instruction-local answer at all. `dst = src2` for a non-commutative op
+needed a scratch register a selection rule cannot ask for; `vsubsd d, a, b` reads both
+sources before it writes, so `d` aliasing `b` is simply fine.
+
+The cost is a second float scratch. A two-address `addsd d, s` has two operands and one may
+ride in memory, so one scratch covers it; `vaddsd d, a, b` has three, and `a` sits in the
+prefix's `vvvv` field, which holds a register number and has no memory form. Fourteen
+allocatable float registers remain, and the float class was never the one under pressure ---
+nbody has 179 raw-f64 values against 196 raw-word ones, and it was the raw-word pool that
+spilled.
+
 Kept because they are implementation hazards, not trivia.
 
 - **Kildall's Theorem 2 is false** for his own constant propagation. The proof needs distributivity, not monotonicity; his function fails it. Algorithm A computes MFP, not MOP. Kam & Ullman 1977 corrected it.

@@ -75,6 +75,7 @@
           vec-emit-kernel vec-emit-scalar-kernel vec-emit-loop
           nbody-fields-kernel)
   (import (chezscheme)
+          (sonic vex)
           (only (sonic encode-x86-64) gpr? reg-number)
           (only (sonic loops) trip-count trip-kind)
           (sonic veclegal))
@@ -296,45 +297,11 @@
     (case width ((128) 0) ((256) 1) ((512) 2)
       (else (error 'vec-encode-instr "not a vector width" width))))
 
-  ;; 2-byte VEX when nothing needs the third byte: no high rm register, no high
-  ;; index, W = 0 and the 0F map. That is exactly gas's rule, and matching it is
-  ;; what makes a byte comparison against gas meaningful rather than a
-  ;; comparison of two arbitrary legal encodings.
-  (define (vex-bytes r x b w vvvv l pp mp)
-    (if (and (zero? x) (zero? b) (zero? w) (= mp 1))
-        (list #xC5
-              (bitwise-ior (bitwise-arithmetic-shift-left (- 1 r) 7)
-                           (bitwise-arithmetic-shift-left
-                            (bitwise-and (bitwise-not vvvv) #xf) 3)
-                           (bitwise-arithmetic-shift-left l 2)
-                           pp))
-        (list #xC4
-              (bitwise-ior (bitwise-arithmetic-shift-left (- 1 r) 7)
-                           (bitwise-arithmetic-shift-left (- 1 x) 6)
-                           (bitwise-arithmetic-shift-left (- 1 b) 5)
-                           mp)
-              (bitwise-ior (bitwise-arithmetic-shift-left w 7)
-                           (bitwise-arithmetic-shift-left
-                            (bitwise-and (bitwise-not vvvv) #xf) 3)
-                           (bitwise-arithmetic-shift-left l 2)
-                           pp))))
-
-  ;; EVEX. Four bytes, and five of the register-extension bits in them are
-  ;; stored INVERTED, which is the single most common way to get this wrong.
-  (define (evex-bytes r r2 x b w vvvv v2 ll pp mp)
-    (list #x62
-          (bitwise-ior (bitwise-arithmetic-shift-left (- 1 r) 7)
-                       (bitwise-arithmetic-shift-left (- 1 x) 6)
-                       (bitwise-arithmetic-shift-left (- 1 b) 5)
-                       (bitwise-arithmetic-shift-left (- 1 r2) 4)
-                       mp)
-          (bitwise-ior (bitwise-arithmetic-shift-left w 7)
-                       (bitwise-arithmetic-shift-left
-                        (bitwise-and (bitwise-not vvvv) #xf) 3)
-                       #b100
-                       pp)
-          (bitwise-ior (bitwise-arithmetic-shift-left ll 5)
-                       (bitwise-arithmetic-shift-left (- 1 v2) 3))))
+  ;; VEX and EVEX prefix bytes come from (sonic vex), which encode-x86-64.ss
+  ;; also uses for the three-address SCALAR forms. Two copies would have to
+  ;; agree to the bit -- five register-extension bits in these are stored
+  ;; inverted -- and a second implementation that inverted four of them would
+  ;; assemble cleanly and address the wrong registers.
 
   ;; The operand width an instruction's registers agree on, and the memory
   ;; stride that follows from it.

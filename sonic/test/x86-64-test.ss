@@ -59,9 +59,20 @@
        (equal? (r 'rbx 'raw-word '(rbx r9)) '((sub rbx r9))))
   (ck! "integer subtract into its own second operand negates instead of spilling"
        (equal? (r 'rbx 'raw-word '(r8 rbx)) '((sub rbx r8) (neg rbx))))
-  (ck! "subsd into its own second operand REFUSES rather than emitting wrong code"
-       (raises? (lambda () (r 'xmm1 'raw-f64 '(xmm2 xmm1))))))
+  ;; The float case no longer has this problem at all, which is the better
+  ;; outcome than refusing it well. `subsd` into its own second operand had no
+  ;; instruction-local answer: it needed a scratch register a selection rule
+  ;; cannot ask for, so the rule refused and twoaddr.ss broke it afterwards.
+  ;; `vsubsd d, a, b` reads both sources before it writes, so d aliasing b is
+  ;; simply fine, and one instruction covers every case.
+  (ck! "float subtract is three-address, so no case needs a copy or a scratch"
+       (and (equal? (r 'xmm1 'raw-f64 '(xmm2 xmm1)) '((vsubsd xmm1 xmm2 xmm1)))
+            (equal? (r 'xmm0 'raw-f64 '(xmm1 xmm2)) '((vsubsd xmm0 xmm1 xmm2)))
+            (equal? (r 'xmm0 'raw-f64 '(xmm0 xmm2)) '((vsubsd xmm0 xmm0 xmm2))))))
 (let ((r (cdr (assq 'add x86-64-rules))))
+  ;; The INTEGER ops are still two-address -- x86-64 has no three-address
+  ;; integer add -- so the swap, the dropped copy and the negate all still
+  ;; matter and are still tested above.
   (ck! "a commutative op swaps instead of needing a scratch"
        (equal? (r 'rbx 'raw-word '(r8 rbx)) '((add rbx r8)))))
 
@@ -392,13 +403,31 @@
 ;; that fused a multiply-add would round differently from ref.c and the
 ;; bit-exactness oracle would be comparing two different programs. So this is a
 ;; correctness test, not a scope test.
+;;
+;; THE LINE IS FUSION, NOT THE LETTER V. It used to be drawn at any VEX-shaped
+;; mnemonic, which was a fair approximation while the encoder had none. It has
+;; the three-address scalar forms now, and those change nothing about the
+;; arithmetic: `vmulsd d, a, b` is the same multiply as `movsd d, a` +
+;; `mulsd d, b`, same operands, same rounding, same bits, in one instruction
+;; instead of two. Only the fused ones round differently, and they are the ones
+;; still refused.
 
 (for-each
  (lambda (m)
    (ck! (string-append "refuses " (symbol->string m))
         (and (not (x86-64-supports? m))
              (raises? (lambda () (encode-instr (list m 'xmm0 'xmm1 'xmm2)))))))
- '(vfmadd231sd vfmadd132sd vfnmadd213sd vaddsd vmulsd))
+ '(vfmadd231sd vfmadd132sd vfnmadd213sd vfmsub231sd vfnmsub132sd))
+
+;; And the ones it now accepts, which is the other half of the claim: a guard
+;; that refused everything would pass the checks above while making the
+;; three-address forms unreachable.
+(for-each
+ (lambda (m)
+   (ck! (string-append "accepts " (symbol->string m) ", which is not contraction")
+        (and (x86-64-supports? m)
+             (pair? (encode-instr (list m 'xmm0 'xmm1 'xmm2))))))
+ '(vaddsd vsubsd vmulsd vdivsd))
 
 (ck! "the refusal names the reason rather than reading as a missing feature"
      (guard (e (#t (let ((s (with-output-to-string

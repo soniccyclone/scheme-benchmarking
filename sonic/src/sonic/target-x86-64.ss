@@ -78,9 +78,32 @@
 
   ;; --- the three-address to two-address rewrite -----------------------------
 
+  ;; The THREE-ADDRESS counterpart of each destructive float op, when one
+  ;; exists. See (sonic vex): `vmulsd d, a, b` is the same multiply as
+  ;; `movsd d, a` + `mulsd d, b` -- same operands, same rounding, same bits --
+  ;; encoded so the destination need not be one of the inputs.
+  ;;
+  ;; It is not contraction. `vfmadd*` is, and the encoder still refuses that by
+  ;; name, which is the line D24 draws.
+  (define three-address-fp
+    '((addsd . vaddsd) (subsd . vsubsd) (mulsd . vmulsd) (divsd . vdivsd)))
+
   (define (two-address who mn sc dst a b commutative?)
-    (let ((mv (mov-for sc)))
+    (let ((mv (mov-for sc))
+          (v3 (assq mn three-address-fp)))
       (cond
+       ;; ONE INSTRUCTION, in every case, when the op has a three-address form.
+       ;;
+       ;; This is where the fixup move came from: in SSA the destination is a
+       ;; fresh name, so it aliases neither source, and the two-address form
+       ;; below has to stand the left operand up in it first. nbody's pairwise
+       ;; force loop paid that 29 times in 119 instructions.
+       ;;
+       ;; It also removes the case that had no instruction-local answer at all.
+       ;; `dst = b` for a non-commutative op used to need a scratch register a
+       ;; selection rule cannot ask for; `vsubsd d, a, b` reads both sources
+       ;; before it writes, so d aliasing b is simply fine.
+       (v3 `((,(cdr v3) ,dst ,a ,b)))
        ((eq? dst a) `((,mn ,dst ,b)))
        ((eq? dst b)
         (cond

@@ -15,9 +15,27 @@
 ;; 196 raw-word values against 45 tagged ones and the pools were sized the other
 ;; way round, so its pairwise loop spilled seven values through a single scratch
 ;; and spent 85 of 119 instructions moving data.
-(ck! "x86-64: 6 value, 6 raw, 15 float (rax and xmm15 reserved as scratch)"
+(ck! "x86-64: 6 value, 6 raw, 14 float (rax, xmm14 and xmm15 reserved as scratch)"
      (and (= (value-count arch-x86-64) 6) (= (raw-count arch-x86-64) 6)
-          (= (float-count arch-x86-64) 15)))
+          (= (float-count arch-x86-64) 14)))
+;; TWO float scratches on x86-64, because of three-address VEX. A two-address
+;; `addsd d, s` has two operands and one can ride in memory, so one scratch
+;; covers it; `vaddsd d, a, b` has three, and `a` sits in the VEX prefix's vvvv
+;; field, which holds a register number and has no memory form. So d and a can
+;; both need a register at once, and with one scratch the pass refused an
+;; instruction it had the registers for.
+;;
+;; Spending the register is cheap HERE and only here: nbody has 179 raw-f64
+;; values against 196 raw-word ones, and it was the raw-word pool that spilled.
+;; The integer ops are still two-address, so rax stays alone.
+(ck! "x86-64 reserves two float scratches and one integer scratch"
+     (and (= 2 (length (arch-float-scratch arch-x86-64)))
+          (= 1 (length (arch-int-scratch arch-x86-64)))))
+;; The scratch registers must not also be allocatable, which is the bug the
+;; RV64 agent found and the reason `scratch` is a separate field at all.
+(ck! "and neither scratch is in the allocatable float pool"
+     (not (exists (lambda (r) (memq r (arch-float arch-x86-64)))
+                  (arch-float-scratch arch-x86-64))))
 ;; The four registers that survive a call are still value class: System V makes
 ;; rbx, r12, r13 and r14 callee-saved and they did not move. r10 and r11 did,
 ;; and both are caller-saved, so no tagged value was relying on them across a

@@ -44,7 +44,8 @@
           x86-64-supports? x86-64-mnemonics
           reject-non-baseline!
           gpr? xmm? reg-number gpr-8bit-name)
-  (import (chezscheme))
+  (import (chezscheme)
+          (sonic vex))
 
   ;; --- registers ------------------------------------------------------------
   ;; The numbering is the hardware's, not the partition's. regs.ss decides which
@@ -216,6 +217,13 @@
                 (if (or force-rex? (not (= rex #x40))) (list rex) '())
                 opbytes tail imm-tail))))
 
+  ;; The VEX counterpart of `asm`. Same `rm-encoding`, so ModRM, SIB and the
+  ;; displacement are produced by the one routine that knows how; the REX byte
+  ;; is replaced by the VEX prefix, which carries r/x/b itself.
+  (define (vex-asm who opcode vvvv pp mp l w regf rm)
+    (let-values (((r x b tail) (rm-encoding who regf rm)))
+      (append (vex-bytes r x b w vvvv l pp mp) (list opcode) tail)))
+
   ;; --- the instruction table ------------------------------------------------
   ;;
   ;; Deliberately small: the subset the benchmarks need. Encoding the rest of
@@ -245,6 +253,28 @@
     '((addsd . #x58) (subsd . #x5C) (mulsd . #x59)
       (divsd . #x5E) (sqrtsd . #x51)))
 
+  ;; THE SAME FIVE, THREE-ADDRESS.
+  ;;
+  ;; SSE is two-address: `mulsd d, s` computes d := d * s, so every binary
+  ;; float op costs a preceding `movsd` to stand the left operand up in the
+  ;; destination. In nbody's pairwise force loop that was 29 of 119
+  ;; instructions -- moves that exist only because the destination had to be
+  ;; one of the inputs.
+  ;;
+  ;; VEX gives the encoding a second source field. `vmulsd d, a, b` computes
+  ;; d := a * b with d free, and it is the same multiply: same operands, same
+  ;; rounding, same result to the bit. It is not contraction. `vfmadd*` and
+  ;; `vfmsub*` are, and those remain refused by name -- see the baseline guard
+  ;; below, which is aimed at fusion rather than at the letter v.
+  ;;
+  ;; The opcodes are identical to the SSE table's because they are the same
+  ;; instructions; only the prefix differs. Sharing the numbers rather than
+  ;; restating them is deliberate: two tables would be one edit away from
+  ;; disagreeing about what `vsubsd` subtracts.
+  (define vex-arith
+    '((vaddsd . addsd) (vsubsd . subsd) (vmulsd . mulsd)
+      (vdivsd . divsd) (vsqrtsd . sqrtsd)))
+
   ;; PACKED double bitwise ops, 66-prefixed rather than F2.
   ;;
   ;; They are here for one job: IEEE negation and absolute value. `sub 0.0 x` is
@@ -270,6 +300,7 @@
 
   (define (mnemonic-known? m)
     (or (assq m int-alu) (assq m sse-arith) (assq m sse-bitwise)
+        (assq m vex-arith)
         (assq m jcc-table) (assq m setcc-table)
         (memq m '(mov movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
                   syscall))
@@ -279,6 +310,7 @@
 
   (define (x86-64-mnemonics)
     (append (map car int-alu) (map car sse-arith) (map car sse-bitwise)
+            (map car vex-arith)
             (map car jcc-table) (map car setcc-table)
             '(mov movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
               syscall)))
@@ -380,6 +412,21 @@
             (error 'encode-instr "scalar-double source must be xmm or memory" i))
           (asm 'encode-instr '(#xF2) 0 (list #x0F (cdr (assq m sse-arith)))
                (reg-number dst) src '() #f)))
+       ((assq m vex-arith)
+        ;; (vmulsd dst src1 src2) -- three operands, dst distinct from both.
+        ;; `src1` rides in the VEX vvvv field and `src2` is the r/m operand, so
+        ;; the addressing logic is `rm-encoding`'s, unchanged: only the prefix
+        ;; differs from the two-address form.
+        (let ((dst (arg 0)) (src1 (arg 1)) (src2 (arg 2)))
+          (unless (xmm? dst) (error 'encode-instr "scalar-double destination must be xmm" i))
+          (unless (xmm? src1) (error 'encode-instr "VEX first source must be xmm" i))
+          (unless (or (xmm? src2) (mem? src2))
+            (error 'encode-instr "scalar-double source must be xmm or memory" i))
+          (vex-asm 'encode-instr
+                   (cdr (assq (cdr (assq m vex-arith)) sse-arith))
+                   (reg-number src1)
+                   (vex-pp #xF2) (vex-map #x0F) 0 0
+                   (reg-number dst) src2)))
        ((assq m sse-bitwise)
         (let ((dst (arg 0)) (src (arg 1)))
           (unless (xmm? dst) (error 'encode-instr "packed-double destination must be xmm" i))

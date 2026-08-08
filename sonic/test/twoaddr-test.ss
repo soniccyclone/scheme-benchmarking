@@ -39,20 +39,42 @@
   (cadr (cadr (car (cadr (unparse-Lmach prog))))))
 
 ;;; ==========================================================================
-;;; 1. The case the selector refuses
+;;; 1. The case the selector USED to refuse
 ;;; ==========================================================================
 
-;; a - b with the destination already holding b. On x86-64 `subsd dst, src`
-;; computes dst := dst - src, so this asks for b - a in the register that has to
-;; end up holding a - b, and there is nowhere to stand a up.
+;; a - b with the destination already holding b. Under two-address SSE this had
+;; no instruction-local answer: `subsd dst, src` computes dst := dst - src, so
+;; it asks for b - a in the register that must end up holding a - b, and there
+;; is nowhere to stand a up. The rule refused and this pass broke it afterwards.
+;;
+;; The float ops are THREE-ADDRESS now. `vsubsd d, a, b` reads both sources
+;; before it writes, so d aliasing b is fine and one instruction covers it. The
+;; selector no longer refuses, and this pass -- while still correct -- is no
+;; longer needed for the float case.
+;;
+;; The pass is kept and still tested. It is the mechanism for any two-address
+;; op whose destination aliases its second operand, and x86-64's INTEGER
+;; arithmetic is still two-address; what changed is which ops reach it.
 (define aliased
   '(program ((entry (block ((sub v-x raw-f64 v-a v-x)
                             (move v-r raw-f64 v-x))
                            (ret v-r))))
      entry))
 
-(ck! "the x86-64 selector REFUSES the aliased non-commutative case"
-     (raises? (lambda () (select-program x86-64-selector (twoaddr arch-rv64 aliased)))))
+(ck! "the x86-64 selector no longer refuses the aliased float case"
+     (not (raises? (lambda () (select-program x86-64-selector (twoaddr arch-rv64 aliased))))))
+
+;; And it needs no fixup at all: one instruction, destination aliasing the
+;; second source, which is exactly what the two-address form could not express.
+(ck! "it selects to a single three-address subtract"
+     (parameterize ((current-vreg-classes
+                     (let ((h (make-eq-hashtable)))
+                       (for-each (lambda (v) (hashtable-set! h v 'raw-f64))
+                                 '(v-a v-b v-x v-r))
+                       h)))
+       (equal? (car (cadr (car (cadddr (select-program x86-64-selector
+                                                       (twoaddr arch-rv64 aliased))))))
+               '(vsubsd v-x v-a v-x))))
 
 (define fixed (twoaddr arch-x86-64 aliased))
 
@@ -72,14 +94,18 @@
 ;; no storage class, so the rule reads it from `current-vreg-classes` and puts a
 ;; double in xmm0. Without it every function returned whatever was already in
 ;; the return register.
-(ck! "selection turns it into movsd/subsd/movsd, with subsd reading v-x"
+;; The fixup's output still selects, and now costs a move MORE than not fixing
+;; it -- which is the point: the pass is correct and, for floats, no longer
+;; worth running. Asserted rather than deleted so that a later reader can see
+;; the two forms side by side and why one won.
+(ck! "the fixed form still selects, at one instruction more than the unfixed one"
      (parameterize ((current-vreg-classes
                      (let ((h (make-eq-hashtable)))
                        (for-each (lambda (v) (hashtable-set! h v 'raw-f64))
                                  '(v-a v-b v-x v-r))
                        h)))
        (equal? (cadr (car (cadddr (select-program x86-64-selector fixed))))
-               '((movsd xmm15 v-a) (subsd xmm15 v-x) (movsd v-x xmm15)
+               '((movsd xmm15 v-a) (vsubsd xmm15 xmm15 v-x) (movsd v-x xmm15)
                  (movsd v-r v-x) (movsd xmm0 v-r) (ret)))))
 
 ;; The scratch is a physical register, so the output is still valid Lmach and

@@ -233,6 +233,11 @@
             int-scratch   ; list, in the order this pass may take them
             float-scratch
             mem-operand   ; (offset class) -> an operand, or #f if the ISA has none
+            ;; instr -> the ONE operand position that may be memory, or #f for
+            ;; "any but the destination". Three-address VEX needs this: its
+            ;; first source rides in a prefix field that holds a register
+            ;; number and cannot name memory.
+            mem-position
             returns?      ; instr -> #t if control leaves here
             tail-jump?))  ; instr -> #t if it is a jump out of the function
 
@@ -249,13 +254,24 @@
            `((mov (mem rsp #f 1 ,off) ,reg))))
      (lambda (bytes) (if (zero? bytes) '() `((sub rsp (imm ,bytes)))))
      (lambda (bytes) (if (zero? bytes) '() `((add rsp (imm ,bytes)))))
-     '(rax)
-     '(xmm15)
+     ;; DERIVED from regs.ss, not restated. These lists were literals, and when
+     ;; a second float scratch was added for the three-address VEX forms the
+     ;; partition grew one and this did not, so the pass kept refusing an
+     ;; instruction it now had the registers for. regs.ss is the source of truth
+     ;; for which registers are reserved; asking it is the only way the two
+     ;; cannot drift.
+     (arch-int-scratch arch-x86-64)
+     (arch-float-scratch arch-x86-64)
      ;; x86-64 reads memory directly, which is the whole reason it gets away
      ;; with four raw registers. A spilled SOURCE does not need a scratch at
      ;; all: `cmp rax, [rsp+16]` is one instruction. Exactly one operand may be
      ;; memory, so this covers the second spilled operand and no more.
      (lambda (off sc) `(mem rsp #f 1 ,off))
+     ;; The three-address float forms take memory only in their last operand.
+     (lambda (i)
+       (and (pair? i)
+            (memq (car i) '(vaddsd vsubsd vmulsd vdivsd))
+            2))
      (lambda (i) (eq? (car i) 'ret))
      (lambda (i) (and (eq? (car i) 'jmp)
                       (pair? (cdr i))
@@ -271,12 +287,15 @@
        (if (eq? sc 'raw-f64) `((fsd ,reg sp ,off)) `((sd ,reg sp ,off))))
      (lambda (bytes) (if (zero? bytes) '() `((addi sp sp ,(- bytes)))))
      (lambda (bytes) (if (zero? bytes) '() `((addi sp sp ,bytes))))
-     '(t0 t1 t2)
-     '(ft9 ft10 ft11)
+     (arch-int-scratch arch-rv64)
+     (arch-float-scratch arch-rv64)
      ;; RV64 is load/store: no arithmetic instruction reads memory, so every
      ;; spilled operand costs a scratch. That is the trade the ISA makes, and it
      ;; is why RV64 reserves two integer scratches where x86-64 reserves one.
      #f
+     ;; RV64 is load/store: `mem-operand` is already #f, so no operand of any
+     ;; instruction may be memory and this is never consulted.
+     (lambda (i) #f)
      (lambda (i) (and (eq? (car i) 'jalr) (equal? (cdr i) '(zero ra 0))))
      ;; `jal zero <label>` is an unconditional jump. Within a function that is a
      ;; block edge, not an exit, so the caller tells us which labels are ours.
@@ -411,11 +430,26 @@
       ;; cannot -- an address computation needs the value in a register -- and
       ;; twice it cannot, because one instruction may hold only one memory
       ;; operand.
+      ;; WHICH operand position may be memory is per instruction, not just
+      ;; "anything but the destination".
+      ;;
+      ;; A three-address VEX form carries its first source in the prefix's vvvv
+      ;; field, which encodes a REGISTER NUMBER and has no memory form. Only the
+      ;; r/m operand -- the last one -- can be a memory reference. Letting a
+      ;; spilled value ride in position 1 produced `vaddsd xmm15, [rsp+8], xmm0`,
+      ;; which the encoder refused; had it not, there is no way to encode it and
+      ;; the refusal is the only correct answer.
+      (define (mem-position-ok? i k)
+        (let ((p ((spiller-mem-position sp) i)))
+          (if p (= k p) (> k 0))))
+
       (define (mem-eligible i v)
         (let loop ((xs (cdr i)) (k 0) (hit #f))
           (cond ((null? xs) hit)
                 ((eq? (car xs) v)
-                 (if (or hit (= k 0)) #f (loop (cdr xs) (+ k 1) k)))
+                 (if (or hit (not (mem-position-ok? i k)))
+                     #f
+                     (loop (cdr xs) (+ k 1) k)))
                 ((memq v (spilled-in (car xs))) #f)   ; nested: needs a register
                 (else (loop (cdr xs) (+ k 1) hit)))))
 
