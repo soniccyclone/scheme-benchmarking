@@ -216,6 +216,39 @@ fixnum join answered `tagged` silently and left an untagged machine word in the 
 for D21's collector to scavenge. A refusal is a bug report. A silent wrong class is memory
 corruption that nothing downstream will ever look at again.
 
+### D32 --- a fixture cannot test the shape the front end produces
+
+Five analysis passes -- `loops.ss`, `veclegal.ss`, `escape.ss`, `alias.ss`, `abcd.ss` -- were
+written as a `nanopass-case` over an Lssa or Lanf **Expr**. The pipeline hands them a
+**Program**. Every one matched nothing and returned its empty answer, and every one of them
+was green across its whole test file while doing it.
+
+The tests could not have caught it. Every fixture in all five files is a hand-built Expr, so
+each test exercised the one shape that works. A fixture is a claim about a pass's behaviour
+on an input the pass will never receive.
+
+The failure mode is worse than a crash, and three of the five demonstrate why: an empty
+answer is a legitimate answer for an analysis. No loops found, no allocation sites, an
+inequality graph that proves nothing --- each is what a correct pass says about a program
+with nothing in it. `alias.ss` raised, and was the easiest of the five to notice.
+
+The damage compounded quietly. `veclegal.ss` asks `loops.ss` which loops exist, got none,
+produced no verdicts, and the vectorizer had nothing to consider. Three passes agreeing that
+nbody has nothing worth looking at.
+
+**Every pass gets at least one test that starts from source text.** Not instead of fixtures
+--- fixtures are how you test a specific shape --- but alongside, asserting something
+knowable independently of the compiler. nbody allocates exactly three vectors; that number
+is a fact about the benchmark, not about our IR, which is what makes it worth asserting.
+
+Two repair shapes, chosen per file rather than uniformly. Normalising `(top ...)` into a
+`letrec` at the entry point is exact --- top-level bindings are mutually recursive and
+visible to one another, which is what letrec means --- and is right where several walks in
+one file would otherwise each need teaching. Handling `top` directly is right where entering
+a function needs its NAME (a top-level lambda arrives as an Expr, so a SimpleExpr walker
+never sees it) or its parameters, because then the top-level case is the same line as the
+letrec case and cannot drift from it.
+
 Kept because they are implementation hazards, not trivia.
 
 - **Kildall's Theorem 2 is false** for his own constant propagation. The proof needs distributivity, not monotonicity; his function fails it. Algorithm A computes MFP, not MOP. Kam & Ullman 1977 corrected it.
