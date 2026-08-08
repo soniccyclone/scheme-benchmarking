@@ -34,7 +34,7 @@
           (sonic lang) (sonic read) (sonic expand) (sonic parse) (sonic policy)
           (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide)
           (sonic repr) (sonic lift) (sonic lower) (sonic globals)
-          (sonic shapes) (sonic interval)
+          (sonic shapes) (sonic interval) (sonic dce)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
           (sonic order)
@@ -63,10 +63,18 @@
                     ((lifted lrep) (lift-program (unparse-Lrepr p2))))
         (let*-values (((prog0 lower-st) (lower-toplevel lifted 'main
                                                         (repr-report-classes rp))))
-          (let* ((classes (lowered-classes))
-                 (cells (global-cells lifted))
-                 (prog (globalize prog0 cells classes))
-                 (entry (caddr prog))
+          (let*-values
+              (((classes) (lowered-classes))
+               ((cells) (global-cells lifted))
+               ;; DCE LAST, after globalisation. The passes above each leave
+               ;; definitions nothing reads -- elision rewrites a use into a
+               ;; constant and leaves the `gref` that loaded it, lowering names
+               ;; every intermediate whether or not it survives -- and none of
+               ;; them can see it, because the use they would have to inspect
+               ;; belongs to another pass's output. Running here sees all of it
+               ;; at once, including the grefs globalisation itself introduces.
+               ((prog dce-st) (dce-program (globalize prog0 cells classes))))
+          (let* ((entry (caddr prog))
                  ;; SORTED: this list decides each global's ADDRESS, so an
                  ;; unstable order moved every global between runs.
                  (gnames (map global-cell-name (sorted-key-list cells)))
@@ -100,7 +108,7 @@
                                             #x600000 runtime-data-size)))
                 (make-compiled img (function-object-code o) pool
                                (+ elf-text-vaddr start) listing fns
-                               gnames lrep))))))))
+                               gnames lrep)))))))))
 
   ;; Run the elision analysis until the parameter intervals stop improving.
   ;;

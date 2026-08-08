@@ -386,9 +386,40 @@
 
   ;; Allocate over a whole CFG. This is what a real program goes through;
   ;; `allocate` remains for single-block fixtures.
+  ;; MOVE HINTS: dst -> src, for every `(move dst sc src)`.
+  ;;
+  ;; nbody's hot loop is 155 instructions of which 104 are moves, against 25 of
+  ;; actual arithmetic. Most of them exist only because the allocator picked
+  ;; different registers for two values that a move connects -- the two-address
+  ;; fixup, uncoalesced SSA copies, argument setup. Giving a move's destination
+  ;; the SAME register as its source turns the move into `mov r, r`, which is
+  ;; then deleted outright.
+  ;;
+  ;; This is coalescing, in the form a linear scan can do it. Chaitin's version
+  ;; merges nodes in an interference graph and there is no graph here; the
+  ;; equivalent is a preference consulted when a register is chosen, taken only
+  ;; when the preferred register is genuinely free. That makes it a hint and not
+  ;; a constraint, so it can never create a conflict -- it can only fail to
+  ;; help.
+  (define (move-hints blocks)
+    (let ((tbl (make-eq-hashtable)))
+      (for-each
+       (lambda (b)
+         (for-each (lambda (i)
+                     (when (and (pair? i) (eq? (car i) 'move) (= (length i) 4)
+                                (symbol? (cadr i)) (symbol? (cadddr i)))
+                       ;; First hint wins: a vreg defined once in SSA has one
+                       ;; move that matters, and taking the last would depend on
+                       ;; block order.
+                       (unless (hashtable-ref tbl (cadr i) #f)
+                         (hashtable-set! tbl (cadr i) (cadddr i)))))
+                   (cadr (cadr b))))
+       blocks)
+      tbl))
+
   (define (allocate-program arch blocks classes)
     (allocate/intervals* arch (live-intervals/cfg blocks arch) classes
-                         (call-positions blocks)))
+                         (call-positions blocks) (move-hints blocks)))
 
   ;; The instruction positions at which a call happens, in the same numbering
   ;; `live-intervals/cfg` uses.
@@ -433,13 +464,20 @@
   ;; some registers callee-saved would need the prologue to know which the
   ;; function uses, and it would buy nothing in the loops, which contain no
   ;; calls -- every loop back edge is a TAIL call, which is a jump.
-  (define (allocate/intervals* arch ivals classes calls)
+  (define allocate/intervals*
+    (case-lambda
+      ((arch ivals classes calls)
+       (allocate/intervals* arch ivals classes calls (make-eq-hashtable)))
+      ((arch ivals classes calls hints)
+       (allocate/intervals** arch ivals classes calls hints))))
+
+  (define (allocate/intervals** arch ivals classes calls hints)
     (let ((crosses-call?
            (lambda (iv)
              (exists (lambda (c) (and (< (cadr iv) c) (>= (caddr iv) c))) calls))))
-      (allocate/scan arch ivals classes crosses-call?)))
+      (allocate/scan arch ivals classes crosses-call? hints)))
 
-  (define (allocate/scan arch ivals classes crosses-call?)
+  (define (allocate/scan arch ivals classes crosses-call? hints)
     (let* ([ivals ivals]
            [assign (make-eq-hashtable)]
            [spills '()]
@@ -514,10 +552,50 @@
                             (begin
                               (set! spills (cons v spills))
                               (scan (cdr is) still-active))))
-                      (let ([r (car pool)])
+                      ;; Prefer the register of the value this one is a copy of
+                      ;; -- see `move-hints`.
+                      ;;
+                      ;; The source is still ACTIVE at this point, not free: a
+                      ;; move's source is read at the very instruction that
+                      ;; defines its destination, so linear scan's expiry rule
+                      ;; (`end < start`) has not released it. Taking its register
+                      ;; anyway is what coalescing is, and it is sound HERE and
+                      ;; nowhere else: the source dies at this instruction and a
+                      ;; move reads it before writing.
+                      ;;
+                      ;; It would NOT be sound in general. `(add dst a b)` lowers
+                      ;; to `mov dst, a` then `add dst, b`, so giving dst the
+                      ;; register of a dying `b` clobbers b before it is read.
+                      ;; That is why this consults the move hints rather than
+                      ;; relaxing expiry to `end <= start` for everything.
+                      (let* ([src (hashtable-ref hints v #f)]
+                             [srcr (and src (hashtable-ref assign src #f))]
+                             ;; The source's interval, when it is still active,
+                             ;; holds a register of the right class, and ends
+                             ;; EXACTLY here -- that is, it dies at the very move
+                             ;; that defines v.
+                             [dying (and srcr
+                                         (eq? (hashtable-ref classes src #f) sc)
+                                         (let ([a (assq src still-active)])
+                                           (and a (= (caddr a) start) a)))]
+                             [want (cond [(and srcr (memq srcr pool)) srcr]
+                                         [dying srcr]
+                                         [else #f])]
+                             [r (or want (car pool))]
+                             ;; Coalescing TRANSFERS the register; it does not
+                             ;; share it. The source is dead from here, so its
+                             ;; interval leaves the active list NOW -- otherwise
+                             ;; expiry catches up later and hands srcr back to
+                             ;; the free pool while v is still living in it, and
+                             ;; the next vreg of that class gets it too. That is
+                             ;; two values in one register, which does not fail
+                             ;; an assertion; it computes the wrong answer.
+                             [rest (if (and dying (eq? r srcr))
+                                       (remq dying still-active)
+                                       still-active)])
                         ;; THE assertion. Not a warning.
                         (check-assignment! arch sc r)
                         (hashtable-set! assign v r)
-                        (hashtable-set! free sc (cdr pool))
-                        (scan (cdr is) (cons iv still-active))))))))))))
+                        (hashtable-set! free sc (remq r pool))
+                        (scan (cdr is) (cons iv rest))))))))))))
   )

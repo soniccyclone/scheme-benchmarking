@@ -551,6 +551,15 @@
                   ;; convention.
                   (cons (car xs) (append held run out)))))))
 
+      ;; `mov r, r` / `movsd r, r` / RV64's `addi r, r, 0` and `fsgnj.d r, r, r`.
+      (define (self-move? i)
+        (case (car i)
+          ((mov movsd) (and (= (length i) 3) (eq? (cadr i) (caddr i))))
+          ((addi) (and (= (length i) 4) (eq? (cadr i) (caddr i)) (eqv? (cadddr i) 0)))
+          ((fsgnj.d) (and (= (length i) 4) (eq? (cadr i) (caddr i))
+                          (eq? (cadr i) (cadddr i))))
+          (else #f)))
+
       (define (emit-mov dst src)
         ;; `float-register?`, not membership in the allocatable pool: a cycle is
         ;; broken through the float SCRATCH, which sits outside that pool, and
@@ -607,7 +616,19 @@
             ;; because fusing a compare with its branch is only valid once
             ;; nothing can be inserted between them, and the spill code inserted
             ;; above is exactly the thing that could.
-            (listing (peephole-runs target listing)))
+            (listing (peephole-runs target listing))
+            ;; Delete moves that coalescing made redundant.
+            ;;
+            ;; The allocator now gives a move's destination its source's
+            ;; register where it can, which turns the move into `mov r, r`.
+            ;; Deleting those is the whole point -- a self-move is the shape a
+            ;; coalesced copy leaves behind, and leaving it in means the
+            ;; coalescing bought nothing.
+            (listing (filter (lambda (i)
+                               (not (and (pair? i)
+                                         (memq (car i) '(mov movsd addi fsgnj.d))
+                                         (self-move? i))))
+                             listing)))
         ;; ARGUMENT ARRIVAL.
         ;;
         ;; The convention puts argument k of class c in a fixed register, and
