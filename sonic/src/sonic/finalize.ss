@@ -41,16 +41,21 @@
 ;;; return AND before every tail call, since a tail call jumps and never comes
 ;;; back to unwind.
 ;;;
-;;; Nothing else is in the frame yet. No callee-saved saves, because the
-;;; allocator has not been told which registers a call clobbers; no outgoing
-;;; argument area, because nothing here passes arguments on the stack. Both are
-;;; refused rather than omitted, so a program that grows one fails loudly
-;;; instead of quietly corrupting its own return address.
+;;; The frame also carries an OUTGOING ARGUMENT AREA, at the bottom, for calls
+;;; whose arguments overflow the register set. See the diagram on
+;;; `frame-layout` for the arithmetic that makes both sides of a call agree
+;;; without either knowing the other's frame size.
+;;;
+;;; No callee-saved saves, because the allocator has not been told which
+;;; registers a call clobbers. That one is still refused rather than omitted, so
+;;; a program that grows one fails loudly instead of quietly corrupting its own
+;;; return address.
 
 (library (sonic finalize)
   (export finalize-function finalize-program
           make-frame-layout frame-layout? frame-layout-map frame-layout-count
-          frame-layout-bytes frame-slot-offset
+          frame-layout-bytes frame-layout-outgoing
+          frame-slot-offset frame-incoming-offset
           make-spiller spiller? spiller-target
           spiller-x86-64 spiller-rv64 spiller-for
           finalized? finalized-name finalized-listing
@@ -64,9 +69,32 @@
 
   ;; --- frame layout ---------------------------------------------------------
 
+  ;; THE FRAME, bottom to top, as this compiler lays it out:
+  ;;
+  ;;     [rsp + bytes + 8 + 8i]   incoming stack argument i
+  ;;     [rsp + bytes]            return address
+  ;;     ---------------------    the prologue's `sub rsp, bytes`
+  ;;     [rsp + 8*(out + i)]      spill slot i
+  ;;     [rsp + 8i]               OUTGOING stack argument i
+  ;;     rsp
+  ;;
+  ;; The outgoing area is at the BOTTOM, and that placement is what makes the
+  ;; arithmetic close. A caller writes outgoing argument i at [rsp + 8i]; the
+  ;; `call` pushes a return address, so the callee's rsp is 8 lower, and after
+  ;; its own prologue the callee finds that word at [rsp + bytes + 8 + 8i].
+  ;; Both sides compute the same address without either knowing the other's
+  ;; frame size.
+  ;;
+  ;; Spill slots used to start at [rsp+0] and there was no outgoing area at
+  ;; all, so a call with more arguments than registers stored them straight
+  ;; over the caller's own spilled values. That never fired only because the
+  ;; CALLEE side could not read a stack argument either -- it asked the
+  ;; convention for the fifth raw argument register, got #f, and handed the
+  ;; encoder a move from nothing.
   (define-record-type (frame-layout make-frame-layout frame-layout?)
-    (fields map        ; vreg -> slot index
-            count))    ; number of slots
+    (fields map         ; vreg -> slot index
+            count       ; number of spill slots
+            outgoing))  ; words reserved for outgoing stack arguments
 
   (define-record-type (finalized make-finalized finalized?)
     (fields name listing frame spills))
@@ -81,22 +109,115 @@
     ;; does not fault on either target; it misaligns every SSE spill on x86-64,
     ;; where a 16-byte load from an unaligned address DOES fault, and that fault
     ;; would point at the load rather than at the prologue that caused it.
-    (let ((n (* slot-bytes (frame-layout-count f))))
+    (let ((n (* slot-bytes (+ (frame-layout-outgoing f) (frame-layout-count f)))))
       (if (zero? (modulo n 16)) n (+ n 8))))
 
+  ;; Spill slots sit ABOVE the outgoing area, which is why this adds it in.
+  ;; Getting the shift wrong is not a fault: it aliases a spilled value onto an
+  ;; outgoing argument, so a call silently overwrites a live local.
   (define (frame-slot-offset f v)
     (let ((i (hashtable-ref (frame-layout-map f) v #f)))
-      (and i (* slot-bytes i))))
+      (and i (* slot-bytes (+ (frame-layout-outgoing f) i)))))
 
-  (define (build-frame spills)
+  ;; The offset at which the CALLEE finds its i'th incoming stack argument,
+  ;; measured from its own stack pointer after the prologue. See the diagram on
+  ;; `frame-layout`: past the whole frame, past the return address, then i
+  ;; words up.
+  (define (frame-incoming-offset f i)
+    (+ (frame-layout-bytes f) slot-bytes (* slot-bytes i)))
+
+  ;; Substitute the symbolic `(incoming i)` displacements the tail-call emitters
+  ;; leave behind. Selection cannot compute these -- the offset is measured from
+  ;; the CALLER'S frame, and the frame is not laid out until here -- so the
+  ;; marker travels through selection, allocation and spill rewriting as an
+  ;; opaque list and is resolved once, on the finished listing.
+  ;;
+  ;; Rewritten everywhere rather than at known positions, because the two
+  ;; targets put it in different places: x86-64 inside a memory operand,
+  ;; RV64 as a bare offset field on the store.
+  (define (patch-incoming frame x)
+    (cond
+     ((and (pair? x) (eq? (car x) 'incoming))
+      (frame-incoming-offset frame (cadr x)))
+     ((pair? x) (cons (patch-incoming frame (car x))
+                      (patch-incoming frame (cdr x))))
+     (else x)))
+
+  (define (build-frame spills outgoing)
     (let ((tbl (make-eq-hashtable)))
       (let loop ((vs spills) (i 0))
         (if (null? vs)
-            (make-frame-layout tbl i)
+            (make-frame-layout tbl i outgoing)
             (if (hashtable-ref tbl (car vs) #f)
                 (loop (cdr vs) i)
                 (begin (hashtable-set! tbl (car vs) i)
                        (loop (cdr vs) (+ i 1))))))))
+
+  ;; How many words of outgoing argument area this function needs: the most any
+  ;; one of its calls overflows by. Read off the Lmach blocks rather than the
+  ;; selected stream, because Lmach still names the arguments as vregs and the
+  ;; class table answers for each of them; by the time selection has run, the
+  ;; stores exist and the count would have to be recovered from them.
+  ;;
+  ;; A tail call is also spelled `call` in Lmach -- the language has no tailcall
+  ;; production, select.ss recognises the SHAPE -- so this counts both, which is
+  ;; what we want: a tail call's outgoing area is the caller's incoming one, and
+  ;; sizing for the larger of the two costs at most a few words.
+  ;; How many of this function's own parameters arrive on the stack. The same
+  ;; per-class walk the arrival code does, and the number a tail call out of
+  ;; here is allowed to overwrite.
+  (define (incoming-stack-words target params classes)
+    (let ((cc (callconv-by-name target)) (n (make-eq-hashtable)))
+      (fold-left
+       (lambda (acc p)
+         (let* ((c (or (hashtable-ref classes p #f) 'raw-word))
+                (k (hashtable-ref n c 0)))
+           (hashtable-set! n c (+ k 1))
+           (if (arg-register cc c k) acc (+ acc 1))))
+       0 params)))
+
+  ;; The stack words needed by the TAIL calls specifically. Lmach has no
+  ;; tailcall production -- select.ss recognises the shape, a call that is the
+  ;; block's last instruction whose result the transfer returns -- so the same
+  ;; shape test is applied here.
+  (define (tail-outgoing-words-for target blocks classes)
+    (let ((cc (callconv-by-name target)))
+      (fold-left
+       (lambda (most b)
+         (let* ((blk (cadr b))
+                (is (cadr blk))
+                (t (caddr blk))
+                (last (and (pair? is) (car (reverse is)))))
+           (if (and last (pair? last) (eq? (car last) 'call)
+                    (pair? t) (eq? (car t) 'ret) (eq? (cadr t) (cadr last)))
+               (max most
+                    (stack-words-for-args
+                     cc (map (lambda (a)
+                               (or (and (symbol? a) (hashtable-ref classes a #f))
+                                   'raw-word))
+                             (cddddr last))))
+               most)))
+       0 blocks)))
+
+  (define (outgoing-words-for target blocks classes)
+    (let ((cc (callconv-by-name target)))
+      (let loop ((bs blocks) (most 0))
+        (if (null? bs)
+            most
+            (loop (cdr bs)
+                  (let inner ((is (cadr (cadr (car bs)))) (m most))
+                    (cond
+                     ((null? is) m)
+                     ((and (pair? (car is)) (eq? (car (car is)) 'call))
+                      ;; (call dst sc callee arg ...) -- the callee is a label.
+                      (let* ((args (cddddr (car is)))
+                             (cs (map (lambda (a)
+                                        (or (and (symbol? a)
+                                                 (hashtable-ref classes a #f))
+                                            'raw-word))
+                                      args)))
+                        (inner (cdr is) (max m (stack-words-for-args cc cs)))))
+                     (else (inner (cdr is) m)))))))))
 
   ;; --- per-target spellings -------------------------------------------------
   ;;
@@ -220,17 +341,46 @@
   ;; `params` is this function's parameter list, in order, or '().
   (define (finalize-function target arch name blocks alloc classes own-labels . opt)
     (finalize-function* target arch name blocks alloc classes own-labels
-                        (if (pair? opt) (car opt) '())))
+                        (if (pair? opt) (car opt) '())
+                        (if (and (pair? opt) (pair? (cdr opt))) (cadr opt) 0)
+                        (if (and (pair? opt) (pair? (cddr opt))) (caddr opt) 0)))
 
-  (define (finalize-function* target arch name blocks alloc classes own-labels params)
+  (define (finalize-function* target arch name blocks alloc classes own-labels
+                              params outgoing tail-outgoing)
     (let* ((sp (spiller-for target))
            (assign (alloc-result-map alloc))
            (spills (alloc-result-spills alloc))
-           (frame (build-frame spills))
+           (frame (build-frame spills outgoing))
            (bytes (frame-layout-bytes frame))
            (spilled? (lambda (v) (and (symbol? v)
                                       (hashtable-ref (frame-layout-map frame) v #f)
-                                      #t))))
+                                      #t)))
+           ;; THE TAIL-CALL CONDITION, checked where both numbers exist.
+           ;;
+           ;; A tail call's stack arguments are written over the caller's own
+           ;; incoming argument area, because the jump pushes no return address and
+           ;; the callee reads its stack arguments exactly where the caller's were.
+           ;; That is sound as long as the callee needs no MORE words than the caller
+           ;; received. Needing more means writing past the incoming area into the
+           ;; caller's caller's frame, which is live.
+           ;;
+           ;; Growing the stack instead -- shifting the return address up and moving
+           ;; the whole frame -- is what a compiler with a real shuffle does, and it
+           ;; is a different piece of work. Refusing here is honest and, unlike the
+           ;; refusal this replaces, it fires only on the case that is actually
+           ;; unsound rather than on every tail call with a stack argument.
+           (checked
+            (let ((have (incoming-stack-words target params classes)))
+              (when (> tail-outgoing have)
+                (error 'finalize-function
+                       (string-append
+                        "a tail call needs more outgoing stack words than this "
+                        "function received, so its outgoing area would be "
+                        "written past the incoming one into a live frame; "
+                        "growing the stack for a tail call needs a frame "
+                        "shuffle this compiler does not have")
+                       name tail-outgoing have)))))
+
 
       (define (class-of v)
         (or (hashtable-ref classes v #f)
@@ -698,19 +848,70 @@
         ;; spill slot writes below the stack pointer, over the return address
         ;; the call just pushed. That is a segfault at best.
         (let* ((cc (callconv-by-name target))
-               (arrivals
-                (let loop ((ps params) (n (make-eq-hashtable)) (acc '()))
+               ;; Register arrivals and STACK arrivals, split.
+               ;;
+               ;; `arg-register` answers #f once a class runs out, and that #f
+               ;; used to go straight into a move: `mov rcx, #f` reached the
+               ;; encoder, which reported "bad mov operands" and named nothing
+               ;; that would tell you a sixth raw argument was the cause. A
+               ;; parameter past the registers arrives in the caller's outgoing
+               ;; area, and its slot index is its position among the OVERFLOWING
+               ;; arguments in source order -- the same walk `tail-call-plan`
+               ;; does on the caller's side, which is why the two agree.
+               (split
+                (let loop ((ps params) (n (make-eq-hashtable)) (slot 0)
+                           (regs '()) (stack '()))
                   (if (null? ps)
-                      (reverse acc)
+                      (cons (reverse regs) (reverse stack))
                       (let* ((p (car ps))
                              (c (or (hashtable-ref classes p #f)
                                     (error 'finalize-function
                                            "a parameter with no storage class; nothing says which argument register it arrives in"
                                            name p)))
-                             (k (hashtable-ref n c 0)))
+                             (k (hashtable-ref n c 0))
+                             (r (arg-register cc c k)))
                         (hashtable-set! n c (+ k 1))
-                        (loop (cdr ps) n
-                              (cons (list 'move p c (arg-register cc c k)) acc))))))
+                        (if r
+                            (loop (cdr ps) n slot
+                                  (cons (list 'move p c r) regs) stack)
+                            (loop (cdr ps) n (+ slot 1)
+                                  regs (cons (list p c slot) stack)))))))
+               (arrivals (car split))
+               ;; STACK ARRIVALS GO LAST, after the register parallel copy.
+               ;;
+               ;; They cannot go first. A stack arrival writes the parameter's
+               ;; ALLOCATED register, and the allocator draws from the same
+               ;; pools the convention passes arguments in -- so writing one
+               ;; early can destroy an argument register a register arrival has
+               ;; not read yet. After the copy, every argument register has been
+               ;; consumed and each stack arrival writes a destination no other
+               ;; arrival touches, since distinct live parameters get distinct
+               ;; registers.
+               ;;
+               ;; Emitted through the SPILLER rather than as an Lmach move,
+               ;; because RV64's move is `addi rd, rs, 0` and has no memory
+               ;; form. The spiller already spells a load from the stack on both
+               ;; targets; this is the same load at a different offset.
+               (stack-arrivals
+                (apply append
+                       (map (lambda (sa)
+                              (let* ((p (car sa)) (c (cadr sa))
+                                     (off (frame-incoming-offset frame (caddr sa)))
+                                     (r (hashtable-ref assign p #f)))
+                                (cond
+                                 (r ((spiller-reload sp) r off c))
+                                 ((spilled? p)
+                                  ;; Memory to memory, so it goes through a
+                                  ;; scratch -- the one place an arrival needs
+                                  ;; one, and it is free here because no live
+                                  ;; range can occupy a scratch.
+                                  (let ((t (car (scratches-for c))))
+                                    (append ((spiller-reload sp) t off c)
+                                            ((spiller-store sp)
+                                             (frame-slot-offset frame p) t c))))
+                                 ;; A parameter the function never reads.
+                                 (else '()))))
+                            (cdr split))))
                ;; Each arrival is an Lmach `move`, so it goes through the same
                ;; selection and the same spill machinery as any other.
                ;; A parameter the allocator never placed is one this function
@@ -764,7 +965,8 @@
                                                      arrival-pairs)
                                                 mov-of emit-mov)))
                           out)))
-               (head (append ((spiller-prologue sp) bytes) arrival-instrs)))
+               (head (append ((spiller-prologue sp) bytes)
+                             arrival-instrs stack-arrivals)))
           ;; The prologue goes AFTER the function's entry label, not before it.
           ;;
           ;; Before it, the only way to execute it is to fall in from whatever
@@ -773,9 +975,11 @@
           ;; every spill slot writes below the stack pointer, over the return
           ;; address the call just pushed.
           (make-finalized name
-                          (if (and (pair? listing) (symbol? (car listing)))
-                              (cons (car listing) (append head (cdr listing)))
-                              (append head listing))
+                          (patch-incoming
+                           frame
+                           (if (and (pair? listing) (symbol? (car listing)))
+                               (cons (car listing) (append head (cdr listing)))
+                               (append head listing)))
                           frame
                           spills)))))
 
@@ -796,6 +1000,14 @@
                                      (cdr fn)))
                     (alloc (allocate-program arch (cdr fn) classes)))
                (finalize-function target arch (car fn) sel-blocks alloc classes labels
-                                  (hashtable-ref params (car fn) '()))))
+                                  (hashtable-ref params (car fn) '())
+                                  ;; From the LMACH blocks, `(cdr fn)`, not the
+                                  ;; selected ones: Lmach still names a call's
+                                  ;; arguments as vregs the class table answers
+                                  ;; for, while selection has already turned
+                                  ;; them into stores whose count would have to
+                                  ;; be recovered by pattern matching.
+                                  (outgoing-words-for target (cdr fn) classes)
+                                  (tail-outgoing-words-for target (cdr fn) classes))))
            (partition-into-functions blocks entry))))
   )

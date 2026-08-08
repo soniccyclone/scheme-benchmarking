@@ -123,6 +123,50 @@
        "(define (main) (display (outer 0 0.0)) (newline))\n(main)\n")
       '(9.0))
 
+;; STACK ARGUMENTS, which did not work in either direction.
+;;
+;; x86-64 has four raw-word argument registers, so a sixth fixnum argument has
+;; to travel on the stack. Two things were missing and only one was known:
+;;
+;;   the CALLER had no outgoing argument area, so a store would have landed on
+;;   its own spill slots -- and the caller side never fired because
+;;
+;;   the CALLEE asked the convention for the fifth raw argument register, got
+;;   #f, and handed the encoder `mov rcx, #f`. "bad mov operands" is a loud
+;;   failure and names nothing that points at a sixth argument.
+;;
+;; The frame now reserves an outgoing area at the bottom, so a caller writes
+;; argument i at [rsp + 8i] and the callee -- one return address and one
+;; prologue lower -- reads it at [rsp + bytes + 8 + 8i]. Neither side needs to
+;; know the other's frame size.
+(run! "a call with more arguments than registers passes them on the stack"
+      (string-append
+       "(define (six a b c d e f) (fx+ a (fx+ b (fx+ c (fx+ d (fx+ e f))))))\n"
+       "(define (main) (display (fx->fl (six 1 2 3 4 5 6))) (newline))\n(main)\n")
+      '(21.0))
+
+;; THE SAME THING AS A TAIL CALL, which is the harder half.
+;;
+;; A tail call jumps without pushing a return address, so the callee reads its
+;; stack arguments exactly where the CALLER'S were -- the outgoing area is the
+;; caller's own incoming one. Selection cannot compute that address because it
+;; depends on the caller's frame size, so the emitters leave `(incoming i)` and
+;; finalize substitutes it once the frame is laid out.
+;;
+;; Ten million iterations rather than three. The interesting failure is not a
+;; wrong sum, it is a frame leaked per iteration -- and at three iterations a
+;; leak is invisible. At ten million it is eighty megabytes and the program
+;; dies, which is the only way this test can tell that the tail call is still
+;; a tail call.
+(run! "a tail call with a stack argument, ten million times, in constant stack"
+      (string-append
+       "(define (loop i a b c d e)\n"
+       "  (if (fx= i 0) (fx+ a (fx+ b (fx+ c (fx+ d e))))\n"
+       "      (loop (fx- i 1) a b c d e)))\n"
+       "(define (main) (display (fx->fl (loop 10000000 1 2 3 4 5))) (newline))\n"
+       "(main)\n")
+      '(15.0))
+
 ;; A REPRESENTATION CONVERSION, compiled and run.
 ;;
 ;; `pick` is called with a boolean-valued raw word and with a heap object, so
@@ -204,6 +248,32 @@
        (equal? out '(-0.16907516382852447 -0.16908760523460614)))
   (unless (equal? out '(-0.16907516382852447 -0.16908760523460614))
     (display "       got=") (write out) (newline)))
+
+;; THE CASE THAT IS STILL REFUSED, and the refusal is the point.
+;;
+;; A tail call may overwrite the caller's incoming argument area because the
+;; caller is done with it. It may not write PAST that area: those words belong
+;; to the caller's caller and are live. So a tail call needing more stack words
+;; than the enclosing function received has to grow the stack -- shift the
+;; return address up and shuffle the frame -- which this compiler does not do.
+;;
+;; Asserted because the refusal used to fire on EVERY tail call with a stack
+;; argument, which is a much larger set, and a test that only checks the happy
+;; path would not notice if it drifted back.
+(set! checks (+ checks 1))
+(let ((caught #f))
+  (guard (e (#t (set! caught #t)))
+    (compile-and-run
+     (string-append
+      "(define (big a b c d e f g)\n"
+      "  (fx+ a (fx+ b (fx+ c (fx+ d (fx+ e (fx+ f g)))))))\n"
+      "(define (small p q) (big p q 1 2 3 4 5))\n"
+      "(define (main) (display (fx->fl (small 9 8))) (newline))\n(main)\n")
+     '(display newline)))
+  (if caught
+      (display "  ok   a tail call that would GROW the stack is refused\n")
+      (begin (set! failures (+ failures 1))
+             (display "  FAIL a tail call wrote past its incoming argument area\n"))))
 
 ;; DETERMINISM. The same source must produce the same bytes.
 ;;

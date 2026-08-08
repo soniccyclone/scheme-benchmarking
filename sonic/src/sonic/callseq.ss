@@ -56,7 +56,7 @@
 (library (sonic callseq)
   (export make-call-emitter call-emitter?
           call-emitter-name call-emitter-move call-emitter-store-arg
-          call-emitter-call call-emitter-jump
+          call-emitter-call call-emitter-jump call-emitter-store-incoming-arg
 
           call-arg-classes call-plan reg-storage-class
           call-sequence tail-call-sequence
@@ -76,7 +76,15 @@
   ;;   call       (lambda (callee) ...)       transfer, return address saved
   ;;   jump       (lambda (callee) ...)       transfer, no return address
   (define-record-type (call-emitter make-call-emitter call-emitter?)
-    (fields name move store-arg call jump))
+    (fields name move store-arg call jump
+            ;; A TAIL call's outgoing area is not below the caller's stack
+            ;; pointer, it is the caller's own INCOMING argument area -- the
+            ;; jump pushes no return address, so the callee reads its stack
+            ;; arguments exactly where the caller's were. The offset therefore
+            ;; depends on the caller's frame size, which selection does not
+            ;; know, so this emits the symbolic displacement `(incoming i)` and
+            ;; finalize.ss substitutes the number once the frame is laid out.
+            store-incoming-arg))
 
   ;; The storage class an argument register implies. The register's partition
   ;; class IS the storage class -- that is what the partition means -- so this
@@ -100,13 +108,17 @@
                     (map cons (call-arg-classes args) args)))
 
   ;; Stack stores first, then register moves: see hazard 1 in the header.
-  (define (plan-instrs cc em plan)
+  ;;
+  ;; `store` picks which of the two outgoing areas this call writes: the one at
+  ;; the bottom of our own frame for an ordinary call, or the caller's incoming
+  ;; area for a tail call.
+  (define (plan-instrs cc em plan store)
     (append
      (let loop ((ss (tail-plan-stack-args plan)) (slot 0) (out '()))
        (if (null? ss)
            (apply append (reverse out))
            (loop (cdr ss) (+ slot 1)
-                 (cons ((call-emitter-store-arg em) (car (car ss)) slot (cdr (car ss)))
+                 (cons (store (car (car ss)) slot (cdr (car ss)))
                        out))))
      (apply append
             (map (lambda (m)
@@ -137,7 +149,9 @@
   ;; out regardless.
   (define (call-sequence cc em dst sc srcs)
     (let-values (((callee args) (split-callee 'call-sequence srcs)))
-      (append (plan-instrs cc em (call-plan cc callee args 0))
+      (append (plan-instrs cc em (call-plan cc callee args 0)
+                           (lambda (sc slot src)
+                             ((call-emitter-store-arg em) sc slot src)))
               ((call-emitter-call em) callee)
               (if (and dst sc)
                   ((call-emitter-move em) sc dst (return-register cc sc))
@@ -147,17 +161,26 @@
   ;; return address, and proper tail calls are the one performance guarantee
   ;; R5RS makes, so a sequence that stacks a frame per iteration is not an
   ;; optimisation we skipped, it is the language broken.
+  ;; A tail call's stack arguments go into the CALLER'S OWN incoming area, and
+  ;; the check that this is safe is not here.
+  ;;
+  ;; It cannot be. The condition is that the callee needs no more stack words
+  ;; than the caller received, and selection does not know the enclosing
+  ;; function's signature -- `call-plan` is even called with a frame of zero
+  ;; words, so the frame delta computed here would say "grows" for every tail
+  ;; call with any stack argument at all. finalize.ss knows both numbers, and
+  ;; that is where the refusal now lives.
+  ;;
+  ;; This used to refuse outright, on the grounds that there was no frame
+  ;; layout pass to say where the area could go. There is one now: the layout
+  ;; is fixed (see finalize.ss) and the address is expressible, symbolically,
+  ;; as `(incoming i)`.
   (define (tail-call-sequence cc em dst sc srcs)
     (let-values (((callee args) (split-callee 'tail-call-sequence srcs)))
       (let ((plan (call-plan cc callee args 0)))
-        (unless (null? (tail-plan-stack-args plan))
-          ;; See hazard 2 in the header. Refusing is the honest answer: the
-          ;; store would land in the caller's live frame.
-          (error 'tail-call-sequence
-                 "a tail call whose arguments overflow the register set needs the frame layout pass to say where the outgoing area may go"
-                 (callconv-name cc) callee
-                 (length (tail-plan-stack-args plan))))
-        (append (plan-instrs cc em plan)
+        (append (plan-instrs cc em plan
+                             (lambda (sc slot src)
+                               ((call-emitter-store-incoming-arg em) sc slot src)))
                 ((call-emitter-jump em) callee)))))
 
   ;; --- the result, as a constraint on the allocator -------------------------

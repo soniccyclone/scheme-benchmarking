@@ -297,11 +297,38 @@
         (tail-call-plan callconv-rv64 (make-frame 'f 0) 'g
                         (map (lambda (a) (cons (cdr a) (car a))) three)))))
 
-;; An overflowing tail call would write its outgoing arguments over the caller's
-;; live frame. There is no frame layout pass to say when that is safe, so it
-;; refuses rather than emitting a store that is right by luck.
-(ck! "a tail call whose arguments overflow the registers is REFUSED, not guessed at"
-     (raises? (lambda () (selected rv64-selector (tail-prog six)))))
+;; An overflowing tail call writes its outgoing arguments over the CALLER'S OWN
+;; incoming argument area, which is where the callee will look for them: the
+;; jump pushes no return address, so the callee's stack arguments sit exactly
+;; where the caller's were.
+;;
+;; Selection cannot compute that address. It depends on the caller's frame
+;; size, which is not known until the frame is laid out, so the emitters leave
+;; the symbolic displacement `(incoming i)` and finalize.ss substitutes it.
+;;
+;; This used to REFUSE here, on the grounds that no pass could say where the
+;; outgoing area belonged. The refusal has not gone away; it has moved to the
+;; only place that can decide it. A tail call may overwrite the incoming area
+;; because the caller is done with it, but it may not write PAST that area --
+;; those words belong to the caller's caller and are live -- and comparing the
+;; two counts needs the enclosing function's signature, which selection does
+;; not have. See the `finalize-function` check and the run test that exercises
+;; both sides of it.
+(let ((emitted (selected rv64-selector (tail-prog six))))
+  (ck! "an overflowing tail call is now EMITTED rather than refused"
+       (pair? emitted))
+  (ck! "its stack stores carry a symbolic (incoming i), not a computed offset"
+       (let loop ((is emitted) (n 0))
+         (cond ((null? is) (= n (- (length six)
+                                   (arg-register-count callconv-rv64 'raw-word))))
+               ((let scan ((x (car is)))
+                  (cond ((and (pair? x) (eq? (car x) 'incoming)) #t)
+                        ((pair? x) (or (scan (car x)) (scan (cdr x))))
+                        (else #f)))
+                (loop (cdr is) (+ n 1)))
+               (else (loop (cdr is) n)))))
+  (ck! "and it still ends in a jump, so it is still a tail call"
+       (equal? (car (reverse emitted)) '(jal zero callee))))
 
 ;; --- 6. the acceptance: the whole lowered nbody ---------------------------
 

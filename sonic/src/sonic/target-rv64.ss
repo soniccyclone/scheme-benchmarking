@@ -369,7 +369,14 @@
        (let ((off (* (class-scale sc) slot)))
          (if (float? sc) `((fsd ,src sp ,off)) `((sd ,src sp ,off)))))
      (lambda (callee) `((jal ra ,callee)))
-     (lambda (callee) `((jal zero ,callee)))))
+     (lambda (callee) `((jal zero ,callee)))
+     ;; A tail call writes the caller's own incoming argument area -- see
+     ;; callseq.ss. The offset depends on the caller's frame size, so it is
+     ;; symbolic here and finalize.ss substitutes the number. RV64 spells a
+     ;; store's offset as a bare field rather than inside a memory operand, so
+     ;; the marker sits where the integer would.
+     (lambda (sc slot src)
+       (if (float? sc) `((fsd ,src sp (incoming ,slot))) `((sd ,src sp (incoming ,slot)))))))
 
   (define (r:call dst sc srcs)
     (call-sequence callconv-rv64 rv64-call-emitter dst sc srcs))

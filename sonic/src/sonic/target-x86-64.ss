@@ -187,7 +187,12 @@
      (lambda (sc slot src)
        `((,(mov-for sc) (mem rsp #f ,word-scale ,(* word-scale slot)) ,src)))
      (lambda (callee) `((call (label ,callee))))
-     (lambda (callee) `((jmp (label ,callee))))))
+     (lambda (callee) `((jmp (label ,callee))))
+     ;; A tail call's outgoing area IS the caller's incoming one. The
+     ;; displacement is symbolic because it depends on the caller's frame size,
+     ;; which is not known until finalize.ss has laid the frame out.
+     (lambda (sc slot src)
+       `((,(mov-for sc) (mem rsp #f 1 (incoming ,slot)) ,src)))))
 
   ;; --- the rule table -------------------------------------------------------
 
