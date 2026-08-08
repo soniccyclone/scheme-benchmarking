@@ -453,7 +453,24 @@
       ;; fixes a 3-bit tag scheme, the constant exists, and `chk` simply could
       ;; not say which one. `d` is that tag, and it is meaningless for the
       ;; other checks, which pass 0.
-      (chk pn c d v* ...))
+      (chk pn c d v* ...)
+      ;; A load or store at a constant ELEMENT offset from an index.
+      ;;
+      ;; `(load v sc base idx)` addresses element `idx`; this addresses element
+      ;; `idx + d`. The offset is in ELEMENTS, not bytes, because the scale is
+      ;; the target's business -- x86-64 folds it into a SIB scale and RV64
+      ;; shifts -- and a byte count here would bake one target's element size
+      ;; into the machine-independent IR.
+      ;;
+      ;; It exists because the alternative costs a register. Deriving the index
+      ;; with an `add` creates a vreg that the allocator must place, and in
+      ;; nbody's pairwise loop four of them competed for registers and one
+      ;; spilled, turning what is one addressed load into seven instructions.
+      ;; A peephole cannot repair that: by the time it runs the value is in a
+      ;; frame slot. The offset has to be expressible BEFORE allocation, which
+      ;; means here.
+      (load-at v sc d v* ...)
+      (store-at v sc d v* ...))
     (Transfer (t)
       (jump lbl)
       (branch-if v lbl0 lbl1)

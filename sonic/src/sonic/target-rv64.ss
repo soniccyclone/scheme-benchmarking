@@ -264,6 +264,33 @@
                   `((fld ,dst ,t ,heap-element-disp))
                   `((ld ,dst ,t ,heap-element-disp))))))
 
+  ;; The same, at a constant ELEMENT offset. RV64 has one addressing mode --
+  ;; register plus a 12-bit signed immediate -- and the tag adjustment already
+  ;; rides in that immediate, so the offset folds into it for free as long as it
+  ;; fits. It always does here: the offsets are small component indices, and a
+  ;; larger one is refused rather than silently truncated.
+  (define (offset-disp who d)
+    (let ((n (+ heap-element-disp (* d 8))))
+      (unless (<= -2048 n 2047)
+        (error who "element offset does not fit RV64's 12-bit displacement" d n))
+      n))
+
+  (define (r:load-at dst sc srcs)
+    (arity-check! 'rv64-select 3 srcs)
+    (let ((t (rv64-addr-scratch)) (d (car srcs))
+          (base (cadr srcs)) (idx (caddr srcs)))
+      (append (address-into t base idx sc)
+              (let ((n (offset-disp 'rv64-select d)))
+                (if (float? sc) `((fld ,dst ,t ,n)) `((ld ,dst ,t ,n)))))))
+
+  (define (r:store-at dst sc srcs)
+    (arity-check! 'rv64-select 4 srcs)
+    (let ((t (rv64-addr-scratch)) (d (car srcs))
+          (base (cadr srcs)) (idx (caddr srcs)) (val (cadddr srcs)))
+      (append (address-into t base idx sc)
+              (let ((n (offset-disp 'rv64-select d)))
+                (if (float? sc) `((fsd ,val ,t ,n)) `((sd ,val ,t ,n)))))))
+
   ;; (store <unused> sc base idx val). Lmach's `(op v sc v* ...)` makes the
   ;; destination slot mandatory even for an op with no result, and `store-mach`
   ;; in sonic/src/sonic/fixtures.ss PINS that slot as unused with the base, the
@@ -459,8 +486,10 @@
      (cons 'cmp-ge r:cmp-ge)
      (cons 'cmp-gt r:cmp-gt)
      (cons 'vlen   r:vlen)
-     (cons 'load   r:load)
-     (cons 'store  r:store)
+     (cons 'load     r:load)
+     (cons 'store    r:store)
+     (cons 'load-at  r:load-at)
+     (cons 'store-at r:store-at)
      (cons 'move   r:move)
      (cons 'branch    r:jump)
      (cons 'branch-if r:branch-if)

@@ -40,7 +40,7 @@
           (sonic lang) (sonic read) (sonic expand) (sonic parse) (sonic policy)
           (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide)
           (sonic repr) (sonic lift) (sonic convert) (sonic lower) (sonic globals)
-          (sonic shapes) (sonic interval) (sonic cse) (sonic dce)
+          (sonic shapes) (sonic interval) (sonic cse) (sonic dce) (sonic addrfold)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
           (sonic order)
@@ -94,7 +94,13 @@
                ;; definition with no readers for DCE to collect.
                ((gprog) (globalize prog0 cells classes))
                ((cprog cse-st) (cse-program gprog))
-               ((prog dce-st) (dce-program cprog)))
+               ;; ADDRESS FOLDING BEFORE DCE, and before the allocator sees
+               ;; anything. The `add` it replaces becomes dead, and DCE is what
+               ;; removes it -- which is the whole point: the vreg never reaches
+               ;; register allocation, so it never competes for a register and
+               ;; never spills.
+               ((aprog addr-st) (addrfold-program cprog))
+               ((prog dce-st) (dce-program aprog)))
           (let* ((entry (caddr prog))
                  ;; SORTED: this list decides each global's ADDRESS, so an
                  ;; unstable order moved every global between runs.

@@ -331,6 +331,31 @@
                                         "load expects a base and an optional index" srcs)))))
                `((,(mov-for sc) ,dst ,addr)))))
 
+     ;; The same load and store at a constant ELEMENT offset. The offset is in
+     ;; elements because Lmach is machine-independent; here it becomes bytes by
+     ;; the element scale, and folds into the displacement the tag adjustment
+     ;; already uses. Nothing is computed: the address was going to carry a
+     ;; displacement anyway.
+     (cons 'load-at
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 3)
+               (error 'x86-64-selector
+                      "load-at expects (load-at dst sc d base index)" dst srcs))
+             (let ((d (car srcs)) (base (cadr srcs)) (idx (caddr srcs)))
+               `((,(mov-for sc) ,dst
+                  ,(mem/disp base idx (+ heap-element-disp (* d word-scale))))))))
+
+     (cons 'store-at
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 4)
+               (error 'x86-64-selector
+                      "store-at expects (store-at <unused> sc d base index value)" dst srcs))
+             (let ((d (car srcs)) (base (cadr srcs))
+                   (idx (caddr srcs)) (val (cadddr srcs)))
+               `((,(mov-for sc)
+                  ,(mem/disp base idx (+ heap-element-disp (* d word-scale)))
+                  ,val)))))
+
      ;; `(store ignored sc base index value)`. Lmach's Instr production makes the
      ;; destination slot mandatory and a store has no result, so the slot is
      ;; dead and the stored value rides in the sources, where the allocator's

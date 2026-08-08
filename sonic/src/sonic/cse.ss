@@ -81,7 +81,7 @@
   (define memory-ops (quote (load vlen gref)))
 
   ;; Writes storage, or may. Invalidates the memory table.
-  (define clobber-ops '(store gset call))
+  (define clobber-ops '(store store-at gset call))
 
   (define (dest-of i)
     (and (pair? i)
