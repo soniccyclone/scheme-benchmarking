@@ -290,7 +290,10 @@
   ;; is refused for containing it, and walking inside would attribute the inner
   ;; loop's accesses to the outer one.
 
-  (define (scan-body body f carried)
+  ;; `hdr` is the loop's HEADER PHI names, from (sonic loops). Stepping through
+  ;; that one phi is the difference between this pass reporting anything and
+  ;; reporting nothing at all.
+  (define (scan-body body f carried hdr)
     (let ([accs '()] [chks '()] [permits '()] [ctrl '()] [defs '()] [ivchk '()])
 
       (define (ctrl! r) (set! ctrl (cons r ctrl)))
@@ -327,8 +330,36 @@
               [(and guard-pending? b (not a)) (Expr e1 #f)]
               [else (ctrl! 'branch) (Expr e0 #f) (Expr e1 #f)]))]
           [(phi ([,x* (,lbl** ,e**) ...] ...) ,body)
-           (ctrl! 'merge)
-           (Expr body guard-pending?)]
+           ;; THE LOOP'S EXIT TEST ARRIVES AS A PHI, and refusing it refuses
+           ;; every loop.
+           ;;
+           ;; `strip-header` already peels the header phi -- the parameter merge
+           ;; -- so what reaches here looks like a diamond's join and was
+           ;; treated as one. It is not. essa wraps the exit test's two arms in
+           ;; a phi that names the result:
+           ;;
+           ;;     (phi ([join.332 (join (if t (continue ...) (exit ...)))])
+           ;;       join.332)
+           ;;
+           ;; so the `if` case below -- which already knows how to step through
+           ;; an exit test, into the arm that reaches the back edge -- never got
+           ;; to see it. All seven of nbody's loops refused for
+           ;; `control-flow-in-body` before the walk reached a single array
+           ;; access, which is why every verdict reported zero of them: a
+           ;; refusal that looked like analysis and was the absence of it.
+           ;;
+           ;; The test is the SAME ONE the `if` case uses, deliberately. A phi
+           ;; over anything else is a real merge and still refuses, and a phi
+           ;; over an `if` whose BOTH arms continue is a branch in the body,
+           ;; which `exit-test?` declines and the `if` case then reports.
+           (cond
+            [(and guard-pending?
+                  (= (length x*) 1)
+                  (pair? e**) (= (length (car e**)) 1)
+                  (exit-test? (car (car e**))))
+             (Expr (car (car e**)) #t)
+             (Expr body guard-pending?)]
+            [else (ctrl! 'merge) (Expr body guard-pending?)])]
           [(letrec ([,x* ,e*] ...) ,body)
            (ctrl! 'nested-loop)
            (Expr body guard-pending?)]
@@ -342,6 +373,16 @@
           [(void) (void)]
           [,x (void)]
           [else (ctrl! 'unhandled-form)]))
+
+      ;; An `if` with exactly one arm reaching the back edge: the loop's exit
+      ;; test. Both arms reaching it is a branch in the body; neither reaching
+      ;; it is a branch that always leaves.
+      (define (exit-test? e)
+        (nanopass-case (Lssa Expr) e
+          [(if ,x ,e0 ,e1)
+           (let ([a (reaches-back-edge? e0 f)] [b (reaches-back-edge? e1 f)])
+             (or (and a (not b)) (and b (not a))))]
+          [else #f]))
 
       (define (Simple se bound)
         (nanopass-case (Lssa SimpleExpr) se
@@ -452,7 +493,7 @@
        [(not body)
         (make-vl f t #f '() #f '(loop-body-not-found) '() '() '())]
        [else
-        (let-values ([(accs chks permits ctrl defs ivchk) (scan-body body f carried)])
+        (let-values ([(accs chks permits ctrl defs ivchk) (scan-body body f carried (loop-phis l))])
 
           ;; 1. control flow. A branch in the body makes the lanes disagree.
           (when (loop-irreducible? l) (refuse! 'irreducible (loop-members l)))

@@ -490,6 +490,28 @@
   (check! "every one gives at least one substantive reason"
           (fold-left (lambda (a v) (and a (pair? (vl-reasons v)))) #t vs)
           #t)
+  ;; THE WALK REACHES THE ARRAY ACCESSES, which is the thing a refusal for
+  ;; `control-flow-in-body` prevented. essa wraps a loop's exit test in a phi
+  ;; over its two arms, so what `strip-header` leaves looks like a diamond's
+  ;; join; treating it as one refused all seven loops before the scan saw a
+  ;; single subscript, and every verdict reported zero accesses.
+  ;;
+  ;; Zero accesses in a loop that indexes three vectors is not a conservative
+  ;; answer, it is an absent one, and asserting the COUNT is what tells them
+  ;; apart.
+  (check! "the pairwise loop's array accesses are actually found"
+          (let find ((xs vs))
+            (cond ((null? xs) 0)
+                  ((eq? (vl-loop (car xs)) 'inner%24.201) (length (vl-accesses (car xs))))
+                  (else (find (cdr xs)))))
+          20)
+  (check! "and it is no longer refused for control flow it does not have"
+          (let find ((xs vs))
+            (cond ((null? xs) #f)
+                  ((eq? (vl-loop (car xs)) 'inner%24.201)
+                   (vl-refused-for? (car xs) 'control-flow-in-body))
+                  (else (find (cdr xs)))))
+          #f)
   ;; The two outer loops are bounded by `n-bodies`, which is 5, and (sonic
   ;; loops) now proves it exactly -- so neither is refused for its trip count
   ;; any more and `control-flow-in-body` is all that stands between them and a
