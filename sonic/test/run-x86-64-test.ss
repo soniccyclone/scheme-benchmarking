@@ -123,6 +123,28 @@
        "(define (main) (display (outer 0 0.0)) (newline))\n(main)\n")
       '(9.0))
 
+;; ONE constant passed as SEVERAL arguments of a tail call.
+;;
+;; This is the shape that broke when CSE started noticing that three separate
+;; `0.0` literals were one value. The entry stub became a constant-pool load
+;; into a register followed by two copies out of it, and `resolve-argument-moves`
+;; treats the run of moves before a transfer as a PARALLEL COPY -- under which
+;; the copies want the register's OLD contents, so the load was correctly
+;; ordered last and the arguments started at whatever the register happened to
+;; hold. At a function entry, that is garbage.
+;;
+;; nbody caught it only in the twelfth digit, which is exactly the kind of
+;; divergence that reads as rounding if the oracle is a tolerance. Asserted
+;; here in a form small enough to bisect: three accumulators, one literal.
+(run! "one constant passed as several arguments of a tail call"
+      (string-append
+       "(define (loop i a b c)\n"
+       "  (if (fx= i 3) (fl+ a (fl+ b c))\n"
+       "      (loop (fx+ i 1) (fl+ a 1.0) (fl+ b 2.0) (fl+ c 3.0))))\n"
+       "(define (go) (loop 0 0.0 0.0 0.0))\n"
+       "(define (main) (display (go)) (newline))\n(main)\n")
+      '(18.0))
+
 ;; THE BENCHMARK ITSELF, as far as it currently gets.
 ;;
 ;; nbody's initial energy is the first oracle check in docs/METHOD.md, and it

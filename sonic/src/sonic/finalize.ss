@@ -521,25 +521,70 @@
              (or (and (memq (car i) '(add sub)) (eq? (cadr i) 'rsp))
                  (and (eq? (car i) 'addi) (eq? (cadr i) 'sp)))))
 
+      ;; A memory source that is NOT a spill slot is a DEFINITION, not a copy.
+      ;;
+      ;; This distinction is load-bearing and its absence produced a wrong
+      ;; answer. A parallel copy permutes values that already exist: every
+      ;; source names a location holding a live vreg, and the whole point of
+      ;; resolving it is that a source must be read before the register holding
+      ;; it is overwritten. A constant-pool load has no such value behind it --
+      ;; it MAKES one -- so the moves after it want the register's NEW contents,
+      ;; which is the exact opposite of what parallel semantics gives them.
+      ;;
+      ;; nbody's `offset-momentum!` starts three accumulators at 0.0 and tail
+      ;; calls the loop. Once CSE noticed the three constants were one value,
+      ;; the entry stub became:
+      ;;
+      ;;     movsd xmm0, [rip+pool]   ; 0.0 -- a DEFINITION
+      ;;     movsd xmm1, xmm0
+      ;;     movsd xmm2, xmm0
+      ;;
+      ;; and reading that as a parallel copy says xmm1 and xmm2 want the OLD
+      ;; xmm0, so the resolver dutifully ordered the load LAST. xmm0 is
+      ;; undefined at a function entry, so two of the three momentum
+      ;; accumulators started at garbage and both energies came out wrong in the
+      ;; twelfth digit -- close enough to look like rounding, which is what the
+      ;; bit-exact oracle is for.
+      ;;
+      ;; Spill slots are the case that must stay IN the copy: `mov <argreg>,
+      ;; [rsp+N]` reloads a vreg the copy is permuting, and excluding it was the
+      ;; bug this function was written to fix. So the line is drawn at the base
+      ;; register, which is exactly where the semantic difference lives.
+      (define (definition-load? i)
+        (and (pair? i)
+             (memq (car i) '(mov movsd))
+             (= (length i) 3)
+             (let ((src (caddr i)))
+               (and (pair? src) (eq? (car src) 'mem)
+                    (not (memq (cadr src) '(rsp sp)))))))
+
       (define (resolve-argument-moves xs)
-        (let loop ((xs xs) (run '()) (held '()) (out '()))
+        (let loop ((xs xs) (run '()) (held '()) (defs '()) (out '()))
           (cond
-           ((null? xs) (append (reverse out) (reverse held) (reverse run)))
+           ((null? xs)
+            (append (reverse out) (reverse defs) (reverse held) (reverse run)))
+           ;; Hoisted to the FRONT of the run rather than dropped from it.
+           ;; Hoisting is always safe: the load reads no register the copy could
+           ;; clobber, and if the copy reads its destination, going first is
+           ;; precisely what makes the copy see the value being defined.
+           ((definition-load? (car xs))
+            (loop (cdr xs) run held (cons (car xs) defs) out))
            ((mov-of (car xs))
             ;; A move after the epilogue would read a released frame, so the
             ;; held epilogue stays after the whole run.
-            (loop (cdr xs) (cons (car xs) run) held out))
+            (loop (cdr xs) (cons (car xs) run) held defs out))
            ((frame-adjust? (car xs))
-            (loop (cdr xs) run (cons (car xs) held) out))
+            (loop (cdr xs) run (cons (car xs) held) defs out))
            ((call-or-jump? (car xs))
             ;; The run before a transfer is the argument setup.
             (let-values (((resolved st)
                           (resolve-moves-in-block arch (reverse run) mov-of emit-mov)))
-              (loop (cdr xs) '() '()
+              (loop (cdr xs) '() '() '()
                     (cons (car xs)
-                          (append (reverse held) (reverse resolved) out)))))
+                          (append (reverse held) (reverse resolved)
+                                  (reverse defs) out)))))
            (else
-            (loop (cdr xs) '() '()
+            (loop (cdr xs) '() '() '()
                   ;; No reversing here, and the asymmetry with the call branch
                   ;; above is correct rather than an oversight.
                   ;;
@@ -549,7 +594,9 @@
                   ;; The call branch reverses because `resolved` comes back from
                   ;; `resolve-moves-in-block` in FINAL order, which is the other
                   ;; convention.
-                  (cons (car xs) (append held run out)))))))
+                  ;; `defs` splices ahead of `run` for the same reason it is
+                  ;; hoisted above: it defines values the run may read.
+                  (cons (car xs) (append held run defs out)))))))
 
       ;; `mov r, r` / `movsd r, r` / RV64's `addi r, r, 0` and `fsgnj.d r, r, r`.
       (define (self-move? i)

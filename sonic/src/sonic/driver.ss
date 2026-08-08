@@ -34,7 +34,7 @@
           (sonic lang) (sonic read) (sonic expand) (sonic parse) (sonic policy)
           (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide)
           (sonic repr) (sonic lift) (sonic lower) (sonic globals)
-          (sonic shapes) (sonic interval) (sonic dce)
+          (sonic shapes) (sonic interval) (sonic cse) (sonic dce)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
           (sonic order)
@@ -73,7 +73,13 @@
                ;; them can see it, because the use they would have to inspect
                ;; belongs to another pass's output. Running here sees all of it
                ;; at once, including the grefs globalisation itself introduces.
-               ((prog dce-st) (dce-program (globalize prog0 cells classes))))
+               ;; CSE THEN DCE, in that order and not the other. CSE does not
+               ;; delete anything: it rewrites the USES of a redundant result
+               ;; to name the earlier one, which leaves the redundant
+               ;; definition with no readers for DCE to collect.
+               ((gprog) (globalize prog0 cells classes))
+               ((cprog cse-st) (cse-program gprog))
+               ((prog dce-st) (dce-program cprog)))
           (let* ((entry (caddr prog))
                  ;; SORTED: this list decides each global's ADDRESS, so an
                  ;; unstable order moved every global between runs.
