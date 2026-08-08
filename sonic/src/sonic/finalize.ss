@@ -199,6 +199,30 @@
                most)))
        0 blocks)))
 
+  ;; Which spilled vregs can be REBUILT rather than reloaded.
+  ;;
+  ;; A vreg whose Lmach definition is `(const v sc d)` need not occupy a frame
+  ;; slot at all: recreating it is one instruction, and a store plus one reload
+  ;; is already two. nbody's pairwise force loop stored the constant 1 and read
+  ;; it back twice.
+  ;;
+  ;; Read off Lmach rather than the selected stream, because Lmach still says
+  ;; `const` -- by selection time it is a `mov` with an immediate and looks like
+  ;; any other move.
+  (define (remat-table target blocks classes)
+    (let ((sp (spiller-for target))
+          (tbl (make-eq-hashtable)))
+      (for-each
+       (lambda (lb)
+         (for-each
+          (lambda (i)
+            (when (and (pair? i) (eq? (car i) 'const) (= (length i) 4)
+                       ((spiller-remat sp) 'r (cadddr i) (caddr i)))
+              (hashtable-set! tbl (cadr i) (cadddr i))))
+          (cadr (cadr lb))))
+       blocks)
+      tbl))
+
   (define (outgoing-words-for target blocks classes)
     (let ((cc (callconv-by-name target)))
       (let loop ((bs blocks) (most 0))
@@ -238,6 +262,11 @@
             ;; first source rides in a prefix field that holds a register
             ;; number and cannot name memory.
             mem-position
+            ;; (reg datum class) -> instructions that recreate the value, or #f
+            ;; when this target cannot do it in ONE instruction. A constant that
+            ;; takes two to rebuild is not cheaper than a reload, and the whole
+            ;; argument for rematerialising is that it is.
+            remat
             returns?      ; instr -> #t if control leaves here
             tail-jump?))  ; instr -> #t if it is a jump out of the function
 
@@ -272,6 +301,14 @@
        (and (pair? i)
             (memq (car i) '(vaddsd vsubsd vmulsd vdivsd))
             2))
+     ;; `mov r64, imm32` is one instruction. A double would be a pool load,
+     ;; which costs exactly what the reload it replaces costs, so it is not
+     ;; rematerialised.
+     (lambda (r d sc)
+       (and (not (eq? sc 'raw-f64))
+            (integer? d) (exact? d)
+            (<= (- (expt 2 31)) d (- (expt 2 31) 1))
+            `((mov ,r (imm ,d)))))
      (lambda (i) (eq? (car i) 'ret))
      (lambda (i) (and (eq? (car i) 'jmp)
                       (pair? (cdr i))
@@ -296,6 +333,13 @@
      ;; RV64 is load/store: `mem-operand` is already #f, so no operand of any
      ;; instruction may be memory and this is never consulted.
      (lambda (i) #f)
+     ;; `addi rd, zero, imm` covers 12 bits signed in one instruction. Anything
+     ;; wider is lui/addi, which is two, and two is not cheaper than a reload.
+     (lambda (r d sc)
+       (and (not (eq? sc 'raw-f64))
+            (integer? d) (exact? d)
+            (<= -2048 d 2047)
+            `((addi ,r zero ,d))))
      (lambda (i) (and (eq? (car i) 'jalr) (equal? (cdr i) '(zero ra 0))))
      ;; `jal zero <label>` is an unconditional jump. Within a function that is a
      ;; block edge, not an exit, so the caller tells us which labels are ours.
@@ -362,10 +406,13 @@
     (finalize-function* target arch name blocks alloc classes own-labels
                         (if (pair? opt) (car opt) '())
                         (if (and (pair? opt) (pair? (cdr opt))) (cadr opt) 0)
-                        (if (and (pair? opt) (pair? (cddr opt))) (caddr opt) 0)))
+                        (if (and (pair? opt) (pair? (cddr opt))) (caddr opt) 0)
+                        (if (and (pair? opt) (pair? (cdddr opt)))
+                            (cadddr opt)
+                            (make-eq-hashtable))))
 
   (define (finalize-function* target arch name blocks alloc classes own-labels
-                              params outgoing tail-outgoing)
+                              params outgoing tail-outgoing remat)
     (let* ((sp (spiller-for target))
            (assign (alloc-result-map alloc))
            (spills (alloc-result-spills alloc))
@@ -374,6 +421,14 @@
            (spilled? (lambda (v) (and (symbol? v)
                                       (hashtable-ref (frame-layout-map frame) v #f)
                                       #t)))
+           ;; REMATERIALISABLE: spilled, and cheaper to rebuild than to reload.
+           ;; Every path that would otherwise touch this vreg's frame slot has
+           ;; to agree, because nothing ever WRITES that slot -- see the four
+           ;; uses below. The slot is still reserved; leaving it allocated costs
+           ;; eight bytes of frame and keeps `spilled?` meaning one thing.
+           (remat? (lambda (v) (and (symbol? v)
+                                    (hashtable-ref (frame-layout-map frame) v #f)
+                                    (hashtable-contains? remat v))))
            ;; THE TAIL-CALL CONDITION, checked where both numbers exist.
            ;;
            ;; A tail call's stack arguments are written over the caller's own
@@ -404,6 +459,58 @@
       (define (class-of v)
         (or (hashtable-ref classes v #f)
             (error 'finalize-function "spilled vreg has no storage class" v)))
+
+      ;; REMATERIALISING IS NOT FREE AT EVERY USE, and this is the pre-pass that
+      ;; notices.
+      ;;
+      ;; A rematerialisable vreg has no valid frame slot, so it can never be the
+      ;; operand that rides in memory: it must take a scratch. On x86-64 there
+      ;; is one integer scratch and one memory operand per instruction, so
+      ;; `(cmp t.7 t.8)` with both operands spilled needs exactly one of them in
+      ;; memory -- and if both are rematerialisable, there is no candidate and
+      ;; the pass refuses an instruction it used to handle.
+      ;;
+      ;; So rematerialising is decided per VREG, not per use: any vreg that some
+      ;; instruction needs in memory is dropped from the table and goes back to
+      ;; being stored and reloaded. Dropping is monotone -- it only ever adds
+      ;; candidates -- so one pass settles it.
+      ;;
+      ;; The gain was always per-vreg anyway. Rebuilding costs the same as a
+      ;; reload; what remat saves is the DEFINITION and the STORE, once.
+      (define (un-remat-what-must-ride-in-memory!)
+        (for-each
+         (lambda (b)
+           (for-each
+            (lambda (i)
+              (let* ((vs (distinct (apply append (map spilled-in (cdr i)))))
+                     (float? (lambda (v) (eq? (class-of v) 'raw-f64)))
+                     (ints (filter (lambda (v) (not (float? v))) vs))
+                     (flts (filter float? vs))
+                     (over (+ (max 0 (- (length ints) (length (spiller-int-scratch sp))))
+                              (max 0 (- (length flts) (length (spiller-float-scratch sp)))))))
+                (when (> over 0)
+                  (let ((free (filter (lambda (v)
+                                        (and (not (remat? v)) (mem-eligible* i v)))
+                                      vs)))
+                    ;; Not enough non-rematerialisable candidates: give the
+                    ;; instruction back the ones it needs, cheapest first in
+                    ;; source order since any of them will do.
+                    (let give ((need (- over (length free)))
+                               (cs (filter (lambda (v)
+                                             (and (remat? v) (mem-eligible* i v)))
+                                           vs)))
+                      (when (and (> need 0) (pair? cs))
+                        (hashtable-delete! remat (car cs))
+                        (give (- need 1) (cdr cs))))))))
+            (cadr b)))
+         blocks))
+
+      ;; The instructions that rebuild a rematerialisable vreg into `r`.
+      (define (remat-into r v)
+        (or ((spiller-remat sp) r (hashtable-ref remat v #f) (class-of v))
+            (error 'finalize-function
+                   "a vreg was marked rematerialisable and then could not be rebuilt"
+                   v)))
 
       (define (scratches-for sc)
         (if (eq? sc 'raw-f64) (spiller-float-scratch sp) (spiller-int-scratch sp)))
@@ -443,7 +550,15 @@
         (let ((p ((spiller-mem-position sp) i)))
           (if p (= k p) (> k 0))))
 
+      ;; A rematerialisable vreg may never be the operand that rides in memory:
+      ;; its slot is never written, so the read would be garbage. It always
+      ;; takes a scratch and is rebuilt into it.
       (define (mem-eligible i v)
+        (if (remat? v)
+            #f
+            (mem-eligible* i v)))
+
+      (define (mem-eligible* i v)
         (let loop ((xs (cdr i)) (k 0) (hit #f))
           (cond ((null? xs) hit)
                 ((eq? (car xs) v)
@@ -502,16 +617,36 @@
                (and (symbol? src) (spilled? src)
                     (symbol? dst) (not (spilled? dst))
                     dst-phys
-                    (list '()
-                          (list (car i)
-                                dst-phys
-                                ((spiller-mem-operand sp)
-                                 (frame-slot-offset frame src) (class-of src)))
-                          '()))))))
+                    (if (remat? src)
+                        ;; Rebuild straight into the destination. Better than
+                        ;; the fold it replaces -- no memory reference at all --
+                        ;; and REQUIRED, because src's slot is never written.
+                        (list '() (car (remat-into dst-phys src)) '())
+                        (list '()
+                              (list (car i)
+                                    dst-phys
+                                    ((spiller-mem-operand sp)
+                                     (frame-slot-offset frame src) (class-of src)))
+                              '())))))))
 
       (define (do-instr i)
         (let ((vs (distinct (apply append (map spilled-in (cdr i))))))
           (cond
+           ;; THE DEFINITION OF A REMATERIALISABLE VREG EMITS NOTHING. Its whole
+           ;; job was to fill a frame slot, and nothing reads that slot any
+           ;; more: every use rebuilds the value instead. Without this the
+           ;; materialisation survives with its store deleted, which is a dead
+           ;; instruction writing a scratch register.
+           ;;
+           ;; Safe only because the vreg has exactly one definition -- Lmach is
+           ;; single-assignment -- so there is no other instruction whose
+           ;; destination this could be.
+           ((and (pair? (cdr i)) (symbol? (cadr i)) (remat? (cadr i))
+                 (not (reads-dst? i)))
+            ;; #f, not '(), as the "no instruction" marker: the caller asks the
+            ;; spiller whether this instruction returns or tail-jumps, and both
+            ;; predicates take its car.
+            (list '() #f '()))
            ((fold-reload i))
            (else
           (if (null? vs)
@@ -573,15 +708,18 @@
                        (pre (apply append
                                    (map (lambda (p)
                                           (let ((v (car p)) (r (cdr p)))
-                                            (if (and (eq? v dst-v) (not (reads-dst? i)))
-                                                '()
-                                                ((spiller-reload sp)
-                                                 r (frame-slot-offset frame v) (class-of v)))))
+                                            (cond
+                                             ((and (eq? v dst-v) (not (reads-dst? i))) '())
+                                             ((remat? v) (remat-into r v))
+                                             (else
+                                              ((spiller-reload sp)
+                                               r (frame-slot-offset frame v)
+                                               (class-of v))))))
                                         chosen)))
                        (post (apply append
                                     (map (lambda (p)
                                            (let ((v (car p)) (r (cdr p)))
-                                             (if (eq? v dst-v)
+                                             (if (and (eq? v dst-v) (not (remat? v)))
                                                  ((spiller-store sp)
                                                   (frame-slot-offset frame v) r (class-of v))
                                                  '())))
@@ -800,7 +938,12 @@
               (if float? `(fsgnj.d ,dst ,src ,src) `(addi ,dst ,src 0))
               (if float? `(movsd ,dst ,src) `(mov ,dst ,src)))))
 
-      (let* ((listing
+      (let* (;; Before any rewriting: decide which rematerialisable vregs have
+             ;; to go back to a frame slot because some instruction needs them
+             ;; in memory. Must run before `do-instr` sees anything, since
+             ;; `remat?` reads the table this prunes.
+             (pruned (un-remat-what-must-ride-in-memory!))
+             (listing
              (apply append
                     (map (lambda (b)
                            (let ((lbl (car b)) (instrs (cadr b)))
@@ -816,12 +959,13 @@
                                                    ;; not after it.
                                                    (append
                                                     pre
-                                                    (if (or ((spiller-returns? sp) ins)
-                                                            (and ((spiller-tail-jump? sp) ins)
-                                                                 (not (own-label? ins own-labels))))
+                                                    (if (and ins
+                                                             (or ((spiller-returns? sp) ins)
+                                                                 (and ((spiller-tail-jump? sp) ins)
+                                                                      (not (own-label? ins own-labels)))))
                                                         ((spiller-epilogue sp) bytes)
                                                         '())
-                                                    (list ins)
+                                                    (if ins (list ins) '())
                                                     post)))
                                                instrs)))))
                          blocks)))
@@ -1042,6 +1186,7 @@
                                   ;; them into stores whose count would have to
                                   ;; be recovered by pattern matching.
                                   (outgoing-words-for target (cdr fn) classes)
-                                  (tail-outgoing-words-for target (cdr fn) classes))))
+                                  (tail-outgoing-words-for target (cdr fn) classes)
+                                  (remat-table target (cdr fn) classes))))
            (partition-into-functions blocks entry))))
   )
