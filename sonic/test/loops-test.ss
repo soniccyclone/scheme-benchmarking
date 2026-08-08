@@ -25,7 +25,9 @@
 ;;; flvector-ref under test are the frozen ones.
 
 (import (chezscheme) (nanopass) (sonic lang) (sonic interval)
-        (sonic fixtures) (sonic loops))
+        (sonic fixtures) (sonic loops)
+        (sonic read) (sonic expand) (sonic parse) (sonic policy)
+        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic pipeline))
 
 (define failures 0)
 (define checks 0)
@@ -508,6 +510,70 @@
   (check! "with no count claimed for either"
           (map (lambda (l) (list (trip-kind (loop-trip l)) (trip-why (loop-trip l)))) ls)
           '((unknown irreducible) (unknown irreducible))))
+
+;; --- a REAL program, which is the case every fixture above missed -----------
+;;
+;; Every fixture in this file is an Lssa Expr. `analyze-loops` is a
+;; `nanopass-case` over Lssa Expr, and a program the front end produces is an
+;; Lssa PROGRAM -- so it matched nothing, recorded nothing, and returned the
+;; empty list. Not an error: `()`, which reads exactly like "this program has
+;; no loops".
+;;
+;; The whole file was green while the pass answered "no loops" for every
+;; program that has ever been compiled, and the damage did not stop here.
+;; veclegal.ss asks this pass which loops exist, got none, produced no
+;; verdicts, and the vectorizer had nothing to consider -- quietly, at each
+;; step.
+;;
+;; So this test compiles SOURCE. A fixture cannot catch a bug about the shape
+;; the front end hands over, because a fixture is not that shape.
+
+(printf "\nreal programs, not fixtures:\n")
+
+(define (ssa-of src externs)
+  (let ((p (open-file-output-port "/tmp/sonic-loops-real.sps" (file-options no-fail)
+                                  (buffer-mode block) (native-transcoder))))
+    (put-string p src) (close-port p))
+  (essa-program
+   (inline-program
+    (assign-convert-program
+     (anf-program
+      (resolve-policy-program
+       (parse-program (expand-program (read-all-from-file "/tmp/sonic-loops-real.sps"))
+                      externs)))))))
+
+;; A named let: a letrec-bound lambda that tail-calls itself.
+(let ((ls (analyze-loops
+           (ssa-of (string-append
+                    "(define (main)\n"
+                    "  (display (fx->fl (let loop ((i 0) (a 0))\n"
+                    "    (if (fx= i 10) a (loop (fx+ i 1) (fx+ a i))))))\n"
+                    "  (newline))\n(main)\n")
+                   '(display newline)))))
+  (check! "a named let in a real program IS a loop" (length ls) 1)
+  (check! "and its induction variable is found"
+          (> (length (loop-ivs (car ls))) 0) #t))
+
+;; A top-level `define` that calls itself. Bound by the PROGRAM, not by a
+;; letrec, so it needs the top-level binding to be entered under its own name.
+(let ((ls (analyze-loops
+           (ssa-of (string-append
+                    "(define (go i a) (if (fx= i 10) a (go (fx+ i 1) (fx+ a i))))\n"
+                    "(define (main) (display (fx->fl (go 0 0))) (newline))\n(main)\n")
+                   '(display newline)))))
+  (check! "a self-tail-recursive top-level procedure IS a loop" (length ls) 1)
+  (check! "and it is named after its binding" (loop-name (car ls)) 'go))
+
+;; THE BENCHMARK. Six named lets and two self-recursive procedures, one nested
+;; pair among them -- and the nesting is the part a flat answer would fake.
+(let* ((src (let* ((p (open-file-input-port "../bench/nbody/config-sonic.sps"))
+                   (bv (get-bytevector-all p)))
+              (close-port p)
+              (utf8->string bv)))
+       (ls (analyze-loops (ssa-of src nbody-externs))))
+  (check! "nbody has seven loops" (length ls) 7)
+  (check! "and one of them is nested inside another"
+          (> (fold-left max 0 (map loop-depth ls)) 0) #t))
 
 (printf "\n~a checks, ~a failures\n" checks failures)
 (if (> failures 0) (exit 1) (begin (printf "PASS\n") (exit 0)))

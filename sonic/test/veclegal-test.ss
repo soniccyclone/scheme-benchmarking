@@ -26,7 +26,9 @@
 ;;; Run: scheme -q --libdirs src:vendor/nanopass --script test/veclegal-test.ss
 
 (import (chezscheme) (nanopass) (sonic lang) (sonic fixtures)
-        (sonic loops) (sonic elide) (sonic alias) (sonic veclegal))
+        (sonic loops) (sonic elide) (sonic alias) (sonic veclegal)
+        (sonic read) (sonic expand) (sonic parse) (sonic policy)
+        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic pipeline))
 
 (define failures 0)
 (define checks 0)
@@ -445,6 +447,56 @@
   ;; Not as an alias failure. `a` against `a` is one array and the question is
   ;; the distance between the two subscripts, which no alias analysis answers.
   (check! "and not as an aliasing failure" (vl-refused-for? v 'may-alias) #f))
+
+;; --- a REAL program, which every fixture above is not -----------------------
+;;
+;; `each-expr` is an Lssa Expr walker whose `else` is `(void)`, so a whole Lssa
+;; Program visited nothing and every query built on it came back empty. The
+;; symptom was not silence: it was `loop-body-not-found` on all seven of
+;; nbody's loops, which reads like a broken loop pass rather than like this
+;; file never looking inside a `top`.
+;;
+;; A verdict of "not legal" is only worth having if the REASON is real. So this
+;; asserts what the refusals are, not merely that they happen: a loop refused
+;; for `loop-body-not-found` has been analysed by nobody.
+
+(newline)
+(printf "real programs, not fixtures:\n")
+
+(define (real-ssa src externs)
+  (let ((p (open-file-output-port "/tmp/sonic-veclegal-real.sps" (file-options no-fail)
+                                  (buffer-mode block) (native-transcoder))))
+    (put-string p src) (close-port p))
+  (essa-program
+   (inline-program
+    (assign-convert-program
+     (anf-program
+      (resolve-policy-program
+       (parse-program (expand-program (read-all-from-file "/tmp/sonic-veclegal-real.sps"))
+                      externs)))))))
+
+(let* ((src (let* ((p (open-file-input-port "../bench/nbody/config-sonic.sps"))
+                   (bv (get-bytevector-all p)))
+              (close-port p)
+              (utf8->string bv)))
+       (vs (vectorize-legal (real-ssa src nbody-externs))))
+  (check! "nbody yields a verdict per loop" (length vs) 7)
+  (check! "and NONE of them is refused for a body this file could not find"
+          (fold-left (lambda (a v) (or a (vl-refused-for? v 'loop-body-not-found)))
+                     #f vs)
+          #f)
+  ;; What they ARE refused for, which is the analysis actually running. These
+  ;; are the three that stand between nbody and milestone 4.
+  (check! "every one gives at least one substantive reason"
+          (fold-left (lambda (a v) (and a (pair? (vl-reasons v)))) #t vs)
+          #t)
+  (check! "the inner loop's reasons include the unknown trip count"
+          (let loop ((xs vs))
+            (cond ((null? xs) #f)
+                  ((eq? (vl-loop (car xs)) 'inner%24.201)
+                   (vl-refused-for? (car xs) 'unknown-trip-count))
+                  (else (loop (cdr xs)))))
+          #t))
 
 (newline)
 (printf "~a checks, ~a failures\n" checks failures)

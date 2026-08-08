@@ -737,8 +737,37 @@
                  (per (cdr xs) acc)))])))
 
     ;; --- driver ---------------------------------------------------------------
-
-    (walk top #f '() '())
+    ;;
+    ;; A PROGRAM, not just an expression. `walk` is a `nanopass-case` over Lssa
+    ;; Expr, and a whole program is an Lssa Program -- so handing it one matched
+    ;; nothing, recorded nothing, and returned NO LOOPS. Not an error: an empty
+    ;; list, which reads exactly like "this program has no loops".
+    ;;
+    ;; Every fixture in loops-test.ss is an Expr, so the pass was green while
+    ;; answering `()` for every program the front end actually produces --
+    ;; nbody's six letrec-bound lambdas included, and a bare `(let loop ...)`
+    ;; too. Everything downstream inherited it: veclegal.ss asks this pass which
+    ;; loops exist, got none, and returned no verdicts, so the vectorizer had
+    ;; nothing to consider and said so quietly.
+    ;;
+    ;; A top-level binding whose value is a lambda is entered under the
+    ;; BINDING'S name, the same way `letrec` does it. `lambda` is both an Expr
+    ;; and a SimpleExpr, and at top level it arrives as an Expr, so `walk-se`
+    ;; never sees it and the name would otherwise be lost -- which would leave
+    ;; every top-level tail-recursive procedure unrecognised even after the
+    ;; Program case existed.
+    (nanopass-case (Lssa Program) top
+      [(top ([,x* ,e*] ...) (,x2* ...) ,body)
+       (for-each
+        (lambda (nm rhs)
+          (record-def! nm (list 'fn nm) #f)
+          (nanopass-case (Lssa Expr) rhs
+            [(lambda (,x1* ...) ,body1) (enter-fn! nm x1* body1 #f)]
+            [else (walk rhs #f '() '())]))
+        x* e*)
+       (walk body #f '() '())]
+      ;; An Expr, which is what every fixture in loops-test.ss is.
+      [else (walk top #f '() '())])
 
     (let* ([all (fn-list)]
            [headers (filter loop-header? all)]

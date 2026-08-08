@@ -185,24 +185,45 @@
   ;; Used only for the two whole-tree questions: where is this loop's lambda,
   ;; and does this subtree reach the back edge.
 
+  ;; A PROGRAM is walked too, and it has to be said explicitly.
+  ;;
+  ;; `each-expr-in` is an Lssa Expr walker whose `else` is `(void)`, so handing
+  ;; it an Lssa Program visited nothing and every query built on it came back
+  ;; empty. That is how all seven of nbody's loops were refused for
+  ;; `loop-body-not-found` the moment (sonic loops) started finding them: the
+  ;; bodies were there and nothing looked at the shape that contains them.
+  ;;
+  ;; The split is between an ENTRY POINT, which may be handed a whole program,
+  ;; and the walker, which recurses over Exprs only. Testing for a Program
+  ;; inside the recursion is not merely wasteful -- an Expr can be a bare
+  ;; variable, which is a symbol rather than a nanopass record, and
+  ;; `nanopass-case` on one raises.
+  (define (program-exprs p)
+    (nanopass-case (Lssa Program) p
+      [(top ([,x* ,e*] ...) (,x2* ...) ,body) (append e* (list body))]
+      [else (list p)]))
+
   (define (each-expr e proc)
+    (for-each (lambda (x) (each-expr-in x proc)) (program-exprs e)))
+
+  (define (each-expr-in e proc)
     (proc e)
     (nanopass-case (Lssa Expr) e
-      [(let ([,x ,se]) ,body) (each-simple se proc) (each-expr body proc)]
-      [(seq ,e0 ,e1) (each-expr e0 proc) (each-expr e1 proc)]
-      [(if ,x ,e0 ,e1) (each-expr e0 proc) (each-expr e1 proc)]
-      [(sigma ,x0 ,x1 ,pr ,x2 ,b ,body) (each-expr body proc)]
+      [(let ([,x ,se]) ,body) (each-simple se proc) (each-expr-in body proc)]
+      [(seq ,e0 ,e1) (each-expr-in e0 proc) (each-expr-in e1 proc)]
+      [(if ,x ,e0 ,e1) (each-expr-in e0 proc) (each-expr-in e1 proc)]
+      [(sigma ,x0 ,x1 ,pr ,x2 ,b ,body) (each-expr-in body proc)]
       [(phi ([,x* (,lbl** ,e**) ...] ...) ,body)
-       (for-each (lambda (es) (for-each (lambda (o) (each-expr o proc)) es)) e**)
-       (each-expr body proc)]
+       (for-each (lambda (es) (for-each (lambda (o) (each-expr-in o proc)) es)) e**)
+       (each-expr-in body proc)]
       [(letrec ([,x* ,e*] ...) ,body)
-       (for-each (lambda (r) (each-expr r proc)) e*)
-       (each-expr body proc)]
-      [(lambda (,x* ...) ,body) (each-expr body proc)]
-      [(declare ([,x* ,prem*] ...) ,body) (each-expr body proc)]
-      [(declare-distinct (,x* ...) ,body) (each-expr body proc)]
-      [(policy ([,pn* ,b*] ...) ,body) (each-expr body proc)]
-      [(set! ,x ,e) (each-expr e proc)]
+       (for-each (lambda (r) (each-expr-in r proc)) e*)
+       (each-expr-in body proc)]
+      [(lambda (,x* ...) ,body) (each-expr-in body proc)]
+      [(declare ([,x* ,prem*] ...) ,body) (each-expr-in body proc)]
+      [(declare-distinct (,x* ...) ,body) (each-expr-in body proc)]
+      [(policy ([,pn* ,b*] ...) ,body) (each-expr-in body proc)]
+      [(set! ,x ,e) (each-expr-in e proc)]
       [else (void)]))
 
   (define (each-simple se proc)
@@ -217,8 +238,22 @@
 
   ;; The letrec-bound lambda whose name this loop carries. (sonic loops) found
   ;; it by an SCC over the call graph; this walks back to the syntax.
+  ;; A loop's lambda may be bound by a `letrec` -- a named let, which is most of
+  ;; them -- or by a TOP-LEVEL binding, which is what a self-tail-recursive
+  ;; `define` becomes. nbody has both: `loop%12.139` is a named let and
+  ;; `energy-from` and `subtract-pairs` are top-level procedures that call
+  ;; themselves. Looking only at letrecs found the first kind and quietly
+  ;; refused the second.
   (define (loop-lambda-body e name)
     (let ([found #f])
+      (nanopass-case (Lssa Program) e
+        [(top ([,x* ,e*] ...) (,x2* ...) ,body)
+         (let scan ([xs x*] [es e*])
+           (unless (or found (null? xs))
+             (if (eq? (car xs) name)
+                 (set! found (lambda-body-of (car es)))
+                 (scan (cdr xs) (cdr es)))))]
+        [else (void)])
       (each-expr
        e
        (lambda (t)
