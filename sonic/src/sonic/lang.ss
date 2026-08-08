@@ -198,6 +198,11 @@
       ;; into a reduction AND multiplied beside `dy`, and without this the
       ;; unpackable square unravels the whole chain.
       p2pack
+      ;; The HIGH lane, as a scalar. Lane 0 needs no such thing: a packed
+      ;; register's low double IS the scalar value, bit for bit, and every
+      ;; scalar instruction reads exactly that. So a pack costs an extract for
+      ;; one of its two members and nothing at all for the other.
+      p2hi
       branch branch-if jump                         ; control
       call ret                                      ; calls
       ;; Access to a TOP-LEVEL binding, which is storage rather than a value in

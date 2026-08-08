@@ -55,11 +55,13 @@
   (ck! "and the pass reports the packs it made"
        (> (slp-stats-packs st) 0)))
 
-;; --- a chain that does not pay ----------------------------------------------
+;; --- LANE 0 IS THE SCALAR ---------------------------------------------------
 ;;
-;; `c0` is read by a horizontal add, so the op pack over it is demoted to an
-;; assembled pair. Here that assembly costs more than the one multiply and store
-;; it would buy, so nothing is packed at all.
+;; `c0` is read by a horizontal add, which cannot pack. That does NOT unravel
+;; the chain, because lane 0 of a packed register IS the scalar, bit for bit --
+;; the add is rewritten to read the pack itself and gets the same bits. Only
+;; `c1`, the high lane, costs an instruction, and only one however many scalar
+;; uses it has.
 (define escaping
   '(program ((entry (block ((load    a0 raw-f64 p i)
                             (load-at a1 raw-f64 1 p i)
@@ -74,8 +76,11 @@
      entry))
 
 (let-values (((is st) (run escaping (classes-for 'a0 'a1 'b0 'b1 'c0 'c1 'd))))
-  (ck! "a use that cannot pack unravels the chain rather than forcing an extract"
-       (not (exists (lambda (i) (memq (car i) '(p2load p2sub p2store))) is))))
+  (ck! "a scalar use of the LOW lane costs nothing: the chain still packs"
+       (equal? (map car is) '(p2load p2load p2sub p2hi add p2store)))
+  ;; Nine instructions become six, and the one added is the extract.
+  (ck! "exactly one extract, for the high lane only"
+       (= 1 (length (filter (lambda (i) (eq? (car i) 'p2hi)) is)))))
 
 ;; THE REDUCTION IS THE CASE THAT MATTERS. `(add d c0 c1)` reads both lanes into
 ;; one scalar, which is a horizontal add -- reassociation, which D24 forbids and
@@ -84,6 +89,15 @@
 (ck! "specifically: a horizontal combination of the two lanes is never packed"
      (let-values (((is st) (run escaping (classes-for 'a0 'a1 'b0 'b1 'c0 'c1 'd))))
        (not (exists (lambda (i) (eq? (car i) 'p2add)) is))))
+
+;; And it reads the PACK for lane 0 and the EXTRACT for lane 1, rather than two
+;; scalars that no longer exist.
+(ck! "the reduction reads the pack's low lane directly and the extract for the high"
+     (let-values (((is st) (run escaping (classes-for 'a0 'a1 'b0 'b1 'c0 'c1 'd))))
+       (let ((a (car (filter (lambda (i) (eq? (car i) 'add)) is)))
+             (pk (cadr (car (filter (lambda (i) (eq? (car i) 'p2sub)) is))))
+             (hi (cadr (car (filter (lambda (i) (eq? (car i) 'p2hi)) is)))))
+         (equal? (cdddr a) (list pk hi)))))
 
 ;; --- a value live out of the block ------------------------------------------
 ;;
@@ -109,15 +123,13 @@
        (not (exists (lambda (i) (eq? (car i) 'p2sub))
                     (cadr (cadr (car (cadr p))))))))
 
-;; --- ASSEMBLING a pair from scalars -----------------------------------------
+;; --- nbody's velocity update, end to end ------------------------------------
 ;;
-;; `c0` is read by a horizontal add AND stored beside `c1`. The op pack is
-;; DEMOTED to a gather rather than dropped: the scalars are still there, so
-;; assembling them is available, and the store pack then pays for it.
-;; Shaped like nbody's velocity update, because the profitability is the point:
-;; ONE assembled pair pays for a load pack, two op packs and a store pack. A
-;; shorter chain does NOT pay -- a gather plus a splat costs two and a single
-;; multiply plus store saves two -- and the pass correctly declines those.
+;; `c0` is read by a horizontal add AND flows into a store pack, which is the
+;; shape that used to force an assembled pair. With lane 0 free the whole chain
+;; packs: two packed loads, a packed subtract, ONE extract for the high lane,
+;; one splat for the shared scalar, then packed multiply, load, subtract and
+;; store. Fifteen instructions become ten.
 (define demotes
   '(program ((entry (block ((load    a0 raw-f64 p i)
                             (load-at a1 raw-f64 1 p i)
@@ -139,15 +151,18 @@
 
 (let-values (((is st) (run demotes (classes-for 'a0 'a1 'b0 'b1 'c0 'c1
                                                 'e0 'e1 'f0 'f1 'g0 'g1 'm 'd))))
-  ;; c0 and c1 keep their scalar subtractions, because the horizontal add still
-  ;; reads them -- and one vunpcklpd assembles the pair for the multiply.
-  (ck! "a pack whose members have an unpackable use is ASSEMBLED, not abandoned"
-       (and (exists (lambda (i) (eq? (car i) 'p2pack)) is)
-            (= 2 (length (filter (lambda (i) (eq? (car i) 'sub)) is)))))
+  (ck! "the whole chain packs, and nothing has to be assembled"
+       (and (equal? (map car is)
+                    '(p2load p2load p2sub p2hi p2splat p2mul p2load p2sub p2store add))
+            (not (exists (lambda (i) (eq? (car i) 'p2pack)) is))))
   (ck! "the scalar operand shared by both lanes is splatted once"
        (= 1 (length (filter (lambda (i) (eq? (car i) 'p2splat)) is))))
-  (ck! "and the reduction that forced the demotion is still scalar"
-       (exists (lambda (i) (equal? i '(add d raw-f64 c0 c1))) is)))
+  ;; The reduction survives as a SCALAR add -- packing it would be a horizontal
+  ;; combination, which is reassociation -- reading the pack's low lane and the
+  ;; one extract.
+  (ck! "and the reduction is still scalar, over the pack and its extract"
+       (let ((a (car (filter (lambda (i) (eq? (car i) 'add)) is))))
+         (and (= 5 (length a)) (eq? (car a) 'add)))))
 
 ;; --- nbody ------------------------------------------------------------------
 ;;

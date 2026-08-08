@@ -27,13 +27,19 @@
 ;;; collector need no changes at all, because a pair lives exactly where a
 ;;; scalar double lives.
 ;;;
-;;; ## ALL USES OR NO PACK
+;;; ## LANE 0 IS THE SCALAR
 ;;;
-;;; The condition that makes packing profitable rather than merely possible: a
-;;; value may be packed only if EVERY use of it is itself packed. A scalar use
-;;; of a packed value needs an extract, and an extract costs what the pack
-;;; saved. So packs are built optimistically and then validated, and a chain
-;;; that fails validation is discarded whole.
+;;; A packed register's low double IS the scalar value, bit for bit, and every
+;;; scalar instruction reads exactly that. So a scalar use of a pack's LOW
+;;; member costs NOTHING: the use is rewritten to name the pack and gets the
+;;; same bits it always did. Only the HIGH member needs an instruction, and only
+;;; one however many scalar uses it has.
+;;;
+;;; That is what lets nbody's dx and dy be loaded and subtracted PACKED while
+;;; still being squared scalar into the reduction. The alternative -- all uses
+;;; or no pack -- unravelled the chain at the square, and because classify! does
+;;; not descend through an assembled pair, the packed loads of p[] beneath it
+;;; were never even considered.
 ;;;
 ;;; ## What makes it safe under D24
 ;;;
@@ -234,8 +240,25 @@
                          (cons k acc)
                          acc)))))
 
+      ;; OCCURRENCES, not instructions, because `guses` counts occurrences.
+      ;;
+      ;; `uses-of` returns one entry per INSTRUCTION mentioning v, and the
+      ;; global table counts every operand slot. `(mul t dx dx)` is one
+      ;; instruction and two occurrences, so the two never agreed for a value
+      ;; used twice by one operation -- and nbody squares dx exactly that way.
+      ;; Every such value looked like it escaped the block.
+      (define (local-occurrences v)
+        (let count ((k 0) (acc 0))
+          (if (= k n)
+              acc
+              (count (+ k 1)
+                     (+ acc (let ((i (vector-ref vec k)))
+                              (if (pair? i)
+                                  (length (filter (lambda (x) (eq? x v)) (cddr i)))
+                                  0)))))))
+
       (define (block-local? v)
-        (= (length (uses-of v)) (hashtable-ref guses v 0)))
+        (= (local-occurrences v) (hashtable-ref guses v 0)))
 
       ;; Is instruction k replaced by a pack? Only load and op packs replace
       ;; their members; a gather leaves them.
@@ -248,18 +271,32 @@
                            packs))
               (exists (lambda (sp) (or (= k (car sp)) (= k (cdr sp)))) store-packs))))
 
-      ;; DEMOTE rather than drop. A load or op pack deletes the scalar form, so
-      ;; it needs every use packed and every member block-local. When that
-      ;; fails, the scalars are still present, so assembling them is available.
+      ;; A SCALAR USE OF A PACKED VALUE IS NOT ALWAYS AN EXTRACT.
+      ;;
+      ;; Lane 0 of a packed register IS the scalar, bit for bit -- every scalar
+      ;; instruction reads exactly the low double -- so a scalar use of the LOW
+      ;; member costs nothing: the use is rewritten to name the pack and reads
+      ;; the same bits it always did. Only the HIGH member needs an instruction,
+      ;; and only one however many scalar uses it has.
+      ;;
+      ;; That is what lets nbody's dx and dy be loaded and subtracted PACKED
+      ;; while still being squared scalar into the reduction. Before it, the
+      ;; square demoted the pair to an assembled one -- and because classify!
+      ;; does not descend through a gather, the packed LOADS of p[] beneath it
+      ;; were never even considered.
+      (define (scalar-uses v) (filter (lambda (k) (not (consumed? k))) (uses-of v)))
+
+      ;; DEMOTE rather than drop. A load or op pack deletes the scalar form of
+      ;; its members and rewrites their uses, and this pass rewrites only within
+      ;; a block -- so a member read from another block sends the pack back to
+      ;; being assembled, where both scalars survive untouched.
       (define (demote!)
         (let round ()
           (let ((changed #f))
             (for-each
              (lambda (p)
                (when (memq (hashtable-ref kind p #f) '(load op))
-                 (unless (and (block-local? (car p)) (block-local? (cdr p))
-                              (for-all consumed? (uses-of (car p)))
-                              (for-all consumed? (uses-of (cdr p))))
+                 (unless (and (block-local? (car p)) (block-local? (cdr p)))
                    (hashtable-set! kind p 'gather)
                    (set! changed #t))))
              packs)
@@ -308,11 +345,19 @@
       ;; one, and so does each splat. If the savings do not outnumber the
       ;; assembly, nothing is packed: a block half-packed at a loss is worse
       ;; than a block left alone.
+      ;; One extract per pack whose HIGH member is read as a scalar. The low
+      ;; member's scalar uses are free.
+      (define (extract-count)
+        (length (filter (lambda (p)
+                          (and (memq (hashtable-ref kind p #f) '(load op))
+                               (pair? (scalar-uses (cdr p)))))
+                        packs)))
+
       (define (profitable?)
         (let* ((gathers (length (filter (lambda (p) (eq? 'gather (hashtable-ref kind p #f)))
                                         packs)))
                (savings (+ (- (length packs) gathers) (length store-packs)))
-               (costs (+ gathers (splat-count))))
+               (costs (+ gathers (splat-count) (extract-count))))
           (> savings costs)))
 
       (collect-store-packs!)
@@ -321,7 +366,7 @@
       (prune-unreachable!)
       (if (or (null? packs) (not (profitable?)))
           instrs
-          (emit vec n packs store-packs kind classes stats))))
+          (emit vec n packs store-packs kind consumed? classes stats))))
 
   ;; Operands line up when both sides come from one pack, or both are the same
   ;; scalar -- which becomes a splat, once, feeding every pack that shares it.
@@ -353,7 +398,18 @@
   ;; component 0 before component 1 is even loaded. The later position is always
   ;; safe: if pack Q uses pack P then each member of Q is defined after the
   ;; corresponding member of P, so max(Q) > max(P).
-  (define (emit vec n packs store-packs kind classes stats)
+  ;; Uses of v among the block's instructions, by index.
+  (define (uses-in vec n v)
+    (let count ((k 0) (acc '()))
+      (if (= k n)
+          (reverse acc)
+          (count (+ k 1)
+                 (if (and (pair? (vector-ref vec k))
+                          (memq v (cddr (vector-ref vec k))))
+                     (cons k acc)
+                     acc)))))
+
+  (define (emit vec n packs store-packs kind consumed? classes stats)
     (let ((name (make-eq-hashtable))
           (splat (make-eq-hashtable))
           (at (make-eqv-hashtable))
@@ -388,7 +444,25 @@
       (define (emit-at! k is)
         (hashtable-set! at k (append (hashtable-ref at k '()) is)))
 
+      ;; A scalar use of a packed member is REWRITTEN, not extracted, where it
+      ;; can be. `subst` maps the member's name to whatever now holds its value:
+      ;; the pack itself for lane 0, an extract for lane 1.
+      (define subst (make-eq-hashtable))
+      (define (rewrite i)
+        (if (pair? i)
+            (cons (car i)
+                  (let walk ((xs (cdr i)) (k 0))
+                    (cond
+                     ((null? xs) '())
+                     ;; slot 0 is the destination on every shape reaching here
+                     ((= k 0) (cons (car xs) (walk (cdr xs) 1)))
+                     ((and (symbol? (car xs)) (hashtable-ref subst (car xs) #f))
+                      => (lambda (r) (cons r (walk (cdr xs) (+ k 1)))))
+                     (else (cons (car xs) (walk (cdr xs) (+ k 1)))))))
+            i))
+
       (define pending '())
+      (define extracts '())
       (define (operand v)
         (let ((p (pack-of v)))
           (cond
@@ -415,6 +489,19 @@
             (hashtable-set! drop klo #t)
             (hashtable-set! drop khi #t))
           (set! pending '())
+          ;; LANE 0 IS FREE: a scalar use of the low member is rewritten to name
+          ;; the pack and reads the same bits. The high member costs one extract,
+          ;; once, and it must come AFTER the instruction that defines the pack
+          ;; -- splats go before their reader, extracts after theirs, and both
+          ;; for the same reason.
+          (set! extracts '())
+          (when (memq kd '(load op))
+            (hashtable-set! subst lo (pack-name p))
+            (when (pair? (filter (lambda (u) (not (consumed? u))) (uses-in vec n hi)))
+              (let ((x (fresh hi)))
+                (hashtable-set! classes x 'raw-f64)
+                (hashtable-set! subst hi x)
+                (set! extracts (list (list 'p2hi x 'raw-f64 (pack-name p)))))))
           (let ((instr
                  (case kd
                    ((gather) (list 'p2pack (pack-name p) 'raw-f64 lo hi))
@@ -429,7 +516,7 @@
                 (begin
                   (slp-stats-instructions-set!
                    stats (+ 1 (slp-stats-instructions stats)))
-                  (emit-at! k (append (reverse pending) (list instr))))
+                  (emit-at! k (append (reverse pending) (list instr) extracts)))
                 (begin (hashtable-delete! drop klo)
                        (hashtable-delete! drop khi))))))
 
@@ -462,7 +549,7 @@
       (let loop ((k 0))
         (when (< k n)
           (unless (hashtable-ref drop k #f)
-            (set! out (cons (vector-ref vec k) out)))
+            (set! out (cons (rewrite (vector-ref vec k)) out)))
           (for-each (lambda (x) (set! out (cons x out))) (hashtable-ref at k '()))
           (loop (+ k 1))))
       (slp-stats-packs-set! stats (+ (length packs) (slp-stats-packs stats)))

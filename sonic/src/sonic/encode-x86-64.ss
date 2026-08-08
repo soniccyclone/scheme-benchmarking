@@ -289,7 +289,7 @@
   ;; exactly "assemble a pair from two scalars".
   (define vex-packed
     '((vaddpd . #x58) (vsubpd . #x5C) (vmulpd . #x59) (vdivpd . #x5E)
-      (vunpcklpd . #x14)))
+      (vunpcklpd . #x14) (vunpckhpd . #x15)))
 
   ;; `vmovddup xmm, xmm`: duplicate the low double into both lanes. This is the
   ;; SPLAT a pack needs when one operand is the same scalar in both lanes --

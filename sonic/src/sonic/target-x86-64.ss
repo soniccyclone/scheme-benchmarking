@@ -400,6 +400,11 @@
              (unless (= (length srcs) 2)
                (error 'x86-64-selector "p2pack expects two sources" srcs))
              `((vunpcklpd ,dst ,(car srcs) ,(cadr srcs)))))
+     (cons 'p2hi
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 1)
+               (error 'x86-64-selector "p2hi expects one source" srcs))
+             `((vunpckhpd ,dst ,(car srcs) ,(car srcs)))))
      (cons 'p2add (packed 'vaddpd))
      (cons 'p2sub (packed 'vsubpd))
      (cons 'p2mul (packed 'vmulpd))
