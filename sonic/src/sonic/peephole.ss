@@ -429,6 +429,33 @@
                      x))
                (cdr i))))
 
+  ;; A copy feeding a three-address multiply is the multiply.
+  ;;
+  ;;     mov  r10, rcx          ->    imul r10, rcx, 3
+  ;;     imul r10, r10, 3
+  ;;
+  ;; The immediate fold above produces `imul D, D, k` because that is what the
+  ;; two-operand form it replaced meant. When D was itself a fresh copy, the
+  ;; three-address form can read the original directly -- which is what having a
+  ;; second source operand is FOR, and the same reason the float ops went
+  ;; three-address.
+  (define (fuse-copy-imul instrs stats)
+    (let loop ((is instrs) (out '()))
+      (cond
+       ((null? is) (reverse out))
+       ((and (pair? (cdr is))
+             (let ((m (car is)) (u (cadr is)))
+               (and (eq? (car m) 'mov) (= (length m) 3)
+                    (symbol? (cadr m)) (symbol? (caddr m))
+                    (not (eq? (cadr m) (caddr m)))
+                    (eq? (car u) 'imul) (= (length u) 4)
+                    (eq? (cadr u) (cadr m)) (eq? (caddr u) (cadr m))
+                    (pair? (cadddr u)) (eq? (car (cadddr u)) 'imm))))
+        (let ((d (cadr (car is))) (src (caddr (car is))) (k (cadddr (cadr is))))
+          (peephole-stats-fused-set! stats (+ 1 (peephole-stats-fused stats)))
+          (loop (cddr is) (cons (list 'imul d src k) out))))
+       (else (loop (cdr is) (cons (car is) out))))))
+
   (define (fuse-index instrs stats)
     (let loop ((is instrs) (out '()))
       (cond
@@ -469,9 +496,11 @@
                   ;; index folding LAST: it consumes the `lea` that the copy-add
                   ;; fold produces, so the order is forced twice over.
                   (fuse-index
-                   (fuse-lea
+                   (fuse-copy-imul
+                    (fuse-lea
                     (fold-immediates
                      (fuse-sub-neg (fuse-compare-branch instrs stats) stats)
+                     stats)
                      stats)
                     stats)
                    stats)

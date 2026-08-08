@@ -217,6 +217,21 @@
                        (mov rax rcx)))
              '((movsd xmm0 (mem r8 r10 8 7)) (mov rsi rdx) (mov rax rcx))))
 
+;; A copy feeding a three-address multiply IS the multiply. The immediate fold
+;; produces `imul D, D, k` because that is what the two-operand form it replaced
+;; meant; when D was itself a fresh copy, the second source operand can read the
+;; original directly, which is what having one is for.
+(ck! "a copy into a three-address imul collapses into it"
+     (equal? (peeped '((mov r10 rcx) (imul r10 r10 (imm 3))))
+             '((imul r10 rcx (imm 3)))))
+
+(ck! "end to end: copy, two-operand imul and a materialised 3 become one imul"
+     (equal? (peeped '((mov rdi (imm 3))
+                       (mov r10 rcx)
+                       (imul r10 rdi)
+                       (mov rdi rax)))
+             '((imul r10 rcx (imm 3)) (mov rdi rax))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))
