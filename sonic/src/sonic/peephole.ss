@@ -272,6 +272,20 @@
   ;; pass runs over one straight-line run with no liveness information, so a
   ;; register still live at the end of the run must keep its value. Requiring a
   ;; later write proves it does not.
+  ;; FOLDING A USE IS ALWAYS SAFE. Only DELETING the materialisation needs proof
+  ;; that the register is dead, and the two were conflated at first: requiring a
+  ;; later redefinition before folding anything meant a constant used twice with
+  ;; no redefinition in the run kept both its register uses, which then kept the
+  ;; register live, which then spilled. nbody's `+2` component went that way.
+  ;;
+  ;; So the two decisions are now separate. Every use that can take an immediate
+  ;; takes one. The materialisation is removed only when every use was folded
+  ;; AND a later write proves the register dead -- this pass sees one
+  ;; straight-line run and has no liveness, so without that write the register
+  ;; may be read in another block and the definition has to stay.
+  ;;
+  ;; A left-behind `mov` is one wasted instruction. Not folding is worth several,
+  ;; because the register it keeps alive is one the allocator then cannot use.
   (define (fold-immediates instrs stats)
     (let loop ((is instrs) (out '()))
       (cond
@@ -279,26 +293,24 @@
        ((imm-of (car is))
         => (lambda (k)
              (let ((r (cadr (car is))))
-               (let scan ((rest (cdr is)) (seen '()) (ok #t))
+               (let scan ((rest (cdr is)) (folds 0) (all #t))
                  (cond
-                  ;; End of the run with no redefinition: r may be live out.
-                  ((null? rest)
-                   (loop (cdr is) (cons (car is) out)))
-                  ((redefines? (car rest) r)
-                   (if (and ok (pair? seen))
-                       (begin
-                         (peephole-stats-fused-set!
-                          stats (+ 1 (peephole-stats-fused stats)))
-                         ;; Drop the materialisation, keep everything after it
-                         ;; with the folded uses substituted.
-                         (loop (fold-run (cdr is) r k) out))
-                       (loop (cdr is) (cons (car is) out))))
-                  ((foldable-use? (car rest) r)
-                   (scan (cdr rest) (cons (car rest) seen) ok))
-                  ((mentions? (cdr (car rest)) r)
-                   ;; Some other use -- an address component, or a destination.
-                   (loop (cdr is) (cons (car is) out)))
-                  (else (scan (cdr rest) seen ok)))))))
+                  ((or (null? rest) (redefines? (car rest) r))
+                   (cond
+                    ((zero? folds) (loop (cdr is) (cons (car is) out)))
+                    (else
+                     (peephole-stats-fused-set!
+                      stats (+ 1 (peephole-stats-fused stats)))
+                     (let ((rewritten (fold-run (cdr is) r k)))
+                       ;; Dead only if nothing else read it AND a later write
+                       ;; proves it. `(null? rest)` is the end of the run, where
+                       ;; neither holds.
+                       (if (and all (pair? rest))
+                           (loop rewritten out)
+                           (loop rewritten (cons (car is) out)))))))
+                  ((foldable-use? (car rest) r) (scan (cdr rest) (+ folds 1) all))
+                  ((mentions? (cdr (car rest)) r) (scan (cdr rest) folds #f))
+                  (else (scan (cdr rest) folds all)))))))
        (else (loop (cdr is) (cons (car is) out))))))
 
   ;; Substitute the immediate into every use of r, stopping at its redefinition.
@@ -355,6 +367,97 @@
           (loop (cddr is) (cons `(lea ,d (mem ,b #f 1 ,k)) out))))
        (else (loop (cdr is) (cons (car is) out))))))
 
+  ;; --- an index computation folds into the addressing mode --------------------
+  ;;
+  ;;     lea   rsi, [r10+1]              movsd xmm0, [r8 + r10*8 + 7]
+  ;;     movsd xmm0, [r8 + rsi*8 - 1]
+  ;;
+  ;; because [r8 + (r10+1)*8 - 1] IS [r8 + r10*8 + 7]. The scale distributes
+  ;; over the constant, so a derived index never needs computing at all: it is a
+  ;; displacement, and the displacement was already there.
+  ;;
+  ;; This is strength reduction arriving at the cheapest place to do it. nbody
+  ;; indexes three components off one base -- 3i, 3i+1, 3i+2 -- and the second
+  ;; and third were each costing a constant, an add and a register that then had
+  ;; to stay live. Folding them into the displacement removes the instructions
+  ;; AND the register pressure, which is why it is worth more than its
+  ;; instruction count suggests: the vregs it deletes were the ones spilling.
+  ;;
+  ;; ALL USES OR NONE, and every use must be as the INDEX of a memory operand.
+  ;; A use as a plain register operand cannot absorb the constant, and a use as
+  ;; the BASE cannot either -- the base is not scaled, so folding there would
+  ;; multiply the constant by one while the index multiplies it by the scale.
+  (define (lea-of i)
+    ;; (lea D (mem B #f 1 k)) -- a base plus a constant, nothing else.
+    (and (pair? i) (eq? (car i) 'lea) (= (length i) 3)
+         (symbol? (cadr i))
+         (let ((m (caddr i)))
+           (and (pair? m) (eq? (car m) 'mem)
+                (symbol? (cadr m)) (not (caddr m))
+                (eqv? (cadddr m) 1)
+                (integer? (list-ref m 4))
+                (list (cadr i) (cadr m) (list-ref m 4))))))
+
+  ;; Every occurrence of d in this instruction is as a memory INDEX, and the
+  ;; displacement that results still fits.
+  (define (index-only-uses i d k)
+    (let scan ((xs (cdr i)) (hits 0))
+      (cond
+       ((null? xs) hits)
+       ((eq? (car xs) d) #f)                       ; a bare register operand
+       ((and (pair? (car xs)) (eq? (car (car xs)) 'mem))
+        (let* ((m (car xs)) (base (cadr m)) (idx (caddr m)) (sc (cadddr m))
+               (disp (list-ref m 4)))
+          (cond
+           ((eq? base d) #f)                       ; the base is not scaled
+           ((eq? idx d)
+            (if (and (integer? disp) (integer? sc)
+                     (let ((n (+ disp (* k sc))))
+                       (<= (- (expt 2 31)) n (- (expt 2 31) 1))))
+                (scan (cdr xs) (+ hits 1))
+                #f))
+           (else (scan (cdr xs) hits)))))
+       ((mentions? (car xs) d) #f)
+       (else (scan (cdr xs) hits)))))
+
+  (define (fold-index-into i d b k)
+    (cons (car i)
+          (map (lambda (x)
+                 (if (and (pair? x) (eq? (car x) 'mem) (eq? (caddr x) d))
+                     (list 'mem (cadr x) b (cadddr x)
+                           (+ (list-ref x 4) (* k (cadddr x))))
+                     x))
+               (cdr i))))
+
+  (define (fuse-index instrs stats)
+    (let loop ((is instrs) (out '()))
+      (cond
+       ((null? is) (reverse out))
+       ((lea-of (car is))
+        => (lambda (spec)
+             (let ((d (car spec)) (b (cadr spec)) (k (caddr spec)))
+               (let scan ((rest (cdr is)) (uses 0))
+                 (cond
+                  ((null? rest) (loop (cdr is) (cons (car is) out)))
+                  ((redefines? (car rest) d)
+                   (if (> uses 0)
+                       (begin
+                         (peephole-stats-fused-set!
+                          stats (+ 1 (peephole-stats-fused stats)))
+                         (loop (fold-index-run (cdr is) d b k) out))
+                       (loop (cdr is) (cons (car is) out))))
+                  ((index-only-uses (car rest) d k)
+                   => (lambda (n) (scan (cdr rest) (+ uses n))))
+                  (else (loop (cdr is) (cons (car is) out))))))))
+       (else (loop (cdr is) (cons (car is) out))))))
+
+  (define (fold-index-run is d b k)
+    (let walk ((is is) (out '()))
+      (cond
+       ((null? is) (reverse out))
+       ((redefines? (car is) d) (append (reverse out) is))
+       (else (walk (cdr is) (cons (fold-index-into (car is) d b k) out))))))
+
   (define (peephole target instrs)
     (let ((stats (make-peephole-stats 0)))
       (values (if (needs-fusion? target)
@@ -363,9 +466,13 @@
                   ;; first would change the shape it looks for.
                   ;; lea LAST: it consumes the `add` with an immediate that
                   ;; immediate folding produces, so the order is forced.
-                  (fuse-lea
-                   (fold-immediates
-                    (fuse-sub-neg (fuse-compare-branch instrs stats) stats)
+                  ;; index folding LAST: it consumes the `lea` that the copy-add
+                  ;; fold produces, so the order is forced twice over.
+                  (fuse-index
+                   (fuse-lea
+                    (fold-immediates
+                     (fuse-sub-neg (fuse-compare-branch instrs stats) stats)
+                     stats)
                     stats)
                    stats)
                   instrs)

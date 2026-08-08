@@ -121,24 +121,29 @@
      (equal? (peeped '((mov rdi (imm 48)) (imul rsi rdi) (mov rdi (imm 1))))
              '((imul rsi rsi (imm 48)) (mov rdi (imm 1)))))
 
-;; ANY use that cannot take an immediate blocks the whole thing. An address
-;; component is the case: there is no immediate form of a base register.
-(ck! "a use as an address component blocks the fold entirely"
+;; FOLDING A USE AND DELETING THE DEFINITION ARE SEPARATE DECISIONS, and
+;; conflating them was the bug. A use that cannot take an immediate -- an
+;; address component, where there is no immediate form of a base register --
+;; keeps the materialisation alive. It does NOT stop the other uses folding.
+(ck! "a use that cannot fold keeps the mov, but the others still fold"
      (equal? (peeped '((mov rdi (imm 3))
                        (add rsi rdi)
                        (movsd xmm0 (mem r8 rdi 8 0))
                        (mov rdi (imm 1))))
              '((mov rdi (imm 3))
-               (add rsi rdi)
+               (add rsi (imm 3))
                (movsd xmm0 (mem r8 rdi 8 0))
                (mov rdi (imm 1)))))
 
 ;; Deleting the materialisation needs proof the register is dead, and this pass
 ;; has no liveness -- it sees one straight-line run. A later REDEFINITION is the
-;; proof; without one the register may be live out and nothing may be removed.
-(ck! "with no later redefinition the register may be live out, so nothing folds"
+;; proof; without one the register may be read in another block, so the
+;; definition stays. The USE still folds, which is the point: keeping the
+;; register alive costs the allocator a register, and that is worth more than
+;; the one instruction left behind.
+(ck! "with no later redefinition the mov stays, but the use folds anyway"
      (equal? (peeped '((mov rdi (imm 3)) (imul r10 rdi)))
-             '((mov rdi (imm 3)) (imul r10 rdi))))
+             '((mov rdi (imm 3)) (imul r10 r10 (imm 3)))))
 
 ;; Folding into the destination would be a different instruction: `add rax, rax`
 ;; doubles, `add rax, imm` does not.
@@ -161,6 +166,56 @@
 (ck! "but it does when something else writes the flags first"
      (equal? (peeped '((mov rsi r10) (add rsi (imm 1)) (cmp rax rbx) (jl (label L))))
              '((lea rsi (mem r10 #f 1 1)) (cmp rax rbx) (jl (label L)))))
+
+;; --- an index computation folds into the addressing mode --------------------
+;;
+;; [r8 + (r10+1)*8 - 1] IS [r8 + r10*8 + 7]: the scale distributes over the
+;; constant, so a derived index never needs computing. This is where nbody's
+;; three component offsets go, and it is worth more than its instruction count
+;; because the vreg it deletes was one of the ones spilling.
+
+(ck! "a lea feeding a scaled index folds into the displacement"
+     (equal? (peeped '((lea rsi (mem r10 #f 1 1))
+                       (movsd xmm0 (mem r8 rsi 8 -1))
+                       (mov rsi rax)))
+             '((movsd xmm0 (mem r8 r10 8 7)) (mov rsi rax))))
+
+(ck! "the scale is applied to the constant, not added to it"
+     (equal? (peeped '((lea rsi (mem r10 #f 1 2))
+                       (movsd xmm0 (mem r8 rsi 8 -1))
+                       (mov rsi rax)))
+             '((movsd xmm0 (mem r8 r10 8 15)) (mov rsi rax))))
+
+;; The BASE is not scaled, so folding a constant there would multiply it by one
+;; while the index multiplies it by the scale. Different address, same shape.
+(ck! "a use as the base rather than the index does NOT fold"
+     (equal? (peeped '((lea rsi (mem r10 #f 1 1))
+                       (movsd xmm0 (mem rsi r9 8 0))
+                       (mov rsi rax)))
+             '((lea rsi (mem r10 #f 1 1))
+               (movsd xmm0 (mem rsi r9 8 0))
+               (mov rsi rax))))
+
+;; A bare register use cannot absorb the constant at all.
+(ck! "a plain register use blocks it"
+     (equal? (peeped '((lea rsi (mem r10 #f 1 1)) (add rdx rsi) (mov rsi rax)))
+             '((lea rsi (mem r10 #f 1 1)) (add rdx rsi) (mov rsi rax))))
+
+;; Same liveness rule as the immediate fold: the lea is only removed when a
+;; later write proves its destination dead.
+(ck! "with no later redefinition the lea stays"
+     (equal? (peeped '((lea rsi (mem r10 #f 1 1)) (movsd xmm0 (mem r8 rsi 8 -1))))
+             '((lea rsi (mem r10 #f 1 1)) (movsd xmm0 (mem r8 rsi 8 -1)))))
+
+;; End to end: a copy, an immediate add and a scaled load are ONE instruction.
+(ck! "copy + add + scaled load collapses to a single addressed load"
+     (equal? (peeped '((mov rax (imm 1))
+                       (mov rsi r10)
+                       (add rsi rax)
+                       (movsd xmm0 (mem r8 rsi 8 -1))
+                       (mov rsi rdx)
+                       (mov rax rcx)))
+             '((movsd xmm0 (mem r8 r10 8 7)) (mov rsi rdx) (mov rax rcx))))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
