@@ -498,9 +498,22 @@
   ;; the only one. The trip count is exact, so this is straight-line rather than
   ;; a counted loop, matching what the AVX-512 side does with its tail.
 
-  (define (rv64gc-emit-loop plan kernel)
+  ;; `elements` overrides the verdict's trip count.
+  ;;
+  ;; A verdict counts ITERATIONS; a linearized loop covers elements. nbody's
+  ;; position update steps one body per iteration and touches three elements, so
+  ;; its trip is 5 and its element count is 15 -- unrolling five would write a
+  ;; third of the array and leave the rest. (sonic vectorize) proves the
+  ;; linearization and supplies the number; passing nothing keeps the old
+  ;; behaviour, which is right for a loop whose iterations ARE its elements.
+  (define rv64gc-emit-loop
+    (case-lambda
+      ((plan kernel) (rv64gc-emit-loop* plan kernel #f))
+      ((plan kernel elements) (rv64gc-emit-loop* plan kernel elements))))
+
+  (define (rv64gc-emit-loop* plan kernel elements)
     (let* ((v (rvv-plan-verdict plan))
-           (trip (trip-count (vl-trip v))))
+           (trip (or elements (trip-count (vl-trip v)))))
       (unless (and trip (exact? trip))
         (error 'rv64gc-emit-loop
                "the verdict carries no exact trip count" (vl-loop v)))

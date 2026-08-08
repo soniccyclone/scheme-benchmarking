@@ -104,7 +104,13 @@
           vl? vl-loop vl-legal? vl-trip vl-elt-class
           vl-widths vl-lanes vl-reasons vl-cites vl-notes vl-accesses
           vl-refused-for? vl-report
-          vl-candidate-widths vl-element-bits)
+          vl-candidate-widths vl-element-bits
+          ;; For the pass that turns a licensed verdict into a kernel. These
+          ;; are this file's vocabulary for an access and for finding a loop's
+          ;; body; re-deriving either in the vectorizer is how the two come to
+          ;; disagree about what was licensed.
+          acc-kind acc-array acc-index acc-prim
+          loop-lambda-body iv-form dependence)
   (import (chezscheme) (nanopass)
           (sonic lang) (sonic loops) (sonic alias) (sonic repr) (sonic interval))
 

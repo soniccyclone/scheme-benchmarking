@@ -585,9 +585,22 @@
   ;; whose count is only BOUNDED never reaches this file, because veclegal
   ;; refuses it upstream.
 
-  (define (vec-emit-loop plan kernel)
+  ;; `elements` overrides the verdict's trip count.
+  ;;
+  ;; A verdict counts ITERATIONS; a linearized loop covers elements. nbody's
+  ;; position update steps one body per iteration and touches three elements, so
+  ;; its trip is 5 and its element count is 15 -- unrolling five would write a
+  ;; third of the array and leave the rest. (sonic vectorize) proves the
+  ;; linearization and supplies the number; passing nothing keeps the old
+  ;; behaviour, which is right for a loop whose iterations ARE its elements.
+  (define vec-emit-loop
+    (case-lambda
+      ((plan kernel) (vec-emit-loop* plan kernel #f))
+      ((plan kernel elements) (vec-emit-loop* plan kernel elements))))
+
+  (define (vec-emit-loop* plan kernel elements)
     (let* ((v (vec-plan-verdict plan))
-           (trip (trip-count (vl-trip v)))
+           (trip (or elements (trip-count (vl-trip v))))
            (lanes (vec-plan-lanes plan))
            (bytes (vec-plan-bytes plan)))
       (unless (and trip (exact? trip))

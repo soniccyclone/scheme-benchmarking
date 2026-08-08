@@ -127,6 +127,8 @@ test-suite:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/veclegal-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/vectorize-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/parcopy-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/vec-x86-64-test.ss

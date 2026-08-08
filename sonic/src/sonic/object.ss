@@ -189,6 +189,8 @@
             (else o)))
          i))
 
+  (define (object-instruction-size target i) (instruction-size target i))
+
   (define (instruction-size target i)
     (case (check-target 'instruction-size target)
       ((x86-64) (length (x86:encode-instr (x86-blank i))))
@@ -242,8 +244,13 @@
   ;; -> a list of instructions with every label resolved, in listing order.
   (define resolve-labels
     (case-lambda
-      ((target listing) (resolve-labels target listing '()))
-      ((target listing extra) (resolve-labels* target listing extra))))
+      ((target listing) (resolve-labels target listing '() #f))
+      ((target listing extra) (resolve-labels* target listing extra #f))
+      ;; `size` lets the VECTOR path in: label resolution derives an address
+      ;; from the sizes of the instructions before it, and sizing goes through
+      ;; the scalar encoder, which refuses VEX by name. See the `encoder` option
+      ;; on `assemble-function` for why that refusal stays the default.
+      ((target listing extra size) (resolve-labels* target listing extra size))))
 
   ;; `extra` is ((name . offset-past-the-code) ...): labels for data that is
   ;; emitted AFTER the instructions and therefore has no position in the
@@ -315,7 +322,12 @@
                         (loop (cdr ys) (+ pc 4) (cons i acc)))))))))
         (if changed (pass out (+ n 1)) out))))
 
-  (define (resolve-labels* target listing extra)
+  (define (resolve-labels* target listing extra size-of)
+    ;; Shadows the module-level sizer so the vector path can supply its own.
+    ;; Defined before any expression, because internal definitions must come
+    ;; first and `check-target` is an expression.
+    (define (instruction-size target i)
+      (if size-of (size-of i) (object-instruction-size target i)))
     (check-target 'resolve-labels target)
     (let ((labels (make-eq-hashtable))
           (listing (if (eq? target 'rv64) (relax-rv64 listing) listing)))
@@ -372,11 +384,40 @@
               (consts (opt 'constants '()))
               (frame-bits (opt 'frame-bits '()))
               (state-of (opt 'state-of (lambda (i n) #f)))
-              (instrs (resolve-labels target listing (opt 'extra-labels '())))
+              ;; The ENCODER, supplied by the caller for the vector path.
+              ;;
+              ;; encode-x86-64.ss refuses every VEX-shaped mnemonic by name, and
+              ;; that refusal is a correctness property rather than a scope
+              ;; note: the scalar back end is the side of the differential
+              ;; oracle that has to round exactly like baseline, so a packed
+              ;; instruction reaching it is a bug. vec-x86-64.ss and vec-rv64.ss
+              ;; therefore carry their own encoders.
+              ;;
+              ;; Passing one in here keeps that split intact -- the default is
+              ;; still the refusing encoder, and only a caller holding a vector
+              ;; plan can ask for the other one -- while letting a vector
+              ;; listing become a real object that binutils can read back. That
+              ;; readback is the whole of the milestone's evidence.
+              (encode (opt 'encoder (lambda (i) (encode-instruction target i))))
+              ;; SIZING IS NOT ENCODING, and on a target with labels the two
+              ;; cannot be the same function. Label resolution sizes every
+              ;; instruction to find each label's address, and it does that
+              ;; BEFORE substituting displacements -- so a sizer that encodes
+              ;; would be handed `(bne a2 zero Lvec)` with the label still a
+              ;; symbol, and the encoder is right to refuse that. RV64 is fixed
+              ;; width so its sizer is a constant; x86-64's vector encoder can
+              ;; measure an instruction whose operands are all resolved, which
+              ;; on that target they are, because its only label operands are
+              ;; branches this path does not emit.
+              (size (opt 'sizer #f))
+              (instrs (resolve-labels target listing (opt 'extra-labels '())
+                                      (or size
+                                          (and (assq 'encoder opts)
+                                               (lambda (i) (length (encode i)))))))
               (e (make-emitter (gcmeta-target-for target) frame-bits)))
          (let loop ((is instrs) (n 0))
            (unless (null? is)
-             (let ((bytes (encode-instruction target (car is)))
+             (let ((bytes (encode (car is)))
                    (flags (state-of (car is) n)))
                (if flags (emit! e bytes flags) (emit! e bytes)))
              (loop (cdr is) (+ n 1))))
@@ -490,13 +531,55 @@
       (close-port p))
     path)
 
+  ;; --- .riscv.attributes -----------------------------------------------------
+  ;;
+  ;; WITHOUT THIS, binutils will not decode our vector instructions. objdump
+  ;; reads `Tag_RISCV_arch` to decide which extensions exist, and an object that
+  ;; does not say `v1p0` gets every RVV instruction printed as `.insn 4, 0x...`
+  ;; -- a raw word, not a mnemonic.
+  ;;
+  ;; That is not cosmetic. disasm.ss's whole premise is that the milestone is
+  ;; checked by an independent reading, and a predicate looking for packed
+  ;; arithmetic in a stream of `.insn` finds none. The scalar RV64 output never
+  ;; needed the section because base instructions decode without it, which is
+  ;; why this was missing until the first vector object was built.
+  ;;
+  ;; Layout, from the RISC-V ELF psABI:
+  ;;
+  ;;   'A'                      format version
+  ;;   u32                      length of this subsection, counting itself
+  ;;   "riscv\0"                vendor
+  ;;   1                        Tag_File
+  ;;   u32                      length of this sub-subsection, counting itself
+  ;;   5                        Tag_RISCV_arch (uleb128; 5 is one byte)
+  ;;   "<arch>\0"               the extension string
+  ;;
+  ;; The arch string is the one gas itself emits for `-march=rv64gcv`. Writing a
+  ;; shorter hand-rolled one risks binutils' parser rejecting a version it does
+  ;; not recognise, and a rejected attributes section decodes as `.insn` again --
+  ;; the same failure, with a more confusing cause.
+  (define riscv-arch-string
+    "rv64i2p0_m2p0_a2p0_f2p0_d2p0_c2p0_v1p0_zmmul1p0_zaamo1p0_zalrsc1p0_zca1p0_zcd1p0_zve32f1p0_zve32x1p0_zve64d1p0_zve64f1p0_zve64x1p0_zvl128b1p0_zvl32b1p0_zvl64b1p0")
+
+  (define (riscv-attributes)
+    (let* ((arch (append (string->bytes riscv-arch-string) '(0)))
+           (subsub (append '(1) (u32 (+ 1 4 1 (length arch))) '(5) arch))
+           (vendor (append (string->bytes "riscv") '(0)))
+           (sub (append (u32 (+ 4 (length vendor) (length subsub))) vendor subsub)))
+      (append '(#x41) sub)))
+
   (define (build-elf target name code pool meta)
     (let* ((fname (symbol->string name))
            ;; string tables. Offset 0 is the empty name by definition, which is
            ;; what a section or symbol with no name points at.
            (strtab (append '(0) (string->bytes fname) '(0)))
-           (sh-names '(".text" ".rodata" ".sonic.meta" ".note.GNU-stack"
-                       ".symtab" ".strtab" ".shstrtab"))
+           (rv64? (eq? target 'rv64))
+           ;; Section indices are 1-based past the null section 0, in the order
+           ;; `sh-names` lists them.
+           (strtab-index (if rv64? 7 6))
+           (sh-names (append '(".text" ".rodata" ".sonic.meta" ".note.GNU-stack")
+                             (if rv64? '(".riscv.attributes") '())
+                             '(".symtab" ".strtab" ".shstrtab")))
            (shstrtab-pairs
             (let loop ((ns sh-names) (at 1) (acc '()))
               (if (null? ns)
@@ -516,21 +599,34 @@
                            (u32 1) (list #x12) (list 0) (u16 1)
                            (u64 0) (u64 code-size)))
            (sections
-            (list
-             ;; SHT_PROGBITS=1, SHF_ALLOC=2, SHF_EXECINSTR=4
-             (section-spec (sh-name-of ".text") 1 6 16 0 0 0 (bytevector->u8-list code))
-             (section-spec (sh-name-of ".rodata") 1 2 8 0 0 0 (bytevector->u8-list pool))
-             (section-spec (sh-name-of ".sonic.meta") 1 0 1 0 0 0 (bytevector->u8-list meta))
-             ;; Zero-size and unexecutable, purely so the linker does not decide
-             ;; the program wants an executable stack.
-             (section-spec (sh-name-of ".note.GNU-stack") 1 0 1 0 0 0 '())
-             ;; SHT_SYMTAB=2. sh_link is the string table's index and sh_info is
-             ;; the index of the first non-local symbol, which the linker uses
-             ;; to find the local/global boundary. Both are hard errors if wrong
-             ;; and silent ones if merely plausible.
-             (section-spec (sh-name-of ".symtab") 2 0 8 24 6 1 symtab)
-             (section-spec (sh-name-of ".strtab") 3 0 1 0 0 0 strtab)
-             (section-spec (sh-name-of ".shstrtab") 3 0 1 0 0 0 shstrtab)))
+            (append
+             (list
+              ;; SHT_PROGBITS=1, SHF_ALLOC=2, SHF_EXECINSTR=4
+              (section-spec (sh-name-of ".text") 1 6 16 0 0 0 (bytevector->u8-list code))
+              (section-spec (sh-name-of ".rodata") 1 2 8 0 0 0 (bytevector->u8-list pool))
+              (section-spec (sh-name-of ".sonic.meta") 1 0 1 0 0 0 (bytevector->u8-list meta))
+              ;; Zero-size and unexecutable, purely so the linker does not decide
+              ;; the program wants an executable stack.
+              (section-spec (sh-name-of ".note.GNU-stack") 1 0 1 0 0 0 '()))
+             ;; SHT_RISCV_ATTRIBUTES = 0x70000003, processor-specific by
+             ;; definition, so it is emitted only on the target that has one.
+             (if rv64?
+                 (list (section-spec (sh-name-of ".riscv.attributes")
+                                     #x70000003 0 1 0 0 0 (riscv-attributes)))
+                 '())
+             (list
+              ;; SHT_SYMTAB=2. sh_link is the string table's index and sh_info
+              ;; is the index of the first non-local symbol, which the linker
+              ;; uses to find the local/global boundary. Both are hard errors if
+              ;; wrong and silent ones if merely plausible.
+              ;; sh_link DERIVED, not written down. It was the literal 6, which
+              ;; is `.strtab`'s index -- correct until `.riscv.attributes` was
+              ;; inserted ahead of it and moved every later section up one. The
+              ;; comment above calls a wrong sh_link a hard error that looks
+              ;; plausible; leaving a literal here would have made it one.
+              (section-spec (sh-name-of ".symtab") 2 0 8 24 strtab-index 1 symtab)
+              (section-spec (sh-name-of ".strtab") 3 0 1 0 0 0 strtab)
+              (section-spec (sh-name-of ".shstrtab") 3 0 1 0 0 0 shstrtab))))
            (shnum (+ 1 (length sections)))
            (shstrndx (- shnum 1)))
       ;; Place each section's data after the ELF header, honouring its
