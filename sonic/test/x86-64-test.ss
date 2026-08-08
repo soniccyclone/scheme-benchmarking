@@ -422,6 +422,20 @@
 ;; And the ones it now accepts, which is the other half of the claim: a guard
 ;; that refused everything would pass the checks above while making the
 ;; three-address forms unreachable.
+;; The THREE-ADDRESS imul with an immediate, which the index arithmetic wants:
+;; scaling a loop counter by a constant otherwise costs a `mov` to stand the
+;; constant up in a register, and that register is then live across the
+;; multiply. gas picks the short 6B form whenever the immediate fits in a byte,
+;; so we do too -- a byte comparison against it fails otherwise, and picking the
+;; long form would be legal and still wrong for this test's purpose.
+(ck! "imul takes an immediate, in gas's choice of the short and long forms"
+     (and (equal? (encode-instr '(imul r10 r10 (imm 3)))  '(#x4D #x6B #xD2 #x03))
+          (equal? (encode-instr '(imul r11 r11 (imm 48))) '(#x4D #x6B #xDB #x30))
+          (equal? (encode-instr '(imul rax rcx (imm 1000)))
+                  '(#x48 #x69 #xC1 #xE8 #x03 #x00 #x00))
+          ;; and the two-operand form is untouched
+          (equal? (encode-instr '(imul rdx rsi)) '(#x48 #x0F #xAF #xD6))))
+
 (for-each
  (lambda (m)
    (ck! (string-append "accepts " (symbol->string m) ", which is not contraction")

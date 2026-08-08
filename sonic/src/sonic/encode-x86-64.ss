@@ -443,9 +443,24 @@
           ;; 32-bit one, and it sits AFTER the F2 prefix.
           (asm 'encode-instr '(#xF2) 1 '(#x0F #x2A) (reg-number dst) src '() #f)))
        ((eq? m 'imul)
+        ;; Two forms. `imul dst, src` is the two-address one, 0F AF.
+        ;;
+        ;; `imul dst, src, imm` is THREE-ADDRESS and takes an immediate, which
+        ;; is the one the index arithmetic wants: scaling a loop counter by a
+        ;; constant otherwise costs a `mov` to stand the constant up in a
+        ;; register first, and that register is then live across the multiply.
+        ;; 6B takes an imm8 and 69 an imm32; gas picks the short form whenever
+        ;; it fits, so we do too, or the byte comparison against it fails.
         (let ((dst (arg 0)) (src (arg 1)))
           (unless (gpr? dst) (error 'encode-instr "imul destination must be a GPR" i))
-          (asm 'encode-instr '() 1 '(#x0F #xAF) (reg-number dst) src '() #f)))
+          (if (and (= (length i) 4) (imm? (arg 2)))
+              (let ((n (cadr (arg 2))))
+                (if (fits-imm8? n)
+                    (asm 'encode-instr '() 1 '(#x6B) (reg-number dst) src
+                         (imm8-bytes n) #f)
+                    (asm 'encode-instr '() 1 '(#x69) (reg-number dst) src
+                         (imm32-bytes n) #f)))
+              (asm 'encode-instr '() 1 '(#x0F #xAF) (reg-number dst) src '() #f))))
        ((eq? m 'lea)
         (let ((dst (arg 0)) (src (arg 1)))
           (unless (gpr? dst) (error 'encode-instr "lea destination must be a GPR" i))

@@ -89,6 +89,79 @@
        [r (run 'x86-64 in)])
   (ck! "NO collapse when the temp is still live" (equal? (car r) in)))
 
+;; --- constants into immediate operands --------------------------------------
+;;
+;; ALL USES OR NONE, which is the property worth pinning. The first version
+;; folded only a use in the very next instruction and required the register to
+;; be unused afterwards; that matched almost nothing real, because a constant
+;; materialised once and used twice failed on the second use and the spill
+;; scratch failed because its next REDEFINITION counted as a use.
+
+(define (peeped is) (let-values (((out st) (peephole 'x86-64 is))) out))
+
+(ck! "a constant feeding one add becomes an immediate, and the mov goes"
+     (equal? (peeped '((mov rax (imm 1))
+                       (add rsi rax)
+                       (mov rax (imm 9))))
+             '((add rsi (imm 1)) (mov rax (imm 9)))))
+
+;; The case that motivated this: 3 scaling two different indices. Both uses
+;; fold, not just the first.
+(ck! "a constant used TWICE folds into both, and the mov still goes"
+     (equal? (peeped '((mov rdi (imm 3))
+                       (imul r10 rdi)
+                       (imul r11 rdi)
+                       (mov rdi (imm 2))))
+             '((imul r10 r10 (imm 3)) (imul r11 r11 (imm 3)) (mov rdi (imm 2)))))
+
+;; imul's immediate form is THREE-address, so the fold changes the instruction's
+;; shape rather than one operand. Asserted separately because a rewrite that
+;; produced the two-operand form would encode a different multiply.
+(ck! "imul folds to its three-address form"
+     (equal? (peeped '((mov rdi (imm 48)) (imul rsi rdi) (mov rdi (imm 1))))
+             '((imul rsi rsi (imm 48)) (mov rdi (imm 1)))))
+
+;; ANY use that cannot take an immediate blocks the whole thing. An address
+;; component is the case: there is no immediate form of a base register.
+(ck! "a use as an address component blocks the fold entirely"
+     (equal? (peeped '((mov rdi (imm 3))
+                       (add rsi rdi)
+                       (movsd xmm0 (mem r8 rdi 8 0))
+                       (mov rdi (imm 1))))
+             '((mov rdi (imm 3))
+               (add rsi rdi)
+               (movsd xmm0 (mem r8 rdi 8 0))
+               (mov rdi (imm 1)))))
+
+;; Deleting the materialisation needs proof the register is dead, and this pass
+;; has no liveness -- it sees one straight-line run. A later REDEFINITION is the
+;; proof; without one the register may be live out and nothing may be removed.
+(ck! "with no later redefinition the register may be live out, so nothing folds"
+     (equal? (peeped '((mov rdi (imm 3)) (imul r10 rdi)))
+             '((mov rdi (imm 3)) (imul r10 rdi))))
+
+;; Folding into the destination would be a different instruction: `add rax, rax`
+;; doubles, `add rax, imm` does not.
+(ck! "a register that is also the destination is not folded"
+     (equal? (peeped '((mov rax (imm 1)) (add rax rax) (mov rax (imm 2))))
+             '((mov rax (imm 1)) (add rax rax) (mov rax (imm 2)))))
+
+;; --- copy-then-add becomes lea ----------------------------------------------
+
+(ck! "a copy followed by an immediate add becomes one lea"
+     (equal? (peeped '((mov rsi r10) (add rsi (imm 1)) (movsd xmm0 xmm1)))
+             '((lea rsi (mem r10 #f 1 1)) (movsd xmm0 xmm1))))
+
+;; lea does NOT set flags and add does. Firing when something reads them is a
+;; wrong-branch bug, not a slow one, so the guard is a correctness check.
+(ck! "it does NOT fire when a branch reads the flags the add would have set"
+     (equal? (peeped '((mov rsi r10) (add rsi (imm 1)) (jl (label L))))
+             '((mov rsi r10) (add rsi (imm 1)) (jl (label L)))))
+
+(ck! "but it does when something else writes the flags first"
+     (equal? (peeped '((mov rsi r10) (add rsi (imm 1)) (cmp rax rbx) (jl (label L))))
+             '((lea rsi (mem r10 #f 1 1)) (cmp rax rbx) (jl (label L)))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))

@@ -184,10 +184,190 @@
                       (cons (list 'mov dst src1) out)))))
        (else (loop (cdr is) (cons (car is) out))))))
 
+  ;; --- constants into immediate operands -------------------------------------
+  ;;
+  ;; A constant reaches an arithmetic instruction as a register:
+  ;;
+  ;;     mov  rax, 1        mov  rdi, 3
+  ;;     add  rsi, rax      imul r10, rdi
+  ;;
+  ;; because selection names every value, including a literal, and the
+  ;; instruction it feeds is chosen without knowing the operand is constant.
+  ;; x86-64 takes an immediate directly in both cases -- 83 /0 for `add`, and
+  ;; the three-address 6B /r for `imul`, which is why the encoder grew that
+  ;; form -- so the materialisation is pure waste. nbody's pairwise force body
+  ;; does this four times per iteration.
+  ;;
+  ;; This runs over the ALLOCATED stream, so the register holding the constant
+  ;; is usually the spill scratch and dead one instruction later. `used-later?`
+  ;; is what establishes that, and it is not optional: the same register may be
+  ;; a genuine allocated value with more readers.
+  ;;
+  ;; `imul` is the reason this is not simply a table of two-operand rewrites:
+  ;; its immediate form is three-address, so the fold changes the shape of the
+  ;; instruction rather than just an operand.
+  (define fold-target '(add sub and or cmp))
+
+  (define (imm-of i)
+    (and (pair? i) (eq? (car i) 'mov) (= (length i) 3)
+         (pair? (caddr i)) (eq? (car (caddr i)) 'imm)
+         (cadr (caddr i))))
+
+  ;; Does this instruction WRITE r and read nothing of it? Then r's old value is
+  ;; dead from here, which is what makes deleting the materialisation safe.
+  (define (redefines? i r)
+    (and (pair? i)
+         (memq (car i) '(mov movsd movzx lea cvtsi2sd))
+         (>= (length i) 2)
+         (eq? (cadr i) r)
+         (not (mentions? (cddr i) r))))
+
+  (define (mentions? x r)
+    (cond ((eq? x r) #t)
+          ((pair? x) (or (mentions? (car x) r) (mentions? (cdr x) r)))
+          (else #f)))
+
+  ;; A use of r that can take the constant instead: r is the SECOND operand of a
+  ;; two-operand arithmetic instruction and is not also its destination.
+  (define (foldable-use? i r)
+    (and (pair? i)
+         (memq (car i) (cons 'imul fold-target))
+         (= (length i) 3)
+         (eq? (caddr i) r)
+         (not (eq? (cadr i) r))))
+
+  ;; Rewrite one use to take the immediate. `imul`'s immediate form is
+  ;; three-address, so the shape changes rather than just the operand.
+  (define (fold-use i k)
+    (if (eq? (car i) 'imul)
+        (list 'imul (cadr i) (cadr i) (list 'imm k))
+        (list (car i) (cadr i) (list 'imm k))))
+
+  ;; --- constants into immediate operands -------------------------------------
+  ;;
+  ;; A constant reaches an arithmetic instruction as a register:
+  ;;
+  ;;     mov  rdi, 3        mov  rax, 1
+  ;;     imul r10, rdi      add  rsi, rax
+  ;;     imul r11, rdi
+  ;;
+  ;; because selection names every value, including a literal, and the
+  ;; instruction it feeds is chosen without knowing the operand is constant.
+  ;; x86-64 takes an immediate directly in both cases -- 83 /0 for `add`, and
+  ;; the three-address 6B /r for `imul`, which is why the encoder grew that
+  ;; form. nbody's pairwise force body does this four times per iteration.
+  ;;
+  ;; ALL USES OR NONE. The first version folded only a use in the very next
+  ;; instruction and required the register to be unused afterwards, which
+  ;; matched almost nothing: a constant materialised once and used twice --
+  ;; `3` scaling two different indices -- failed on the second use, and the
+  ;; spill scratch failed because its next REDEFINITION counted as a use.
+  ;;
+  ;; So this collects every use of the register up to its next redefinition. If
+  ;; all of them can take an immediate, all are folded and the materialisation
+  ;; is deleted; if any cannot -- it is an address component, or the register is
+  ;; the destination -- nothing changes.
+  ;;
+  ;; The redefinition is also what makes deleting the materialisation SAFE. This
+  ;; pass runs over one straight-line run with no liveness information, so a
+  ;; register still live at the end of the run must keep its value. Requiring a
+  ;; later write proves it does not.
+  (define (fold-immediates instrs stats)
+    (let loop ((is instrs) (out '()))
+      (cond
+       ((null? is) (reverse out))
+       ((imm-of (car is))
+        => (lambda (k)
+             (let ((r (cadr (car is))))
+               (let scan ((rest (cdr is)) (seen '()) (ok #t))
+                 (cond
+                  ;; End of the run with no redefinition: r may be live out.
+                  ((null? rest)
+                   (loop (cdr is) (cons (car is) out)))
+                  ((redefines? (car rest) r)
+                   (if (and ok (pair? seen))
+                       (begin
+                         (peephole-stats-fused-set!
+                          stats (+ 1 (peephole-stats-fused stats)))
+                         ;; Drop the materialisation, keep everything after it
+                         ;; with the folded uses substituted.
+                         (loop (fold-run (cdr is) r k) out))
+                       (loop (cdr is) (cons (car is) out))))
+                  ((foldable-use? (car rest) r)
+                   (scan (cdr rest) (cons (car rest) seen) ok))
+                  ((mentions? (cdr (car rest)) r)
+                   ;; Some other use -- an address component, or a destination.
+                   (loop (cdr is) (cons (car is) out)))
+                  (else (scan (cdr rest) seen ok)))))))
+       (else (loop (cdr is) (cons (car is) out))))))
+
+  ;; Substitute the immediate into every use of r, stopping at its redefinition.
+  (define (fold-run is r k)
+    (let walk ((is is) (out '()))
+      (cond
+       ((null? is) (reverse out))
+       ((redefines? (car is) r) (append (reverse out) is))
+       ((foldable-use? (car is) r) (walk (cdr is) (cons (fold-use (car is) k) out)))
+       (else (walk (cdr is) (cons (car is) out))))))
+
+  ;; --- copy-then-add becomes lea ---------------------------------------------
+  ;;
+  ;;     mov rsi, r10        ->    lea rsi, [r10+1]
+  ;;     add rsi, 1
+  ;;
+  ;; `lea` computes an address without touching memory, which makes it the
+  ;; three-address integer add x86-64 otherwise lacks. The pattern appears
+  ;; wherever an index is derived from a loop counter, which after immediate
+  ;; folding is every component offset in nbody's force loop.
+  ;;
+  ;; IT DOES NOT SET FLAGS, and `add` does. So this fires only when nothing
+  ;; reads the flags before something else writes them -- otherwise a later
+  ;; branch would test flags this instruction no longer produces, which is a
+  ;; wrong-branch bug and not a slow one.
+  (define flag-readers '(jl jle je jne jge jg jb jbe ja jae jo jno
+                         setl setle sete setne setge setg setb setbe seta setae))
+  (define flag-writers '(add sub and or cmp imul neg shl sar shr))
+
+  (define (flags-dead-before-rewrite? is)
+    (let scan ((is is))
+      (cond ((null? is) #t)
+            ((memq (car (car is)) flag-readers) #f)
+            ((memq (car (car is)) flag-writers) #t)
+            (else (scan (cdr is))))))
+
+  (define (fuse-lea instrs stats)
+    (let loop ((is instrs) (out '()))
+      (cond
+       ((null? is) (reverse out))
+       ((and (pair? (cdr is))
+             (let ((m (car is)) (a (cadr is)))
+               (and (eq? (car m) 'mov) (= (length m) 3)
+                    (symbol? (cadr m)) (symbol? (caddr m))
+                    (not (eq? (cadr m) (caddr m)))
+                    (eq? (car a) 'add) (= (length a) 3)
+                    (eq? (cadr a) (cadr m))
+                    (pair? (caddr a)) (eq? (car (caddr a)) 'imm)
+                    (flags-dead-before-rewrite? (cddr is)))))
+        (let ((d (cadr (car is)))
+              (b (caddr (car is)))
+              (k (cadr (caddr (cadr is)))))
+          (peephole-stats-fused-set! stats (+ 1 (peephole-stats-fused stats)))
+          (loop (cddr is) (cons `(lea ,d (mem ,b #f 1 ,k)) out))))
+       (else (loop (cdr is) (cons (car is) out))))))
+
   (define (peephole target instrs)
     (let ((stats (make-peephole-stats 0)))
       (values (if (needs-fusion? target)
-                  (fuse-sub-neg (fuse-compare-branch instrs stats) stats)
+                  ;; Immediates LAST: compare-and-branch fusion matches a `cmp`
+                  ;; against a register, and folding a constant into that `cmp`
+                  ;; first would change the shape it looks for.
+                  ;; lea LAST: it consumes the `add` with an immediate that
+                  ;; immediate folding produces, so the order is forced.
+                  (fuse-lea
+                   (fold-immediates
+                    (fuse-sub-neg (fuse-compare-branch instrs stats) stats)
+                    stats)
+                   stats)
                   instrs)
               stats)))
   )
