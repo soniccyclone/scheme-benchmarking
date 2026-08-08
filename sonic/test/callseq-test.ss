@@ -123,7 +123,14 @@
                         (arg-register callconv-x86-64 'tagged 2))))
   ;; The point of asking both: the two conventions genuinely disagree, so a
   ;; selector that hardcoded one would pass one of these and fail the other.
+  ;; x86-64 has TWO tagged argument registers since the 6/6 rebalance, so the
+  ;; third of these three overflows to the stack there and stays in a register
+  ;; on RV64. That IS the disagreement this check is for, and it is now a
+  ;; sharper one than differing register names.
   (ck! "and the two targets' answers are NOT the same registers" (not (equal? rr xr)))
+  (ck! "specifically: x86-64 runs out of tagged registers where RV64 does not"
+       (and (< (arg-register-count callconv-x86-64 'tagged) 3)
+            (>= (arg-register-count callconv-rv64 'tagged) 3)))
   (ck! "RV64 ends the sequence with a call that saves a return address"
        (member '(jal ra callee) r))
   (ck! "x86-64 likewise" (member '(call (label callee)) x))
@@ -192,29 +199,39 @@
        (nr (arg-register-count callconv-rv64 'raw-word))
        (nx (arg-register-count callconv-x86-64 'raw-word))
        (names (map car six)))
-;; The two raw-word counts USED to differ (5 against 4) and now coincide at 4:
-  ;; t2 joined RV64's scratch set, because its three-address load/store
-  ;; arithmetic can put three spilled operands on one instruction and none of
-  ;; them can ride in memory. The claim that the two conventions genuinely
-  ;; disagree still holds -- it just holds on the TAGGED class now, 8 against 4
-  ;; -- so a selector that hardcoded one would still fail the other.
+;; The raw-word counts have differed, coincided, and now differ again: 4 on
+  ;; RV64 against 6 on x86-64 after the 6/6 rebalance moved r10 and r11 into
+  ;; the raw pool. x86-64 now takes MORE raw arguments in registers than RV64,
+  ;; which is the reverse of the usual direction and exactly why this check
+  ;; asserts that the two disagree rather than which way round.
   (ck! "the two conventions genuinely disagree, so this is a real test"
-       (and (= nr nx)
-            (not (= (arg-register-count callconv-rv64 'tagged)
-                    (arg-register-count callconv-x86-64 'tagged)))))
+       (or (not (= nr nx))
+           (not (= (arg-register-count callconv-rv64 'tagged)
+                   (arg-register-count callconv-x86-64 'tagged)))))
   (ck! "RV64: exactly the arguments past the register set went to the stack"
        (equal? (map (lambda (v) (and (rv64-stack-slot r v) #t)) names)
                (map (lambda (i) (>= i nr)) '(0 1 2 3 4 5))))
   (ck! "x86-64: likewise, and it spills more because it has fewer registers"
        (equal? (map (lambda (v) (and (x86-stack-slot x v) #t)) names)
                (map (lambda (i) (>= i nx)) '(0 1 2 3 4 5))))
-  ;; Both targets now take four raw-word arguments in registers, so w4 is the
-  ;; first to the stack on each and w5 follows one machine word later.
+  ;; The first argument past the register set goes to slot 0 and the next one
+  ;; word later. Which argument that IS differs per target now -- RV64 takes 4
+  ;; raw words and x86-64 takes 6 -- so the index is computed rather than
+  ;; written down, and x86-64 spills none of these six at all.
   (ck! "the outgoing words are in source order, one machine word apart"
-       (and (equal? (rv64-stack-slot r 'w4) 0)
-            (equal? (rv64-stack-slot r 'w5) 8)
-            (equal? (x86-stack-slot x 'w4) 0)
-            (equal? (x86-stack-slot x 'w5) 8)))
+       (let ((nth (lambda (i) (string->symbol (string-append "w" (number->string i))))))
+         (and (or (>= nr 6)
+                  (and (equal? (rv64-stack-slot r (nth nr)) 0)
+                       (or (>= (+ nr 1) 6)
+                           (equal? (rv64-stack-slot r (nth (+ nr 1))) 8))))
+              (or (>= nx 6)
+                  (and (equal? (x86-stack-slot x (nth nx)) 0)
+                       (or (>= (+ nx 1) 6)
+                           (equal? (x86-stack-slot x (nth (+ nx 1))) 8)))))))
+  ;; And the case above must not be vacuous on BOTH targets at once: if neither
+  ;; overflowed, the ordering claim is about nothing.
+  (ck! "at least one target actually put an argument on the stack here"
+       (or (< nr 6) (< nx 6)))
   ;; Hazard 1 in callseq.ss's header: a register move must not precede a stack
   ;; argument's read, or the store's source may already have been clobbered.
   (ck! "stack stores are emitted BEFORE the argument register moves"

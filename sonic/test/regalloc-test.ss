@@ -8,9 +8,24 @@
                 (display "  FAIL ") (display name) (newline))))
 
 ;; --- the partition tables match the design doc ---------------------------
-(ck! "x86-64: 8 value, 4 raw, 15 float (rax and xmm15 reserved as scratch)"
-     (and (= (value-count arch-x86-64) 8) (= (raw-count arch-x86-64) 4)
+;;
+;; 6/6, not the 8/4 this asserted first. The partition's PURPOSE -- the
+;; collector knowing statically which registers hold roots -- is untouched; only
+;; where the line falls moved, and it moved because it was measured. nbody has
+;; 196 raw-word values against 45 tagged ones and the pools were sized the other
+;; way round, so its pairwise loop spilled seven values through a single scratch
+;; and spent 85 of 119 instructions moving data.
+(ck! "x86-64: 6 value, 6 raw, 15 float (rax and xmm15 reserved as scratch)"
+     (and (= (value-count arch-x86-64) 6) (= (raw-count arch-x86-64) 6)
           (= (float-count arch-x86-64) 15)))
+;; The four registers that survive a call are still value class: System V makes
+;; rbx, r12, r13 and r14 callee-saved and they did not move. r10 and r11 did,
+;; and both are caller-saved, so no tagged value was relying on them across a
+;; call. A raw word live across a call still always spills, because System V
+;; leaves no callee-saved raw register -- unchanged by this, and the reason the
+;; rebalance costs the tagged class nothing it was using.
+(ck! "and the callee-saved registers are all still value class"
+     (for-all (lambda (r) (memq r (arch-value arch-x86-64))) '(rbx r12 r13 r14)))
 ;; Three scratch registers per file on RV64, one per file on x86-64, and the
 ;; counts are forced by the ISAs rather than chosen. RV64 is load/store, so a
 ;; spilled operand must be reloaded into a register, and its arithmetic is
@@ -19,9 +34,9 @@
 (ck! "rv64: 14 value, 8 raw, 29 float (t0-t2 and ft9-ft11 reserved as scratch)"
      (and (= (value-count arch-rv64) 14) (= (raw-count arch-rv64) 8)
           (= (float-count arch-rv64) 29)))
-(ck! "RV64 still has twice x86-64's raw registers after reservation"
+(ck! "RV64 still has more of both classes than x86-64, which is the point of it"
      (and (> (value-count arch-rv64) (value-count arch-x86-64))
-          (>= (raw-count arch-rv64) (* 2 (raw-count arch-x86-64)))))
+          (> (raw-count arch-rv64) (raw-count arch-x86-64))))
 
 ;; Scratch is NOT allocatable. This is the bug the RV64 agent found: it used t0
 ;; as an address temporary while t0 sat at the head of the allocatable raw pool,

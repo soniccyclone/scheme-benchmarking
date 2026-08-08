@@ -50,13 +50,26 @@
                          '(tagged raw-word raw-f64)))
               (list ccx ccr)))
 
-;; The number that answers "is the partition big enough". x86-64 has 8 value
-;; registers total and half are callee-saved, so four tagged arguments is what
-;; is left. RV64 gets eight because a0-a7 are value class by design.
-(ck! "x86-64 has 4 tagged, 4 raw and 8 float argument registers"
-     (and (= 4 (arg-register-count ccx 'tagged))
-          (= 4 (arg-register-count ccx 'raw-word))
+;; The number that answers "is the partition big enough". x86-64 has SIX value
+;; registers and four of them are callee-saved, so two tagged arguments is what
+;; is left; the raw class gained r10 and r11 in the rebalance and passes six.
+;; RV64 gets eight tagged because a0-a7 are value class by design.
+;;
+;; Two tagged argument registers is tight, and the honest response to that is
+;; not to widen the value class back: nbody has 196 raw-word values against 45
+;; tagged ones, so the registers are where the work is. A third tagged argument
+;; goes on the stack, which now works in both directions.
+(ck! "x86-64 has 2 tagged, 6 raw and 8 float argument registers"
+     (and (= 2 (arg-register-count ccx 'tagged))
+          (= 6 (arg-register-count ccx 'raw-word))
           (= 8 (arg-register-count ccx 'raw-f64))))
+;; The sum is what the partition allows, so this catches a convention that
+;; drifted from regs.ss rather than one that merely changed size.
+(ck! "and every argument register is drawn from its own class's pool"
+     (and (for-all (lambda (r) (memq r (arch-value (callconv-arch ccx))))
+                   (arg-registers ccx 'tagged))
+          (for-all (lambda (r) (memq r (arch-raw (callconv-arch ccx))))
+                   (arg-registers ccx 'raw-word))))
 (ck! "rv64 has 8 tagged, 4 raw and 8 float argument registers"
      (and (= 8 (arg-register-count ccr 'tagged))
           ;; Four, not five: t2 joined t0/t1 as a scratch register. RV64's
@@ -239,25 +252,35 @@
        (equal? (tail-plan-moves p) '((a0 . v-n))))
   (ck! "and nothing goes on the stack" (null? (tail-plan-stack-args p))))
 
-;; Overflow: ten tagged arguments on x86-64, which has four registers.
-(let* ([args (map (lambda (i) (cons 'tagged i)) (iota 10))]
+;; Overflow: ten tagged arguments on x86-64, which has TWO tagged registers.
+;;
+;; Two is the honest consequence of a six-register value class -- see the
+;; partition note in regs.ss. The counts are read from the convention rather
+;; than written down, so a later rebalance moves this test's arithmetic with it
+;; instead of breaking it; what is asserted is that overflow HAPPENS and where
+;; it goes, which is the property, not the size of today's pools.
+(let* ([n-args 10]
+       [regs (arg-register-count ccx 'tagged)]
+       [args (map (lambda (i) (cons 'tagged i)) (iota n-args))]
        [tight (tail-call-plan ccx (make-frame 'f 4) 'g args)]
-       [roomy (tail-call-plan ccx (make-frame 'f 8) 'g args)])
-  (ck! "x86-64 spills six of ten tagged arguments to the stack: it has four
-       argument registers"
-       (and (= 4 (length (tail-plan-moves tight)))
-            (= 6 (length (tail-plan-stack-args tight)))))
+       [roomy (tail-call-plan ccx (make-frame 'f (- n-args regs)) 'g args)])
+  (ck! "x86-64 fills its tagged argument registers and spills the rest"
+       (and (= regs (length (tail-plan-moves tight)))
+            (= (- n-args regs) (length (tail-plan-stack-args tight)))))
   (ck! "a caller frame too small to hold the outgoing area does NOT reuse it"
        (and (not (tail-plan-reuses-frame? tight))
-            (= 2 (tail-plan-frame-delta tight))))
+            (= (- n-args regs 4) (tail-plan-frame-delta tight))))
   (ck! "a caller frame big enough does reuse it, so the stack does not grow"
        (tail-plan-reuses-frame? roomy)))
-(ck! "rv64 passes all eight tagged arguments in registers where x86-64 passes
-       four"
+;; RV64's whole advantage: a0-a7 are value class, so eight tagged arguments
+;; travel in registers there and overflow on x86-64. The gap is wider now that
+;; x86-64 keeps two, and it is the same point.
+(ck! "rv64 passes all eight tagged arguments in registers where x86-64 cannot"
      (and (= 8 (length (tail-plan-moves
                         (tail-call-plan ccr (make-frame 'f 0) 'g
                                         (map (lambda (i) (cons 'tagged i)) (iota 8))))))
-          (= 0 (stack-words-for-args ccr (map (lambda (i) 'tagged) (iota 8))))))
+          (= 0 (stack-words-for-args ccr (map (lambda (i) 'tagged) (iota 8))))
+          (> (arg-register-count ccr 'tagged) (arg-register-count ccx 'tagged))))
 
 ;; --- constant stack in a mutually recursive fixture ------------------------
 ;; The acceptance criterion for 6cm.1. even?/odd? calling each other forever.
@@ -290,12 +313,21 @@
          (= peak 9))))
 
 ;; Stack arguments still cost, and a tail call that needs them is still bounded.
-(let ([wide (list (make-cproc 'a 2 (map (lambda (i) 'tagged) (iota 10)) 'b)
-                  (make-cproc 'b 2 (map (lambda (i) 'tagged) (iota 10)) 'a))])
-  (let-values ([(final peak) (simulate-calls ccx wide 'a 100000 #t)])
-    (ck! "a tail call with six stack arguments is still constant-stack on
-       x86-64, just deeper"
-         (and (= peak 8) (= final 8)))))
+;;
+;; The DEPTH is derived from the convention rather than written down: a frame of
+;; 2 plus whatever the argument list overflows by. What matters is that the
+;; depth does not grow with the number of calls, which is the tail-call property
+;; -- not the particular number today's register pools produce.
+(let* ([wide (list (make-cproc 'a 2 (map (lambda (i) 'tagged) (iota 10)) 'b)
+                   (make-cproc 'b 2 (map (lambda (i) 'tagged) (iota 10)) 'a))]
+       [expected (+ 2 (stack-words-for-args ccx (map (lambda (i) 'tagged) (iota 10))))])
+  (let-values ([(final peak) (simulate-calls ccx wide 'a 100000 #t)]
+               [(f10 p10) (simulate-calls ccx wide 'a 10 #t)])
+    (ck! "a tail call with stack arguments is still constant-stack on x86-64,
+       just deeper"
+         (and (= peak expected) (= final expected)))
+    (ck! "and a hundred thousand of them are no deeper than ten"
+         (and (= final f10) (= peak p10)))))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)

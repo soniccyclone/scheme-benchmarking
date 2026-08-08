@@ -40,10 +40,31 @@
   ;; --- x86-64 (System V) ----------------------------------------------------
   ;; Current CPU and current thread live behind the GS base rather than burning
   ;; two GPRs, which is why we get 8 value registers where Mezzano gets 7.
+  ;; THE SPLIT IS 6/6, NOT 8/4, AND IT IS MEASURED RATHER THAN ASSUMED.
+  ;;
+  ;; The partition's PURPOSE is that the collector knows statically which
+  ;; registers hold roots, and that is untouched here: the classes are still
+  ;; disjoint and still fixed at compile time. Only where the line falls moved,
+  ;; and it moved because the old line was wrong for the code this compiler
+  ;; actually emits.
+  ;;
+  ;; nbody has 196 raw-word values against 45 tagged ones, and the pools were
+  ;; sized the other way round. The pairwise force loop spilled seven values and
+  ;; funnelled them all through the single raw scratch: 85 of its 119
+  ;; instructions were data movement against 33 of arithmetic, and most of that
+  ;; movement was one index being written to a frame slot and read straight back
+  ;; because four registers could not hold the loop's live indices.
+  ;;
+  ;; r10 and r11 move to the raw pool. Both are caller-saved in System V, so
+  ;; neither was carrying a tagged value across a call anyway -- the four value
+  ;; registers that survive a call are rbx, r12, r13 and r14, and those stay
+  ;; where they are. A raw word live across a call still always spills, because
+  ;; System V leaves no callee-saved raw register to keep it in; that is
+  ;; unchanged and is why this costs the tagged class nothing it was using.
   (define arch-x86-64
     (make-arch 'x86-64
-      '(rbx r8 r9 r10 r11 r12 r13 r14)              ; value: 8
-      '(rcx rdx rsi rdi)                            ; raw: 4
+      '(rbx r8 r9 r12 r13 r14)                      ; value: 6
+      '(rcx rdx rsi rdi r10 r11)                    ; raw: 6
       '(xmm0 xmm1 xmm2 xmm3 xmm4 xmm5 xmm6 xmm7
         xmm8 xmm9 xmm10 xmm11 xmm12 xmm13 xmm14)      ; float: 15, xmm15 is scratch
       '((rsp . stack) (rbp . frame) (r15 . nil))

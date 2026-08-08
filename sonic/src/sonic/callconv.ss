@@ -130,8 +130,18 @@
     (make-callconv
      arch-x86-64
      ;; arguments, in order, per class
-     '((tagged   . (r8 r9 r10 r11))
-       (raw-word . (rcx rdx rsi rdi))
+     ;; TWO tagged argument registers and SIX raw ones, following the 6/6
+     ;; partition in regs.ss. r10 and r11 were tagged argument registers and are
+     ;; now raw ones; the convention has to agree with the partition or an
+     ;; argument arrives in a register of the wrong class and the collector
+     ;; either scans a machine word or misses a root.
+     ;;
+     ;; Two tagged argument registers is tight, and it is the honest consequence
+     ;; of a six-register value class. A call needing a third tagged argument
+     ;; passes it on the stack, which now works in both directions -- see the
+     ;; outgoing argument area in finalize.ss.
+     '((tagged   . (r8 r9))
+       (raw-word . (rcx rdx rsi rdi r10 r11))
        (raw-f64  . (xmm0 xmm1 xmm2 xmm3 xmm4 xmm5 xmm6 xmm7)))
      ;; returns, in order: value 1 first. Three is the ceiling for tagged and
      ;; raw-word because gcmeta's scratch-live field is two bits.
