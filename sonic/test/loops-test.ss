@@ -573,7 +573,35 @@
        (ls (analyze-loops (ssa-of src nbody-externs))))
   (check! "nbody has seven loops" (length ls) 7)
   (check! "and one of them is nested inside another"
-          (> (fold-left max 0 (map loop-depth ls)) 0) #t))
+          (> (fold-left max 0 (map loop-depth ls)) 0) #t)
+  ;; THE TRIP COUNT, which is the deliverable rather than a bonus.
+  ;;
+  ;; `(define n-bodies 5)` bounds four of nbody's loops. A top-level binding is
+  ;; not always a procedure, and treating one as `(fn nm)` regardless makes it
+  ;; opaque -- so `j < n-bodies` compares an induction variable against
+  ;; something unknowable and every one of those loops comes back `unbounded`,
+  ;; which is the answer this pass gives when it has nothing, and is therefore
+  ;; indistinguishable from not having looked.
+  (check! "the loops bounded by n-bodies are counted EXACTLY, at five"
+          (let count ((xs ls) (n 0))
+            (cond ((null? xs) n)
+                  ((and (trip-exact? (loop-trip (car xs)))
+                        (= 5 (trip-count (loop-trip (car xs)))))
+                   (count (cdr xs) (+ n 1)))
+                  (else (count (cdr xs) n))))
+          2)
+  ;; The pairwise inner loop starts at i+1, so its count varies per outer
+  ;; iteration. `bound` rather than `exact` is the honest answer and the one
+  ;; this pass's header argues for at length: a guessed count is worse than
+  ;; none, because a guessed one is acted on.
+  (check! "and the pairwise loop is BOUNDED rather than exactly counted"
+          (let find ((xs ls))
+            (cond ((null? xs) #f)
+                  ((eq? (loop-name (car xs)) 'inner%24.201)
+                   (and (trip-bound? (loop-trip (car xs)))
+                        (not (trip-exact? (loop-trip (car xs))))))
+                  (else (find (cdr xs)))))
+          #t))
 
 (printf "\n~a checks, ~a failures\n" checks failures)
 (if (> failures 0) (exit 1) (begin (printf "PASS\n") (exit 0)))

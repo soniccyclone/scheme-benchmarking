@@ -760,10 +760,19 @@
       [(top ([,x* ,e*] ...) (,x2* ...) ,body)
        (for-each
         (lambda (nm rhs)
-          (record-def! nm (list 'fn nm) #f)
           (nanopass-case (Lssa Expr) rhs
-            [(lambda (,x1* ...) ,body1) (enter-fn! nm x1* body1 #f)]
-            [else (walk rhs #f '() '())]))
+            [(lambda (,x1* ...) ,body1)
+             (record-def! nm (list 'fn nm) #f)
+             (enter-fn! nm x1* body1 #f)]
+            ;; A top-level binding is not always a procedure, and recording one
+            ;; as `(fn nm)` regardless costs the trip counts. nbody's
+            ;; `(define n-bodies 5)` is the bound on four of its seven loops,
+            ;; and calling it a function makes it opaque -- so `j < n-bodies`
+            ;; compares an induction variable against something unknowable and
+            ;; every one of those loops comes back `unbounded`.
+            [(quote ,d) (record-def! nm (list 'const d) #f)]
+            [,x (record-def! nm (list 'copy x) #f)]
+            [else (record-def! nm '(opaque) #f) (walk rhs #f '() '())]))
         x* e*)
        (walk body #f '() '())]
       ;; An Expr, which is what every fixture in loops-test.ss is.

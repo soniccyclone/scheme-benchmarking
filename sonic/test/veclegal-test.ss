@@ -490,11 +490,31 @@
   (check! "every one gives at least one substantive reason"
           (fold-left (lambda (a v) (and a (pair? (vl-reasons v)))) #t vs)
           #t)
-  (check! "the inner loop's reasons include the unknown trip count"
+  ;; The two outer loops are bounded by `n-bodies`, which is 5, and (sonic
+  ;; loops) now proves it exactly -- so neither is refused for its trip count
+  ;; any more and `control-flow-in-body` is all that stands between them and a
+  ;; verdict.
+  (check! "the loops bounded by n-bodies are no longer refused for their count"
+          (let loop ((xs vs) (n 0))
+            (cond ((null? xs) n)
+                  ((memq (vl-loop (car xs)) '(outer%22.193 loop%35.293))
+                   (loop (cdr xs)
+                         (if (vl-refused-for? (car xs) 'unknown-trip-count) n (+ n 1))))
+                  (else (loop (cdr xs) n))))
+          2)
+  ;; THE INNER LOOP IS TOO SHORT, and that is a fact about nbody rather than a
+  ;; gap in the analysis. Its counter starts at i+1, so over five bodies it runs
+  ;; 4, 3, 2, 1 and 0 times. A 512-bit vector holds eight doubles. There is no
+  ;; unroll factor that pays, and saying so is the right answer -- guessing one
+  ;; is the failure mode this whole pass exists to avoid.
+  ;;
+  ;; It matters for milestone 4: the axis worth vectorizing in nbody is not j.
+  (check! "and the inner loop is refused for being SHORT, not for being unknown"
           (let loop ((xs vs))
             (cond ((null? xs) #f)
                   ((eq? (vl-loop (car xs)) 'inner%24.201)
-                   (vl-refused-for? (car xs) 'unknown-trip-count))
+                   (and (vl-refused-for? (car xs) 'trip-count-too-short)
+                        (not (vl-refused-for? (car xs) 'unknown-trip-count))))
                   (else (loop (cdr xs)))))
           #t))
 
