@@ -176,6 +176,22 @@
       ;; compare the index against, and both targets read the check's second
       ;; operand as an already-materialised limit.
       vlen
+      ;; PACKED PAIRS. Two adjacent doubles in one register, which is the whole
+      ;; reason these can be ordinary vregs: a 128-bit pair occupies exactly one
+      ;; float register, so `raw-f64` still describes where it lives and the
+      ;; register allocator, the partition and the collector all need no changes.
+      ;;
+      ;; Two lanes and not a variable width. The shape that motivates them is
+      ;; three spatial components, which fills two lanes and leaves one scalar;
+      ;; a wider vector would need masking to avoid touching a fourth element
+      ;; that may not exist. The lane count is in the NAME because a different
+      ;; width is a different instruction, not a parameter.
+      p2add p2sub p2mul p2div                       ; packed pair arithmetic
+      ;; The SPLAT: one scalar into both lanes. A pack whose other operand is
+      ;; the same value in both lanes -- `dx * mag` beside `dy * mag` -- needs
+      ;; it once, and it then feeds every packed operation that shares the
+      ;; scalar.
+      p2splat
       branch branch-if jump                         ; control
       call ret                                      ; calls
       ;; Access to a TOP-LEVEL binding, which is storage rather than a value in
@@ -470,7 +486,13 @@
       ;; frame slot. The offset has to be expressible BEFORE allocation, which
       ;; means here.
       (load-at v sc d v* ...)
-      (store-at v sc d v* ...))
+      (store-at v sc d v* ...)
+      ;; The packed-pair load and store: two ADJACENT elements starting at
+      ;; element `idx + d`. Adjacency is the precondition the SLP pass proves;
+      ;; nothing here can check it, which is why that pass is where the
+      ;; reasoning lives.
+      (p2load v sc d v* ...)
+      (p2store v sc d v* ...))
     (Transfer (t)
       (jump lbl)
       (branch-if v lbl0 lbl1)

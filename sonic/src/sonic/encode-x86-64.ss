@@ -275,6 +275,43 @@
     '((vaddsd . addsd) (vsubsd . subsd) (vmulsd . mulsd)
       (vdivsd . divsd) (vsqrtsd . sqrtsd)))
 
+  ;; THE PACKED-PAIR FORMS: the same opcodes with the 66 prefix instead of F2.
+  ;;
+  ;; `vsubpd` is two independent subtractions, lane by lane, so it rounds
+  ;; exactly as the two scalar subtractions it replaces. No reassociation, no
+  ;; contraction -- which is what makes packing safe under D24 while `vfmadd`
+  ;; is not, and the distinction is the prefix rather than anything deeper.
+  ;;
+  ;; 128 bits, so L = 0. A 256-bit form would be a different mnemonic and a
+  ;; different lane count, which is why the width is not a parameter here.
+  (define vex-packed
+    '((vaddpd . #x58) (vsubpd . #x5C) (vmulpd . #x59) (vdivpd . #x5E)))
+
+  ;; `vmovddup xmm, xmm`: duplicate the low double into both lanes. This is the
+  ;; SPLAT a pack needs when one operand is the same scalar in both lanes --
+  ;; `dx * mag` and `dy * mag` pack only if `mag` is in both lanes. One
+  ;; instruction, once, feeding several packed operations.
+  (define (vmovddup-encode dst src)
+    (unless (xmm? dst) (error 'encode-instr "vmovddup destination must be xmm" dst))
+    (unless (or (xmm? src) (mem? src))
+      (error 'encode-instr "vmovddup source must be xmm or memory" src))
+    (vex-asm 'encode-instr #x12 0 (vex-pp #xF2) (vex-map #x0F) 0 0
+             (reg-number dst) src))
+
+  ;; `vmovupd xmm, m128` and `m128, xmm`: 10 loads, 11 stores, 66 prefix.
+  (define (vmovupd-encode dst src)
+    (cond
+     ((and (xmm? dst) (mem? src))
+      (vex-asm 'encode-instr #x10 0 (vex-pp #x66) (vex-map #x0F) 0 0
+               (reg-number dst) src))
+     ((and (mem? dst) (xmm? src))
+      (vex-asm 'encode-instr #x11 0 (vex-pp #x66) (vex-map #x0F) 0 0
+               (reg-number src) dst))
+     ((and (xmm? dst) (xmm? src))
+      (vex-asm 'encode-instr #x10 0 (vex-pp #x66) (vex-map #x0F) 0 0
+               (reg-number dst) src))
+     (else (error 'encode-instr "bad vmovupd operands" dst src))))
+
   ;; PACKED double bitwise ops, 66-prefixed rather than F2.
   ;;
   ;; They are here for one job: IEEE negation and absolute value. `sub 0.0 x` is
@@ -300,7 +337,7 @@
 
   (define (mnemonic-known? m)
     (or (assq m int-alu) (assq m sse-arith) (assq m sse-bitwise)
-        (assq m vex-arith)
+        (assq m vex-arith) (assq m vex-packed) (memq m '(vmovupd vmovddup))
         (assq m jcc-table) (assq m setcc-table)
         (memq m '(mov movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
                   syscall))
@@ -310,7 +347,7 @@
 
   (define (x86-64-mnemonics)
     (append (map car int-alu) (map car sse-arith) (map car sse-bitwise)
-            (map car vex-arith)
+            (map car vex-arith) (map car vex-packed) '(vmovupd vmovddup)
             (map car jcc-table) (map car setcc-table)
             '(mov movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
               syscall)))
@@ -412,6 +449,16 @@
             (error 'encode-instr "scalar-double source must be xmm or memory" i))
           (asm 'encode-instr '(#xF2) 0 (list #x0F (cdr (assq m sse-arith)))
                (reg-number dst) src '() #f)))
+       ((eq? m 'vmovupd) (vmovupd-encode (arg 0) (arg 1)))
+       ((eq? m 'vmovddup) (vmovddup-encode (arg 0) (arg 1)))
+       ((assq m vex-packed)
+        (let ((dst (arg 0)) (src1 (arg 1)) (src2 (arg 2)))
+          (unless (xmm? dst) (error 'encode-instr "packed destination must be xmm" i))
+          (unless (xmm? src1) (error 'encode-instr "VEX first source must be xmm" i))
+          (unless (or (xmm? src2) (mem? src2))
+            (error 'encode-instr "packed source must be xmm or memory" i))
+          (vex-asm 'encode-instr (cdr (assq m vex-packed)) (reg-number src1)
+                   (vex-pp #x66) (vex-map #x0F) 0 0 (reg-number dst) src2)))
        ((assq m vex-arith)
         ;; (vmulsd dst src1 src2) -- three operands, dst distinct from both.
         ;; `src1` rides in the VEX vvvv field and `src2` is the r/m operand, so

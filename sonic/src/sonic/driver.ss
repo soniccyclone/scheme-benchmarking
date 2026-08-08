@@ -40,7 +40,7 @@
           (sonic lang) (sonic read) (sonic expand) (sonic parse) (sonic policy)
           (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide)
           (sonic repr) (sonic lift) (sonic convert) (sonic lower) (sonic globals)
-          (sonic shapes) (sonic interval) (sonic cse) (sonic dce) (sonic addrfold)
+          (sonic shapes) (sonic interval) (sonic cse) (sonic dce) (sonic addrfold) (sonic slp)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
           (sonic order)
@@ -100,7 +100,12 @@
                ;; register allocation, so it never competes for a register and
                ;; never spills.
                ((aprog addr-st) (addrfold-program cprog))
-               ((prog dce-st) (dce-program aprog)))
+               ;; SLP after DCE, so the packer sees the final instruction set
+               ;; and does not pack something about to be deleted. Its packed
+               ;; values are ordinary raw-f64 vregs -- a 128-bit pair lives in
+               ;; one float register -- so nothing downstream changes.
+               ((dprog dce-st) (dce-program aprog))
+               ((prog slp-st) (slp-program dprog classes)))
           (let* ((entry (caddr prog))
                  ;; SORTED: this list decides each global's ADDRESS, so an
                  ;; unstable order moved every global between runs.

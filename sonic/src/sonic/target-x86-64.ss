@@ -122,6 +122,13 @@
                  mn dst a b))))
        (else `((,mv ,dst ,a) (,mn ,dst ,b))))))
 
+  ;; A packed-pair binary op. Three-address, so no copy is ever needed.
+  (define (packed mn)
+    (lambda (dst sc srcs)
+      (unless (= (length srcs) 2)
+        (error 'x86-64-selector "a packed pair op expects two sources" mn srcs))
+      `((,mn ,dst ,(car srcs) ,(cadr srcs)))))
+
   (define (arith who int-mn fp-mn commutative?)
     (lambda (dst sc srcs)
       (unless (= (length srcs) 2)
@@ -355,6 +362,43 @@
                `((,(mov-for sc)
                   ,(mem/disp base idx (+ heap-element-disp (* d word-scale)))
                   ,val)))))
+
+     ;; --- packed pairs -------------------------------------------------------
+     ;;
+     ;; One 128-bit register holds two doubles, so these are `xmm` operations on
+     ;; ordinary raw-f64 vregs. The unaligned move is deliberate: a pair starting
+     ;; at an arbitrary element index is 8-byte aligned, not 16, and `movapd`
+     ;; FAULTS on that. `vmovupd` costs nothing extra on any machine this
+     ;; compiler targets.
+     ;;
+     ;; The arithmetic is the VEX three-address form for the same reason the
+     ;; scalar ops are (D33): the destination need not be a source, which is what
+     ;; keeps a pack from needing a copy. `vsubpd` is two independent
+     ;; subtractions, lane by lane, so it rounds exactly as the two scalar
+     ;; subtractions it replaces -- there is no reassociation and no contraction.
+     (cons 'p2load
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 3)
+               (error 'x86-64-selector "p2load expects (p2load dst sc d base index)" srcs))
+             `((vmovupd ,dst ,(mem/disp (cadr srcs) (caddr srcs)
+                                        (+ heap-element-disp (* (car srcs) word-scale)))))))
+     (cons 'p2store
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 4)
+               (error 'x86-64-selector
+                      "p2store expects (p2store <unused> sc d base index value)" srcs))
+             `((vmovupd ,(mem/disp (cadr srcs) (caddr srcs)
+                                   (+ heap-element-disp (* (car srcs) word-scale)))
+                        ,(cadddr srcs)))))
+     (cons 'p2splat
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 1)
+               (error 'x86-64-selector "p2splat expects one source" srcs))
+             `((vmovddup ,dst ,(car srcs)))))
+     (cons 'p2add (packed 'vaddpd))
+     (cons 'p2sub (packed 'vsubpd))
+     (cons 'p2mul (packed 'vmulpd))
+     (cons 'p2div (packed 'vdivpd))
 
      ;; `(store ignored sc base index value)`. Lmach's Instr production makes the
      ;; destination slot mandatory and a store has no result, so the slot is

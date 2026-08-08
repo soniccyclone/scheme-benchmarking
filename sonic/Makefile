@@ -87,6 +87,8 @@ test-suite:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/addrfold-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/slp-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/gc-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/escape-test.ss
