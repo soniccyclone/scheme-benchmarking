@@ -607,6 +607,13 @@
                                   (const ,k2 raw-word ,imm-tag)
                                   (add ,dst ,sc ,t ,k2)))
                         dst)))
+             ;; A double becomes a heap object. Unlike the other two kinds this
+             ;; is a CALL, so it is a safepoint and the collector may run here --
+             ;; which is correct and is why the conversion is a call rather than
+             ;; an inline bump: the allocation has to be visible to the metadata
+             ;; the call site already emits.
+             ((boxed)
+              (values `((call ,dst ,sc %box-flonum ,src)) dst))
              (else (error 'lower "unknown retag kind" kind)))))
         ((primcall)
          (let* ((pr (cadr se))

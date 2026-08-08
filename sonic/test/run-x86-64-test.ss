@@ -190,6 +190,37 @@
        "(main)\n")
       '(4.5))
 
+;; A BOXED DOUBLE, compiled and run.
+;;
+;; `pick` receives a double from one call site and a heap object from the other,
+;; so repr.ss joins its parameter to `tagged` -- and a double has no bit pattern
+;; that serves, unlike a fixnum or a boolean. The value goes on the heap through
+;; %box-flonum and the tagged value is a pointer to it.
+;;
+;; This join RAISED until the runtime could box, which is why it was the one
+;; case of the three D31 left open.
+;;
+;; The observable is the flvector, because reading the boxed double back out
+;; needs the other direction and there is no unboxing conversion yet. What it
+;; proves is that the boxing call happens, the allocation does not disturb the
+;; heap pointer for the vector allocated beside it, and the tagged pointer
+;; survives the round trip through the polymorphic parameter.
+(run! "a double boxed to reach the value class, compiled and run"
+      (string-append
+       "(define (pick p) p)
+"
+       "(define (main)
+"
+       "  (let ((a (pick (fl+ 1.0 2.0)))
+"
+       "        (b (pick (make-flvector 2 4.5))))
+"
+       "    (display (flvector-ref b 1)) (newline)))
+"
+       "(main)
+")
+      '(4.5))
+
 ;; ONE constant passed as SEVERAL arguments of a tail call.
 ;;
 ;; This is the shape that broke when CSE started noticing that three separate

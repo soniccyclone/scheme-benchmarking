@@ -90,21 +90,17 @@
   (ck! "a literal reaching `tagged` needs no conversion"
        (= 0 (convert-report-inserted st))))
 
-;; --- the double case still raises, and says what is missing ---------------
-(set! checks (+ checks 1))
-(let ((caught #f) (msg ""))
-  (guard (e (#t (set! caught #t)
-                (set! msg (if (message-condition? e) (condition-message e) ""))))
-    (front (polymorphic "(fl+ 1.0 2.0)")))
-  (if (and caught
-           ;; Names the heap box specifically, rather than failing generically.
-           (let loop ((i 0))
-             (cond ((> (+ i 6) (string-length msg)) #f)
-                   ((string=? (substring msg i (+ i 6)) "boxing") #t)
-                   (else (loop (+ i 1))))))
-      (display "  ok   a double merged with a tagged value still raises, naming the heap box\n")
-      (begin (set! failures (+ failures 1))
-             (display "  FAIL the double join did not raise with the expected reason\n"))))
+;; --- the double case: BOXED, and it used to raise --------------------------
+;;
+;; A double has no bit pattern that serves -- it needs all 64 bits -- so unlike
+;; the fixnum and boolean cases the conversion is not arithmetic. The value goes
+;; on the heap and the tagged value is a pointer to it, which is a runtime
+;; facility and is why this arrived after the other two.
+(let-values (((form st) (front (polymorphic "(fl+ 1.0 2.0)"))))
+  (ck! "a double merged with a tagged value no longer refuses"
+       (= 1 (convert-report-inserted st)))
+  (ck! "and its kind is `boxed`, not an arithmetic retag"
+       (eq? 'boxed (cdar (convert-report-sites st)))))
 
 ;; --- the arithmetic, which is where a plausible wrong answer lives --------
 ;;

@@ -147,6 +147,29 @@
       (add rax (imm ,(+ heap-header-bytes heap-tag)))
       (ret)
 
+      ;; ---- box a flonum ----
+      ;;
+      ;; The double arrives in xmm0 -- the first raw-f64 argument register --
+      ;; and the tagged pointer comes back in rax, which is the convention's
+      ;; tagged return register, so this needs no special calling sequence.
+      ;;
+      ;; Layout is every other heap object's: type word, length word, payload.
+      ;; The length is 1 because the collector's scan walks a header and a field
+      ;; count; a flonum's one field is raw, which the TYPE says, and that is
+      ;; what keeps eight bytes of mantissa from being followed as a pointer.
+      %box-flonum
+      (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      (mov rdx (imm ,heap-type-flonum))
+      (mov (mem rax #f 1 0) rdx)                 ; [raw+0] = type
+      (mov rdx (imm 1))
+      (mov (mem rax #f 1 8) rdx)                 ; [raw+8] = one field
+      (movsd (mem rax #f 1 ,heap-header-bytes) xmm0)
+      (mov rsi rax)
+      (add rsi (imm ,(+ heap-header-bytes 8)))
+      (mov ,(abs-mem heap-pointer-cell) rsi)
+      (add rax (imm ,(+ heap-header-bytes heap-tag)))
+      (ret)
+
       ;; ---- (display x) ----
       ;; The double arrives in xmm0. Eight raw bytes to fd 1; see the header.
       display

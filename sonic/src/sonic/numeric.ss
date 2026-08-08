@@ -194,7 +194,7 @@
           ;; heap objects
           heap-tag heap-pointer?
           heap-type-vector heap-type-flvector heap-type-pair
-          heap-type-string heap-type-procedure
+          heap-type-string heap-type-procedure heap-type-flonum
           heap-header-words heap-header-bytes
           heap-element-disp heap-length-disp heap-type-disp
           fx-least fx-greatest
@@ -315,6 +315,20 @@
   (define heap-type-pair      2)
   (define heap-type-string    3)
   (define heap-type-procedure 4)
+  ;; A BOXED FLONUM. Two words like every other heap object: the header, then
+  ;; the eight raw bytes of the double.
+  ;;
+  ;; It exists because `tagged` is a representation a double can be REQUIRED to
+  ;; take -- a polymorphic parameter that also receives a heap object forces the
+  ;; join -- and unlike the fixnum and boolean cases there is no bit pattern
+  ;; that serves. numeric.ss assigns tags to fixnums and to immediates, and a
+  ;; double needs all 64 bits, so the value has to live somewhere and be pointed
+  ;; at. See docs/LEDGER.md D31 for why the conversion belongs at the definition.
+  ;;
+  ;; The payload is NOT a pointer and must never be traced. The collector learns
+  ;; that from the header, which is the whole reason D29 puts the type there
+  ;; rather than in the pointer.
+  (define heap-type-flonum    5)
 
   (define heap-header-words 2)
   (define heap-header-bytes (* 8 heap-header-words))

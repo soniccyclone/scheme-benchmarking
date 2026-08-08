@@ -193,13 +193,27 @@
           ;; So the answer is `tagged` and the obligation is recorded, which is
           ;; the difference between a default and a decision.
           'tagged)
+         ;; A DOUBLE AND A NON-DOUBLE join to `tagged`, by BOXING the double.
+         ;;
+         ;; This used to raise, and the reason it could is that unlike the
+         ;; fixnum and boolean cases there is no bit pattern that serves: a
+         ;; double needs all 64 bits, so the value has to live on the heap and
+         ;; be pointed at. That is a runtime facility, not two arithmetic
+         ;; instructions, which is why it was a later bead rather than part of
+         ;; D31.
+         ;;
+         ;; It is now `%box-flonum` in runtime.ss, and convert.ss inserts the
+         ;; `retag` that calls it, at the definition like every other
+         ;; conversion. `naturals` records that the binding is really a double;
+         ;; the difference between the two tables is the obligation.
+         ((or (and (eq? a 'raw-f64) (eq? b 'tagged))
+              (and (eq? a 'tagged) (eq? b 'raw-f64))
+              (and (eq? a 'raw-f64) (eq? b 'raw-word))
+              (and (eq? a 'raw-word) (eq? b 'raw-f64)))
+          'tagged)
          (else
           (error 'select-representations
-                 (string-append
-                  "cannot merge these storage classes: a double and a "
-                  "non-double have no common representation short of boxing "
-                  "the double on the heap, which is a later bead")
-                 v a b))))
+                 "cannot merge these storage classes" v a b))))
 
       (define (note-into! tbl v c)
         (if (and (symbol? v) c)

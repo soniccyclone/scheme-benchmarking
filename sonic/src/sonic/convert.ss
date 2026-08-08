@@ -35,7 +35,7 @@
 ;;;     (let ([x.raw raw-word SE])
 ;;;       (let ([x tagged (retag KIND x.raw)]) body))
 ;;;
-;;; KIND is `fixnum` or `boolean`, and the distinction is the reason repr.ss
+;;; KIND is `fixnum`, `boolean` or `boxed`, and the distinction is the reason repr.ss
 ;;; tracks which raw words hold 0/1. A fixnum tags by shifting left 3 (fixnum
 ;;; tag 000); a boolean tags to sonic-false or sonic-true, 7 and 15. Shifting a
 ;;; boolean gives the FIXNUMS 0 and 1, which is a wrong answer that looks
@@ -50,9 +50,14 @@
 ;;;
 ;;; A LAMBDA, which is not a value this compiler represents at run time.
 ;;;
-;;; A DOUBLE. raw-f64 to tagged is a heap box with a GC map, which needs the
-;;; allocator; repr.ss still raises on that join and says so. It is the one
-;;; case of the three that is not merely a missing instruction.
+;;; ## The third kind: a double is BOXED
+;;;
+;;; raw-f64 to tagged has no bit pattern that serves -- a double needs all 64
+;;; bits -- so the value goes on the heap and the tagged value is a pointer to
+;;; it. That is a runtime facility rather than two arithmetic instructions,
+;;; which is why it arrived after the other two: `retag boxed` lowers to a call
+;;; to `%box-flonum`, and being a call is what makes the allocation visible to
+;;; the GC metadata the call site already emits.
 
 (library (sonic convert)
   (export convert-program convert-report convert-report?
@@ -66,7 +71,7 @@
   ;; A retag is owed when the variable's class is `tagged` and its initializer
   ;; naturally produces `raw-word`.
   (define (owes-retag? sc natural)
-    (and (eq? sc 'tagged) (eq? natural 'raw-word)))
+    (and (eq? sc 'tagged) (memq natural '(raw-word raw-f64))))
 
   ;; Initializers that reach `tagged` for free, or that are not values at all.
   (define (free-form? se)
@@ -97,14 +102,24 @@
                  (body (walk (caddr e)))
                  (natural (hashtable-ref naturals x #f)))
             (if (and (owes-retag? sc natural) (not (free-form? se)))
-                (let ((raw (fresh x))
-                      (kind (if (hashtable-ref booleans x #f) 'boolean 'fixnum)))
-                  (hashtable-set! classes raw 'raw-word)
+                (let* ((raw (fresh x))
+                       (kind (cond
+                              ;; A double has no bit pattern that serves, so it
+                              ;; is BOXED: the conversion is a heap allocation
+                              ;; and a call, not two arithmetic instructions.
+                              ((eq? natural 'raw-f64) 'boxed)
+                              ((hashtable-ref booleans x #f) 'boolean)
+                              (else 'fixnum))))
+                  (hashtable-set! classes raw natural)
                   (set! n (+ n 1))
                   (set! sites (cons (cons x kind) sites))
                   ;; The initializer is walked in its ORIGINAL position under
                   ;; the raw name; only the binding is split.
-                  (list 'let (list (list raw 'raw-word (walk-se se)))
+                  ;; The temp's class is the initializer's NATURAL class, not
+                  ;; raw-word: a boxed double's temp holds a double, and calling
+                  ;; it a word puts it in an integer argument register on the
+                  ;; way to the boxing routine.
+                  (list 'let (list (list raw natural (walk-se se)))
                         (list 'let (list (list x sc (list 'retag kind raw)))
                               body)))
                 (list 'let (list (list x sc (walk-se se))) body))))
