@@ -78,14 +78,37 @@
       move cvt-f64-from-int cvt-int-from-f64))
 
   ;; Reads storage, so equal operands mean equal results only between writes.
-  (define memory-ops (quote (load vlen gref)))
+  ;; Reads the HEAP, so equal operands mean equal results only between writes
+  ;; to it. `load-at` belongs here and was missing: it is a load like any other
+  ;; and was simply never considered for elimination.
+  (define memory-ops '(load load-at vlen))
+
+  ;; Reads a GLOBAL CELL, which is a different storage area entirely.
+  ;;
+  ;; Keeping these apart is worth real instructions. A global and a heap object
+  ;; cannot alias -- globals live in the writable segment at addresses
+  ;; globals.ss assigns, heap objects in the heap -- so a `store` into a vector
+  ;; says nothing about a global's value. Clearing one table on the other's
+  ;; writes had nbody reloading `dt` from its cell three times in the position
+  ;; update, once between each pair of vector stores.
+  ;;
+  ;; It also cost a vector instruction rather than just a load: two loads of the
+  ;; same global are two different vregs, so the SLP pass saw two distinct
+  ;; scalars and ASSEMBLED them with `vunpcklpd` where one `vmovddup` splat of a
+  ;; single value would do.
+  (define global-ops '(gref))
 
   ;; Writes storage, or may. Invalidates the memory table.
-  (define clobber-ops '(store store-at gset call))
+  ;; Writes the heap, or may.
+  (define clobber-ops '(store store-at call))
+
+  ;; Writes a global, or may. A call may do either, so it appears in both.
+  (define global-clobber-ops '(gset call))
 
   (define (dest-of i)
     (and (pair? i)
          (or (memq (car i) value-ops) (memq (car i) memory-ops)
+             (memq (car i) global-ops)
              (eq? (car i) 'const))
          (cadr i)))
 
@@ -121,6 +144,11 @@
        blocks)
       tbl))
 
+  ;; EXACTLY ONE definition. Relaxing this to "at most one" is tempting -- a
+  ;; parameter has none and is still single-valued -- and it produces wrong
+  ;; answers, measured: nbody's energies moved to -0.323 and -0.419. A name with
+  ;; no definition in Lmach is not reliably a parameter, and this pass has no
+  ;; way to tell which kind it is looking at.
   (define (single? counts v)
     (or (not (symbol? v)) (= 1 (hashtable-ref counts v 0))))
 
@@ -149,24 +177,38 @@
       (for-each
        (lambda (lb)
          (let ((values-tbl (make-hashtable equal-hash equal?))
-               (mem-tbl (make-hashtable equal-hash equal?)))
+               (mem-tbl (make-hashtable equal-hash equal?))
+               (glob-tbl (make-hashtable equal-hash equal?)))
            (for-each
             (lambda (i)
               (when (pair? i)
                 (cond
-                 ((memq (car i) clobber-ops)
+                 ((or (memq (car i) clobber-ops) (memq (car i) global-clobber-ops))
                   (cse-stats-invalidations-set!
                    stats (+ 1 (cse-stats-invalidations stats)))
-                  (hashtable-clear! mem-tbl))
+                  (when (memq (car i) clobber-ops) (hashtable-clear! mem-tbl))
+                  (when (memq (car i) global-clobber-ops) (hashtable-clear! glob-tbl)))
                  (else
                   (let ((dst (dest-of i)))
                     (when (and dst (single? counts dst)
                                ;; Operands must denote one value each. Resolved
                                ;; first, so an operand this pass already folded
                                ;; is recognised as the same expression.
+                               ;;
+                               ;; A GLOBAL READ is exempt: its operand is the
+                               ;; cell's NAME, a label rather than a value, so
+                               ;; it has no definition to count and the check
+                               ;; would fail on every one. That exclusion had
+                               ;; nbody reloading `dt` three times in one loop
+                               ;; body, and cost a vector instruction too --
+                               ;; two loads of one global are two vregs, so the
+                               ;; SLP pass assembled them with `vunpcklpd`
+                               ;; where one `vmovddup` splat would do.
                                (for-all (lambda (o) (single? counts o))
                                         (cdddr i)))
-                      (let* ((tbl (if (memq (car i) memory-ops) mem-tbl values-tbl))
+                      (let* ((tbl (cond ((memq (car i) memory-ops) mem-tbl)
+                                        ((memq (car i) global-ops) glob-tbl)
+                                        (else values-tbl)))
                              (k (key-of (cons* (car i) (cadr i) (caddr i)
                                                (map resolve (cdddr i)))))
                              (prev (hashtable-ref tbl k #f)))
