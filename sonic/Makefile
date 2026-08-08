@@ -119,6 +119,8 @@ test-suite:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/repr-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/convert-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/callseq-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/pentagon-test.ss

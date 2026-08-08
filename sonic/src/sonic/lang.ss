@@ -395,7 +395,25 @@
       (+ (storage-class (sc))))
     (Expr (e body)
       (- (let ([x se]) body))
-      (+ (let ([x sc se]) body))))
+      (+ (let ([x sc se]) body)))
+    (SimpleExpr (se)
+      ;; (retag d x) : x is a raw word; the result is its TAGGED form. `d` says
+      ;; which raw word it is, and the distinction is not cosmetic -- a
+      ;; fixnum-valued word tags by shifting left 3, while a boolean-valued word
+      ;; holds 0 or 1 and tags to sonic-false/sonic-true, which are 7 and 15.
+      ;; Shifting a boolean would produce the FIXNUMS 0 and 1.
+      ;;
+      ;; This exists because repr.ss can PROVE two classes must merge while
+      ;; nothing could emit the instructions to get from one to the other. The
+      ;; join answering `tagged` without a conversion is memory corruption
+      ;; rather than a wrong number: a comparison's 0/1 lands in the value class
+      ;; and, under D21, the collector scavenges that unconditionally and chases
+      ;; address 0 or 1. So the join used to raise, and now it inserts this.
+      ;;
+      ;; There is deliberately no untagging direction. `join-class` only ever
+      ;; moves UP the lattice toward `tagged`, so a consumer never needs a raw
+      ;; word from a value that has been merged into the value class.
+      (+ (retag d x))))
 
   ;; --- Lmach ----------------------------------------------------------------
   ;; Machine-independent lowered form. Virtual registers, explicit memory ops,

@@ -33,7 +33,7 @@
   (import (chezscheme) (nanopass)
           (sonic lang) (sonic read) (sonic expand) (sonic parse) (sonic policy)
           (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide)
-          (sonic repr) (sonic lift) (sonic lower) (sonic globals)
+          (sonic repr) (sonic lift) (sonic convert) (sonic lower) (sonic globals)
           (sonic shapes) (sonic interval) (sonic cse) (sonic dce)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
@@ -60,8 +60,17 @@
       (let*-values (((ssa) (essa-program p0))
                     ((p1 elide-st) (elide-to-fixpoint ssa))
                     ((p2 rp) (select-representations-program p1))
-                    ((lifted lrep) (lift-program (unparse-Lrepr p2))))
-        (let*-values (((prog0 lower-st) (lower-toplevel lifted 'main
+                    ((lifted lrep) (lift-program (unparse-Lrepr p2)))
+                    ;; CONVERSIONS AFTER LIFTING. Lifting adds a procedure's
+                    ;; free variables as leading parameters, and they keep their
+                    ;; own names and classes -- so a retag inserted before it
+                    ;; would be inserted again for a name that already agrees.
+                    ;; After it, every binding this pass sees is final.
+                    ((converted conv-st)
+                     (convert-program lifted (repr-report-classes rp)
+                                      (repr-report-naturals rp)
+                                      (repr-report-booleans rp))))
+        (let*-values (((prog0 lower-st) (lower-toplevel converted 'main
                                                         (repr-report-classes rp))))
           (let*-values
               (((classes) (lowered-classes))

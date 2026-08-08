@@ -123,6 +123,29 @@
        "(define (main) (display (outer 0 0.0)) (newline))\n(main)\n")
       '(9.0))
 
+;; A REPRESENTATION CONVERSION, compiled and run.
+;;
+;; `pick` is called with a boolean-valued raw word and with a heap object, so
+;; its parameter is genuinely polymorphic and repr.ss joins it to `tagged`.
+;; That join used to RAISE -- the conversion `(x << 3) | 7` reaching
+;; sonic-false/sonic-true had no pass to live in -- so this program was simply
+;; rejected. convert.ss now inserts a `retag` and lowering turns it into a
+;; multiply by 8 and an add of 7.
+;;
+;; The observable is the flvector, not the boolean: a tagged boolean has
+;; nowhere to be printed yet. What it proves is that the tagged pointer
+;; survives the round trip through a parameter that a conversion also flows
+;; into, which is the part that would corrupt memory if the classes disagreed.
+(run! "a polymorphic parameter forces a representation conversion, and runs"
+      (string-append
+       "(define (pick p) p)\n"
+       "(define (main)\n"
+       "  (let ((a (pick (fx< 1 2)))\n"
+       "        (b (pick (make-flvector 2 4.5))))\n"
+       "    (display (flvector-ref b 1)) (newline)))\n"
+       "(main)\n")
+      '(4.5))
+
 ;; ONE constant passed as SEVERAL arguments of a tail call.
 ;;
 ;; This is the shape that broke when CSE started noticing that three separate

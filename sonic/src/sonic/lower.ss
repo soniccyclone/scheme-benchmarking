@@ -575,6 +575,39 @@
         ((quote) (values `((const ,dst ,(if (eq? sc 'raw-word) (const-class (cadr se)) sc)
                                   ,(cadr se))) dst))
         ((void)  (values `((const ,dst ,sc ,sonic-unspecified)) dst))
+        ;; (retag KIND x) -- convert.ss's output, and the only producer of a
+        ;; tagged value from a raw one.
+        ;;
+        ;; Both directions are arithmetic on a machine word, so this needs NO
+        ;; new mach-op and no new selection rule on either target. A fixnum's
+        ;; tagged form is the value shifted left `fx-tag-bits`, which is a
+        ;; multiply by 8; an immediate's is `(sec << 3) | imm-tag`, and since a
+        ;; boolean's shifted form has its low three bits clear, the OR is an
+        ;; ADD. `mul` and `add` are already machine-independent ops with rules
+        ;; on x86-64 and RV64, which is worth more than the shift instruction a
+        ;; dedicated op would buy: this is not a hot path -- it appears only
+        ;; where a program mixes representations -- and a new op costs two
+        ;; selectors, two encoders and the tests for both.
+        ((retag)
+         (let* ((kind (cadr se))
+                (src (caddr se))
+                (k (fresh! "t"))
+                (shift `((const ,k raw-word ,(expt 2 fx-tag-bits)))))
+           (case kind
+             ((fixnum)
+              (values (append shift `((mul ,dst ,sc ,src ,k))) dst))
+             ((boolean)
+              ;; 0 and 1 become 7 and 15, which are sonic-false and sonic-true.
+              ;; Shifting alone would give the FIXNUMS 0 and 1 -- a wrong answer
+              ;; that looks entirely plausible, which is why repr.ss tracks
+              ;; which raw words hold booleans instead of guessing from the type.
+              (let ((t (fresh! "t")) (k2 (fresh! "t")))
+                (values (append shift
+                                `((mul ,t raw-word ,src ,k)
+                                  (const ,k2 raw-word ,imm-tag)
+                                  (add ,dst ,sc ,t ,k2)))
+                        dst)))
+             (else (error 'lower "unknown retag kind" kind)))))
         ((primcall)
          (let* ((pr (cadr se))
                 (controls (caddr se))

@@ -36,14 +36,26 @@
 (library (sonic repr)
   (export select-representations select-representations-program
           prim-result-class datum-class
-          parameter-classes
-          repr-report repr-report? repr-report-counts repr-report-classes)
+          parameter-classes parameter-classes/full
+          repr-report repr-report? repr-report-counts repr-report-classes
+          repr-report-naturals repr-report-booleans)
   (import (chezscheme) (nanopass) (sonic lang)
           (sonic order))
 
   (define-record-type (repr-report make-repr-report repr-report?)
     (fields counts          ; ((class . n) ...)
-            classes))       ; vreg -> storage class, INCLUDING parameters
+            classes         ; vreg -> storage class, INCLUDING parameters
+            ;; What each let-bound variable's INITIALIZER produces, before any
+            ;; join. Where this differs from `classes`, a conversion is owed;
+            ;; convert.ss is what reads the pair. Keeping both is the whole
+            ;; mechanism -- one table can say what a value must be OR what it
+            ;; naturally is, and the conversion is the difference.
+            naturals
+            ;; Raw words holding 0/1 rather than a fixnum. A boolean tags to
+            ;; sonic-false/sonic-true (7 and 15); a fixnum tags by shifting
+            ;; left 3. Same storage class, different conversion, and conflating
+            ;; them was a live memory-corruption bug.
+            booleans))
 
   ;; --- the classification ---------------------------------------------------
   ;;
@@ -124,7 +136,11 @@
   ;; there is no sound answer -- see this file's header: neither error is
   ;; recoverable and `tagged` is NOT a safe default. So it raises.
   (define (parameter-classes form)
+    (let-values (((c n b) (parameter-classes/full form))) c))
+
+  (define (parameter-classes/full form)
     (let ((classes (make-eq-hashtable))     ; vreg -> class
+          (naturals (make-eq-hashtable))    ; vreg -> class of its initializer
           (params  (make-eq-hashtable))     ; procedure -> (param ...)
           (bodies  (make-eq-hashtable))     ; procedure -> body expr
           (results (make-eq-hashtable))     ; procedure -> result class
@@ -166,20 +182,16 @@
           ;; is `(x << 3) | 7`, two real instructions that something has to
           ;; emit. Nothing does yet.
           ;;
-          ;; Answering `tagged` here regardless is what the join used to do, and
-          ;; it is memory corruption rather than a wrong number: a comparison's
-          ;; 0/1 lands in the VALUE class, and under D21 the collector scavenges
-          ;; that unconditionally and chases address 0 or 1. So it raises, and
-          ;; names the conversion that is missing.
-          (when (hashtable-ref booleans v #f)
-            (error 'select-representations
-                   (string-append
-                    "a boolean-valued raw word is being merged with a tagged "
-                    "value, which needs the conversion (x << 3) | 7 to reach "
-                    "sonic-false/sonic-true; no pass inserts representation "
-                    "conversions yet, and answering `tagged` without one puts "
-                    "0 or 1 in the value class for the collector to chase")
-                   v a b))
+          ;; Answering `tagged` here WITHOUT a conversion is memory corruption
+          ;; rather than a wrong number: a comparison's 0/1 lands in the VALUE
+          ;; class, and under D21 the collector scavenges that unconditionally
+          ;; and chases address 0 or 1. This used to raise for exactly that
+          ;; reason. It no longer has to: `naturals` below records what each
+          ;; binding's initializer actually produces, and convert.ss reads the
+          ;; two tables and inserts a `retag` wherever they differ.
+          ;;
+          ;; So the answer is `tagged` and the obligation is recorded, which is
+          ;; the difference between a default and a decision.
           'tagged)
          (else
           (error 'select-representations
@@ -276,6 +288,20 @@
             ((set!) 'raw-word)
             (else #f)))))
 
+      ;; The variables in TAIL position, which is where `tail-class` takes its
+      ;; join. Structurally parallel to it on purpose: an arm this misses is an
+      ;; arm whose class is joined forward and never constrained backward.
+      (define (tail-vars e)
+        (cond
+         ((symbol? e) (list e))
+         ((not (pair? e)) '())
+         (else
+          (case (car e)
+            ((let seq letrec phi declare declare-distinct policy) (tail-vars (caddr e)))
+            ((sigma) (tail-vars (list-ref e 6)))
+            ((if) (append (tail-vars (caddr e)) (tail-vars (cadddr e))))
+            (else '())))))
+
       (let walk ((x form))
         (when (pair? x)
           (case (car x)
@@ -327,19 +353,44 @@
                  round))
         (let ((changed #f))
           (for-each (lambda (l)
-                      (when (note! (car l) (class-of-simple (cdr l)))
-                        (set! changed #t)))
+                      (let ((nat (class-of-simple (cdr l))))
+                        ;; Recorded every round; classes only ever join upward,
+                        ;; so the last round's answer is the settled one.
+                        (when nat (hashtable-set! naturals (car l) nat))
+                        (when (note! (car l) nat) (set! changed #t))))
                     lets)
           (for-each (lambda (m)
                       (for-each (lambda (op)
                                   (when (note! (car m) (tail-class op))
-                                    (set! changed #t)))
+                                    (set! changed #t))
+                                  ;; BACKWARD, for the same reason the call-site
+                                  ;; rule below is backward. Phi elimination
+                                  ;; turns each operand into a COPY into the
+                                  ;; merge variable's register, so an operand
+                                  ;; left in `raw-word` while the merge is
+                                  ;; `tagged` moves a raw word into the value
+                                  ;; class -- and nothing downstream would ever
+                                  ;; look at the pair again to notice.
+                                  (let ((mc (hashtable-ref classes (car m) #f)))
+                                    (when (and mc (symbol? op) (note! op mc))
+                                      (set! changed #t))))
                                 (cdr m)))
                     merges)
           (vector-for-each
            (lambda (f)
              (when (note-into! results f (tail-class (hashtable-ref bodies f #f)))
-               (set! changed #t)))
+               (set! changed #t))
+             ;; BACKWARD into the tail positions. A procedure returns in ONE
+             ;; register, so if the join over its arms is `tagged` then an arm
+             ;; whose tail is a raw-word variable has to arrive tagged too.
+             ;; Without this, a two-armed procedure returning a comparison from
+             ;; one arm and an object from the other returns 0 or 1 in the value
+             ;; class on half its paths.
+             (let ((r (hashtable-ref results f #f)))
+               (when r
+                 (for-each (lambda (v)
+                             (when (note! v r) (set! changed #t)))
+                           (tail-vars (hashtable-ref bodies f #f))))))
            (sorted-keys bodies))
           (for-each
            (lambda (site)
@@ -360,7 +411,7 @@
                   ps (cdr site)))))
            sites)
           (when changed (fix (+ round 1)))))
-      classes))
+      (values classes naturals booleans)))
 
   ;; The class of an Lrepr/Lssa SimpleExpr given as a datum. A bare variable is
   ;; NOT handled here on purpose: it is a copy, and copies are resolved by the
@@ -383,7 +434,9 @@
   ;; of which are answerable from a single binding's initializer.
   (define (select-representations e . opt)
     (let ([counts (make-eq-hashtable)]
-          [known (if (pair? opt) (car opt) (parameter-classes (unparse-Lssa e)))])
+          [known (if (pair? opt) (car opt) (parameter-classes (unparse-Lssa e)))]
+          [naturals (if (and (pair? opt) (pair? (cdr opt))) (cadr opt) (make-eq-hashtable))]
+          [booleans (if (and (pair? opt) (pair? (cddr opt))) (caddr opt) (make-eq-hashtable))])
       (define (bump! c) (hashtable-set! counts c (+ 1 (hashtable-ref counts c 0))))
       (define (class-of-binding x se)
         (or (hashtable-ref known x #f)
@@ -443,19 +496,19 @@
                 (make-repr-report
                  (map (lambda (c) (cons c (hashtable-ref counts c 0)))
                       '(tagged raw-word raw-f64))
-                 known)))))
+                 known naturals booleans)))))
 
   (define (select-representations-program p)
     (nanopass-case (Lssa Program) p
       [(top ([,x* ,e*] ...) (,x2* ...) ,body)
-       (let ([total (make-eq-hashtable)]
-             ;; ONE fixpoint over the whole program. Per-binding would be
-             ;; wrong: a call crosses top-level bindings, so the class of what
-             ;; a procedure returns is not derivable from the binding that
-             ;; contains the call.
-             [known (parameter-classes (unparse-Lssa p))])
+       ;; ONE fixpoint over the whole program. Per-binding would be wrong: a
+       ;; call crosses top-level bindings, so the class of what a procedure
+       ;; returns is not derivable from the binding that contains the call.
+       (let*-values ([(total) (make-eq-hashtable)]
+                     [(known naturals booleans)
+                      (parameter-classes/full (unparse-Lssa p))])
          (define (one e)
-           (let-values ([(e^ rpt) (select-representations e known)])
+           (let-values ([(e^ rpt) (select-representations e known naturals booleans)])
              (for-each (lambda (p)
                          (hashtable-set! total (car p)
                                          (+ (cdr p) (hashtable-ref total (car p) 0))))
@@ -467,5 +520,5 @@
                      (make-repr-report
                       (map (lambda (c) (cons c (hashtable-ref total c 0)))
                            '(tagged raw-word raw-f64))
-                      known)))))]))
+                      known naturals booleans)))))]))
   )

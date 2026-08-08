@@ -182,6 +182,40 @@ reversal attached, never edited away.
   fix is to count meet vertices on the active path and refuse a cycle that crossed none —
   the coinduction needs a merge point to induct over.
 
+### D31 --- a representation conversion belongs at the definition, not the edge
+
+The obvious placement is the edge: convert at the call site for a parameter, in the
+predecessor for a phi, before the return for a result. That is what the note asking for this
+pass proposed, and it is three placements with three sets of control-flow reasoning.
+
+It is not what the pass needs to do. `repr.ss` already pushes requirements BACKWARD along
+all three edge kinds -- call site to argument, phi to operand, procedure result to tail
+variable. Once its fixpoint settles, a value that must be tagged **is** classified tagged
+everywhere it is named, so a mismatch cannot survive on an edge. It survives in exactly one
+place: a `let` whose variable joined up to `tagged` while its initializer still produces a
+raw word.
+
+One site, one rule, no control flow. The backward propagation was two thirds present
+already -- the call-site rule was there, the phi and tail-position rules were not, and
+adding them is what collapses three placements into one.
+
+The conversion itself needs no new machine op. A fixnum's tagged form is the value shifted
+left 3, which is a multiply by 8; a boolean's is `(x << 3) | 7`, and since the shifted form
+has its low three bits clear the OR is an add. `mul` and `add` already have rules on both
+targets, which is worth more than the one instruction a dedicated shift op would save:
+conversions appear only where a program mixes representations, never in a kernel, and a new
+op costs two selectors, two encoders and the tests for both.
+
+The three cases are not equally missing. A fixnum literal was always free and is why nbody
+compiles. A boolean and a computed fixnum were both instructions-that-nobody-emitted, and
+are now emitted. A double is a heap box with a GC map, which is a different kind of missing,
+and the join still refuses it and says so.
+
+The FIXNUM case was the one that mattered. The boolean join raised, which is visible; the
+fixnum join answered `tagged` silently and left an untagged machine word in the value class
+for D21's collector to scavenge. A refusal is a bug report. A silent wrong class is memory
+corruption that nothing downstream will ever look at again.
+
 Kept because they are implementation hazards, not trivia.
 
 - **Kildall's Theorem 2 is false** for his own constant propagation. The proof needs distributivity, not monotonicity; his function fails it. Algorithm A computes MFP, not MOP. Kam & Ullman 1977 corrected it.
@@ -196,7 +230,7 @@ Kept because they are implementation hazards, not trivia.
 |---|---|
 | Does Chez's `cptypes` already do our job at `optimize-level 2`? | **Answered no, 2026-08-06.** Predicate guards cost 12 instr/step and recover nothing: 8533.41 guarded vs 8521.42 unguarded vs 1788.41 at level 3. `cptypes` had already narrowed the type unaided, so the whole 4.77x residual is bounds checking, which its level-1 lattice cannot represent. Direct validation of `PROPOSAL.md`. |
 | Writeup or library as the deliverable? | Unanswered. Affects phase 5/6 emphasis only. |
-| Where do representation CONVERSIONS get inserted? | Open, and now blocking a real case. `repr.ss` can prove two classes must merge but no pass can emit the instructions to convert between them. A fixnum literal joining to tagged is free (materialise it already shifted) and that is why nbody compiles; a boolean needs `(x << 3) \| 7` and a double needs a heap box, and neither has anywhere to live. The join refuses both rather than guessing. Filed as a bead. |
+| Where do representation CONVERSIONS get inserted? | **Answered 2026-08-07: at the DEFINITION, not the edge.** See D31. Two of the three cases are closed; the double still refuses. |
 | How much does the expansion-time propagator matter? | Unanswered. Phase 5 tier two. |
 | Deutsch & Schiffman 1984 | **Genuinely unavailable.** No OA location per OpenAlex and Semantic Scholar. Only real loss in the corpus. |
 
