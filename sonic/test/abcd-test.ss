@@ -19,7 +19,9 @@
 ;;; Run: scheme -q --libdirs src:vendor/nanopass --script test/abcd-test.ss
 
 (import (chezscheme) (nanopass) (sonic lang) (sonic interval)
-        (sonic fixtures) (sonic abcd) (sonic loops))
+        (sonic fixtures) (sonic abcd) (sonic loops)
+        (sonic read) (sonic expand) (sonic parse) (sonic policy)
+        (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic pipeline))
 
 (define failures 0)
 (define checks 0)
@@ -330,6 +332,44 @@
           (abcd-iv-ref (abcd-ivs g) 'off) #f)
   (check! "the basic IV underneath it still agrees"
           (map agree? (compare-ivs e)) '(#t)))
+
+;; --- a REAL program, which every fixture above is not -----------------------
+;;
+;; `walk` is a `nanopass-case` over Lssa Expr and the pipeline hands an Lssa
+;; Program. It matched nothing, so the graph came out with two vertices -- the
+;; constants -- and no induction variables, for a benchmark with seven loops.
+;;
+;; That failure is particularly hard to see from the outside. An empty graph
+;; proves nothing, and proving nothing is a legitimate answer here, so the
+;; result reads as conservatism rather than as a walk that never happened. The
+;; only way to tell them apart is to assert that the graph has CONTENT for a
+;; program known to have some.
+
+(printf "\nreal programs, not fixtures:\n")
+
+(let* ((src (let* ((p (open-file-input-port "../bench/nbody/config-sonic.sps"))
+                   (bv (get-bytevector-all p)))
+              (close-port p)
+              (utf8->string bv)))
+       (_ (let ((o (open-file-output-port "/tmp/sonic-abcd-real.sps" (file-options no-fail)
+                                          (buffer-mode block) (native-transcoder))))
+            (put-string o src) (close-port o)))
+       (ssa (essa-program
+             (inline-program
+              (assign-convert-program
+               (anf-program
+                (resolve-policy-program
+                 (parse-program (expand-program (read-all-from-file "/tmp/sonic-abcd-real.sps"))
+                                nbody-externs)))))))
+       (g (build-inequality-graph ssa)))
+  (check! "nbody's inequality graph has more than the two constant vertices"
+          (> (length (abcd-vertices g)) 2) #t)
+  ;; Seven loops, each with at least a counter. Zero would mean the graph was
+  ;; built from a walk that visited nothing.
+  (check! "and its loop counters are recognised as induction variables"
+          (> (length (abcd-ivs g)) 0) #t)
+  (check! "each stepping by a known amount"
+          (for-all (lambda (iv) (integer? (abcd-iv-step iv))) (abcd-ivs g)) #t))
 
 (printf "\n~a checks, ~a failures\n" checks failures)
 (if (> failures 0) (exit 1) (begin (printf "PASS\n") (exit 0)))

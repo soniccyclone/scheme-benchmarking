@@ -319,7 +319,30 @@
                 (loop (cdr ps) (+ k 1))))))
         (hashtable-keys fn-params)))
 
-    (walk top)
+    ;; A PROGRAM, not just an expression.
+    ;;
+    ;; `walk` is a `nanopass-case` over Lssa Expr and the pipeline hands an Lssa
+    ;; Program, which matched nothing: the graph came out with two vertices --
+    ;; the constants -- and no induction variables, for a benchmark with seven
+    ;; loops. An empty graph proves nothing, and proving nothing is what this
+    ;; analysis is allowed to do, so the answer looked like conservatism rather
+    ;; than like a walk that never happened.
+    ;;
+    ;; Not rewritten into a letrec the way alias.ss and escape.ss do it, because
+    ;; `enter-fn!` wants the lambda's parameters and body to wire call sites to
+    ;; parameters, and that is exactly what the letrec case already does. Doing
+    ;; it directly keeps the two in step: a top-level procedure and a
+    ;; letrec-bound one get the same treatment because it is the same line.
+    (nanopass-case (Lssa Program) top
+      [(top ([,x* ,e*] ...) (,x2* ...) ,body)
+       (for-each
+        (lambda (nm rhs)
+          (nanopass-case (Lssa Expr) rhs
+            [(lambda (,x1* ...) ,body1) (enter-fn! nm x1* body1)]
+            [else (walk rhs)]))
+        x* e*)
+       (walk body)]
+      [else (walk top)])
     (wire-params!)
     ;; Lengths the caller knows. `b has 35 elements` is a fact about the
     ;; synthetic length vertex, so it composes with everything the program said
