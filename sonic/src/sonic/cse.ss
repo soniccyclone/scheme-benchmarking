@@ -204,8 +204,33 @@
                                ;; two loads of one global are two vregs, so the
                                ;; SLP pass assembled them with `vunpcklpd`
                                ;; where one `vmovddup` splat would do.
-                               (for-all (lambda (o) (single? counts o))
-                                        (cdddr i)))
+                               ;; A SCALAR GLOBAL READ is exempt from the
+                               ;; operand check. Its operand is the cell's
+                               ;; NAME -- a label, not a value -- so it has no
+                               ;; definition to count and the check would fail
+                               ;; on every one. That exclusion had nbody
+                               ;; reloading `dt` three times in one loop body,
+                               ;; and cost a vector instruction too: two loads
+                               ;; of one global are two vregs, so the SLP pass
+                               ;; assembled them with `vunpcklpd` where one
+                               ;; `vmovddup` splat of a single value does.
+                               ;;
+                               ;; RAW-F64 ONLY, and the restriction is measured
+                               ;; rather than cautious. Exempting TAGGED global
+                               ;; reads as well makes nbody wrong: -0.323 and
+                               ;; -0.419 against -0.169 and -0.169. A tagged
+                               ;; cell holds a heap POINTER and a scalar cell
+                               ;; cannot; that is the only difference between
+                               ;; the two cases and it is where the reason must
+                               ;; lie, but the fold that breaks is one this
+                               ;; pass appears entitled to make -- three reads
+                               ;; of `%g-pos` in one block with no `gset` and no
+                               ;; `call` between them. See the bead: it is
+                               ;; recorded rather than guessed at.
+                               (or (and (memq (car i) global-ops)
+                                        (eq? (caddr i) 'raw-f64))
+                                   (for-all (lambda (o) (single? counts o))
+                                            (cdddr i))))
                       (let* ((tbl (cond ((memq (car i) memory-ops) mem-tbl)
                                         ((memq (car i) global-ops) glob-tbl)
                                         (else values-tbl)))
