@@ -254,8 +254,32 @@
 
   (define fixpoint-cap 40)
 
-  (define (escape-analyze e)
-    (let*-values ([(known tailent) (scan-procs e)])
+  ;; A PROGRAM IS A LETREC, and normalising it into one here is why this file
+  ;; needs no Program case of its own.
+  ;;
+  ;; This pass is a `nanopass-case` over Lanf Expr. The pipeline hands it an
+  ;; Lanf Program, which matched nothing, so the analysis walked an empty
+  ;; program and returned an empty answer -- silently, because an empty answer
+  ;; is indistinguishable from a real one. nbody has three allocation sites and
+  ;; eight procedures and this reported none of either.
+  ;;
+  ;; The rewrite is exact rather than convenient: top-level bindings are
+  ;; mutually recursive and visible to one another, which is what `letrec`
+  ;; means. Doing it once at the entry beats teaching every walk in the file
+  ;; about `top` -- there are two here, and they would drift.
+  ;;
+  ;; Externs are dropped deliberately. They have no definition to analyse, and
+  ;; every walk already treats an unbound name as opaque, which is the correct
+  ;; answer for a procedure whose body we do not have.
+  (define (program->letrec p)
+    (nanopass-case (Lanf Program) p
+      [(top ([,x* ,e*] ...) (,x2* ...) ,body)
+       (with-output-language (Lanf Expr) `(letrec ([,x* ,e*] ...) ,body))]
+      [else p]))
+
+  (define (escape-analyze p)
+    (let* ([e (program->letrec p)])
+     (let*-values ([(known tailent) (scan-procs e)])
       (let ([pt (make-eq-hashtable)]
             [sites (make-eqv-hashtable)]
             [esc (make-eqv-hashtable)]
@@ -443,7 +467,7 @@
             (let ([s (signature)])
               (if (= s prev)
                   (make-escape-table pt sites esc known tailent)
-                  (loop (+ i 1) s)))])))))
+                  (loop (+ i 1) s)))]))))))
 
   ;; --- the query ------------------------------------------------------------
 

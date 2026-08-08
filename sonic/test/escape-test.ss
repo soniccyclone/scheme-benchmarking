@@ -7,7 +7,9 @@
 ;;; pass. Both are asserted, and the reason is asserted with the verdict,
 ;;; because "escaped" without a route is a report nobody can act on.
 
-(import (chezscheme) (nanopass) (sonic lang) (sonic escape) (sonic alias))
+(import (chezscheme) (nanopass) (sonic lang) (sonic escape) (sonic alias)
+        (sonic read) (sonic expand) (sonic parse) (sonic policy)
+        (sonic anf) (sonic assign) (sonic inline) (sonic pipeline))
 
 (define failures 0)
 (define checks 0)
@@ -373,5 +375,47 @@
       'p))
 
 (newline)
+
+;; --- a REAL program, which every fixture above is not -----------------------
+;;
+;; This file's walks are `nanopass-case` over Lanf EXPR, and the pipeline hands
+;; an Lanf PROGRAM. Handing it one matched nothing, so the analysis
+;; walked an empty program and reported no allocation sites and no known
+;; procedures -- for a benchmark that has three of the first and eight of the
+;; second. An empty answer is indistinguishable from a real one, which is why
+;; this went unnoticed while every check in this file passed.
+;;
+;; No fixture could catch it. Every one above is a hand-built Expr, and the bug
+;; is about the shape the front end produces -- which a fixture, by
+;; construction, is not. So this compiles source and checks a number that is
+;; knowable independently: nbody allocates exactly three vectors.
+
+(printf "\nreal programs, not fixtures:\n")
+
+(define real-anf
+  (let* ((p (open-file-input-port "../bench/nbody/config-sonic.sps"))
+         (bv (get-bytevector-all p)))
+    (close-port p)
+    (let ((o (open-file-output-port "/tmp/sonic-escape-real.sps" (file-options no-fail)
+                                    (buffer-mode block) (native-transcoder))))
+      (put-string o (utf8->string bv)) (close-port o))
+    (inline-program
+     (assign-convert-program
+      (anf-program
+       (resolve-policy-program
+        (parse-program (expand-program (read-all-from-file "/tmp/sonic-escape-real.sps"))
+                       nbody-externs)))))))
+
+(let ((tbl (escape-analyze real-anf)))
+  (ck! "nbody has allocation sites to analyse at all"
+       (> (length (escape-sites tbl)) 0))
+  (ck! "and its procedures are known, not opaque"
+       (> (length (escape-known-procs tbl)) 0))
+  ;; The deliverable, not just the walk: something in nbody may live on the
+  ;; stack. Zero here would mean the analysis ran and proved nothing, which is
+  ;; a different failure from the one above and worth telling apart.
+  (ck! "and something in it is stack-allocatable"
+       (> (length (escape-stack-allocatable tbl)) 0)))
+
 (printf "~a checks, ~a failures\n" checks failures)
 (if (> failures 0) (exit 1) (begin (printf "PASS\n") (exit 0)))

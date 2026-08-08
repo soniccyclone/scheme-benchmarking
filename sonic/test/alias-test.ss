@@ -6,7 +6,9 @@
 ;;; no runtime check downstream to catch it. So most of these cases assert
 ;;; `may`, and the three that assert `must-not` are the ones carrying a proof.
 
-(import (chezscheme) (nanopass) (sonic lang) (sonic alias))
+(import (chezscheme) (nanopass) (sonic lang) (sonic alias)
+        (sonic read) (sonic expand) (sonic parse) (sonic policy)
+        (sonic anf) (sonic assign) (sonic inline) (sonic pipeline))
 
 (define failures 0)
 (define checks 0)
@@ -252,6 +254,39 @@
       (printf "  ok   a program still containing set! is REFUSED\n")
       (begin (set! failures (+ failures 1))
              (printf "  FAIL analysed an unconverted program; flow insensitivity is unsound there\n"))))
+
+
+;; --- a REAL program, which every fixture above is not -----------------------
+;;
+;; This file's walks are `nanopass-case` over Lanf EXPR, and the pipeline hands
+;; an Lanf PROGRAM. Handing it one raised "unrecognized language record",
+;; which is the better of the two possible failures but still means this
+;; analysis had never once run on a program the compiler produces.
+;;
+;; No fixture could catch it. Every one above is a hand-built Expr, and the bug
+;; is about the shape the front end produces -- which a fixture, by
+;; construction, is not. So this compiles source and checks a number that is
+;; knowable independently: nbody allocates exactly three vectors.
+
+(printf "\nreal programs, not fixtures:\n")
+
+(define real-anf
+  (let* ((p (open-file-input-port "../bench/nbody/config-sonic.sps"))
+         (bv (get-bytevector-all p)))
+    (close-port p)
+    (let ((o (open-file-output-port "/tmp/sonic-alias-real.sps" (file-options no-fail)
+                                    (buffer-mode block) (native-transcoder))))
+      (put-string o (utf8->string bv)) (close-port o))
+    (inline-program
+     (assign-convert-program
+      (anf-program
+       (resolve-policy-program
+        (parse-program (expand-program (read-all-from-file "/tmp/sonic-alias-real.sps"))
+                       nbody-externs)))))))
+
+(let ((tbl (alias-analyze real-anf)))
+  (expect-true "nbody's three make-flvector calls are three allocation sites"
+               (= 3 (length (alias-sites tbl)))))
 
 (printf "\n~a cases, ~a failures\n" checks failures)
 (if (> failures 0) (exit 1) (begin (printf "PASS\n") (exit 0)))
