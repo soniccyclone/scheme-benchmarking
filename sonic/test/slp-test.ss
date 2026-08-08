@@ -1,15 +1,14 @@
 ;;; Superword-level parallelism: packing adjacent scalar work into pairs.
 ;;;
-;;; The pass is CORRECT and, on nbody today, INERT. Both halves are asserted,
-;;; because a vectorizer that is merely correct is easy and a vectorizer that
-;;; merely fires is dangerous.
+;;; Both halves are asserted throughout, because a vectorizer that is merely
+;;; correct is easy and one that merely fires is dangerous. Every check that
+;;; something PACKS is paired with one that something else does NOT.
 ;;;
-;;; What it does not yet do is in `slp-test.ss`'s last section and in the bead
-;;; that follows this one: nbody's `dx` is read by `dx*dx`, which feeds a
-;;; REDUCTION and cannot pack, and by `dx*mj`, which can. The rule below is all
-;;; uses or no pack, so the unpackable use unravels the whole chain. Relaxing
-;;; that needs a pack ASSEMBLED from scalars and a cost model to decide when
-;;; assembling is worth it.
+;;; The refusals are the interesting ones. A horizontal combination of two lanes
+;;; is reassociation, which D24 forbids; a value read in another block loses its
+;;; scalar form if packed; and a chain whose assembly costs more than it saves
+;;; is left alone entirely, because a block half-packed at a loss is worse than
+;;; a block untouched.
 
 (import (chezscheme) (nanopass)
         (sonic lang) (sonic slp)
@@ -56,10 +55,11 @@
   (ck! "and the pass reports the packs it made"
        (> (slp-stats-packs st) 0)))
 
-;; --- ALL USES OR NO PACK ----------------------------------------------------
+;; --- a chain that does not pay ----------------------------------------------
 ;;
-;; `c0` is also read by something that cannot pack. Keeping the pack would need
-;; an extract, and an extract costs what the pack saved, so nothing packs.
+;; `c0` is read by a horizontal add, so the op pack over it is demoted to an
+;; assembled pair. Here that assembly costs more than the one multiply and store
+;; it would buy, so nothing is packed at all.
 (define escaping
   '(program ((entry (block ((load    a0 raw-f64 p i)
                             (load-at a1 raw-f64 1 p i)
@@ -109,28 +109,62 @@
        (not (exists (lambda (i) (eq? (car i) 'p2sub))
                     (cadr (cadr (car (cadr p))))))))
 
-;; --- nbody: correct, and currently inert ------------------------------------
+;; --- ASSEMBLING a pair from scalars -----------------------------------------
 ;;
-;; Recorded as a measurement rather than left implicit. `dx` is read by `dx*dx`,
-;; which feeds the reduction `dx*dx + dy*dy + dz*dz` and cannot pack, and by
-;; `dx*mj`, which can. All-uses-or-no-pack means the unpackable use unravels the
-;; chain, so nothing survives.
+;; `c0` is read by a horizontal add AND stored beside `c1`. The op pack is
+;; DEMOTED to a gather rather than dropped: the scalars are still there, so
+;; assembling them is available, and the store pack then pays for it.
+;; Shaped like nbody's velocity update, because the profitability is the point:
+;; ONE assembled pair pays for a load pack, two op packs and a store pack. A
+;; shorter chain does NOT pay -- a gather plus a splat costs two and a single
+;; multiply plus store saves two -- and the pass correctly declines those.
+(define demotes
+  '(program ((entry (block ((load    a0 raw-f64 p i)
+                            (load-at a1 raw-f64 1 p i)
+                            (load    b0 raw-f64 q i)
+                            (load-at b1 raw-f64 1 q i)
+                            (sub     c0 raw-f64 a0 b0)
+                            (sub     c1 raw-f64 a1 b1)
+                            (mul     e0 raw-f64 c0 m)
+                            (mul     e1 raw-f64 c1 m)
+                            (load    f0 raw-f64 v i)
+                            (load-at f1 raw-f64 1 v i)
+                            (sub     g0 raw-f64 f0 e0)
+                            (sub     g1 raw-f64 f1 e1)
+                            (store    z raw-f64 v i g0)
+                            (store-at z2 raw-f64 1 v i g1)
+                            (add      d raw-f64 c0 c1))
+                           (ret d))))
+     entry))
+
+(let-values (((is st) (run demotes (classes-for 'a0 'a1 'b0 'b1 'c0 'c1
+                                                'e0 'e1 'f0 'f1 'g0 'g1 'm 'd))))
+  ;; c0 and c1 keep their scalar subtractions, because the horizontal add still
+  ;; reads them -- and one vunpcklpd assembles the pair for the multiply.
+  (ck! "a pack whose members have an unpackable use is ASSEMBLED, not abandoned"
+       (and (exists (lambda (i) (eq? (car i) 'p2pack)) is)
+            (= 2 (length (filter (lambda (i) (eq? (car i) 'sub)) is)))))
+  (ck! "the scalar operand shared by both lanes is splatted once"
+       (= 1 (length (filter (lambda (i) (eq? (car i) 'p2splat)) is))))
+  (ck! "and the reduction that forced the demotion is still scalar"
+       (exists (lambda (i) (equal? i '(add d raw-f64 c0 c1))) is)))
+
+;; --- nbody ------------------------------------------------------------------
 ;;
-;; The fix is a pack ASSEMBLED from scalars -- the scalar `dx` stays for the
-;; square, and one `vunpcklpd` builds the pair for the velocity update -- plus a
-;; cost model to decide when assembling pays. Until then this asserts the
-;; honest state: bit-exact and unchanged.
+;; The measurement that justifies the pass. `dx` is read by `dx*dx`, which feeds
+;; the reduction and cannot pack, and by `dx*mj`, which can. Assembling the pair
+;; costs one instruction and buys the two velocity updates, which are three
+;; identical load/mul/sub/store sequences twice over.
 (let* ((c (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs))
        (packed (let count ((xs (compiled-listing c)) (n 0))
                  (cond ((null? xs) n)
                        ((and (pair? (car xs))
                              (memq (car (car xs))
-                                   '(vaddpd vsubpd vmulpd vdivpd vmovupd vmovddup)))
+                                   '(vaddpd vsubpd vmulpd vdivpd vunpcklpd
+                                     vmovupd vmovddup)))
                         (count (cdr xs) (+ n 1)))
                        (else (count (cdr xs) n))))))
-  (ck! "nbody still compiles, and today packs nothing: every chain has an
-       unpackable use"
-       (= packed 0)))
+  (ck! "nbody's pairwise force loop emits packed arithmetic" (> packed 0)))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)

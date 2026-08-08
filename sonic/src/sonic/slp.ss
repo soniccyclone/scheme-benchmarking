@@ -118,81 +118,111 @@
              (caddr prog))
        stats)))
 
+  ;; SEEDED FROM STORES, GROWN BACKWARD.
+  ;;
+  ;; Lane order has to be anchored by MEMORY, and this is why. Growing forward
+  ;; from loads and pairing any two identical operations lets the pass match
+  ;; instructions that have nothing to do with each other -- the "lanes" then
+  ;; mean nothing and the stores write the components in the wrong order. Two
+  ;; ADJACENT STORES fix which value is lane 0 and which is lane 1, and every
+  ;; pack upstream inherits that order from the one below it.
+  ;;
+  ;; At each pack the members' definitions decide what kind it is:
+  ;;
+  ;;   adjacent loads          a packed load, and growth stops
+  ;;   identical packable ops  a packed op, and growth continues to its operands
+  ;;   anything else           a GATHER: the two scalars stay where they are and
+  ;;                           one instruction assembles them
+  ;;
+  ;; A packed op DELETES the scalar form of its members, so it is only legal if
+  ;; every use of both is itself packed. When that fails the pack is DEMOTED to
+  ;; a gather rather than dropped -- the scalars are still there, so assembling
+  ;; them is always available. That demotion is what lets nbody's `dx` be
+  ;; squared into a reduction and multiplied beside `dy` at the same time.
   (define (slp-block instrs classes stats guses)
     (let* ((n (length instrs))
            (vec (list->vector instrs))
-           (packed (make-eq-hashtable))     ; lo -> hi
-           (packs '())                      ; ((lo . hi) ...), lane order
-           (store-packs '()))               ; ((lo-index . hi-index) ...)
+           (packs '())                     ; ((lo . hi) ...), lane order
+           (kind (make-hashtable equal-hash equal?))
+           (store-packs '()))
 
-      (define (pack! lo hi)
-        (if (hashtable-contains? packed lo)
-            #f
-            (begin (hashtable-set! packed lo hi)
-                   (set! packs (cons (cons lo hi) packs))
-                   #t)))
+      (define (index-of v)
+        (let scan ((k 0))
+          (cond ((= k n) #f)
+                ((let ((i (vector-ref vec k)))
+                   (and (pair? i) (>= (length i) 2) (eq? (cadr i) v)))
+                 k)
+                (else (scan (+ k 1))))))
 
-      (define (paired? a b) (eq? (hashtable-ref packed a #f) b))
+      (define (def-of v)
+        (let ((k (index-of v))) (and k (vector-ref vec k))))
 
-      ;; Two loads from adjacent elements are two halves of one 128-bit read.
-      ;; Adjacency is the precondition the packed load needs and the only thing
-      ;; that cannot be recovered later, which is why seeding starts here.
-      (define (collect-seeds!)
-        (let outer ((a 0))
-          (when (< a n)
-            (let ((fa (load-form (vector-ref vec a))))
-              (when (and fa (f64? (vector-ref vec a) classes))
-                (let inner ((b 0))
-                  (when (< b n)
-                    (let ((fb (load-form (vector-ref vec b))))
-                      (when (and fb (not (= a b))
-                                 (eq? (car fa) (car fb))
-                                 (eq? (cadr fa) (cadr fb))
-                                 (= (+ (caddr fa) 1) (caddr fb)))
-                        (pack! (cadr (vector-ref vec a)) (cadr (vector-ref vec b)))))
-                    (inner (+ b 1))))))
-            (outer (+ a 1)))))
+      (define (f64v? v)
+        (and (symbol? v) (eq? (hashtable-ref classes v #f) 'raw-f64)))
 
-      ;; A pack of values feeds a pack of identical operations when the operands
-      ;; line up lane for lane: both from one pack, or both the SAME scalar,
-      ;; which becomes a splat.
-      (define (grow!)
-        (let round ()
-          (let ((again #f))
-            (let loop ((k 0))
-              (when (< k n)
-                (let ((i (vector-ref vec k)))
-                  (when (and (pair? i) (assq (car i) pack-op) (= (length i) 5)
-                             (eq? (caddr i) 'raw-f64)
-                             (not (hashtable-contains? packed (cadr i))))
-                    (let inner ((j 0))
-                      (when (< j n)
-                        (let ((o (vector-ref vec j)))
-                          (when (and (not (= j k)) (pair? o) (eq? (car o) (car i))
-                                     (= (length o) 5) (eq? (caddr o) 'raw-f64)
-                                     (lane-ok? (cadddr i) (cadddr o) paired?)
-                                     (lane-ok? (car (cddddr i)) (car (cddddr o)) paired?))
-                            (when (pack! (cadr i) (cadr o)) (set! again #t))))
-                        (inner (+ j 1))))))
-                (loop (+ k 1))))
-            (when again (round)))))
+      (define (member-of-pack? v)
+        (exists (lambda (p) (or (eq? (car p) v) (eq? (cdr p) v))) packs))
 
+      (define (add-pack! lo hi k)
+        (and (f64v? lo) (f64v? hi) (not (eq? lo hi))
+             (not (member-of-pack? lo)) (not (member-of-pack? hi))
+             (index-of lo) (index-of hi)
+             (begin (set! packs (cons (cons lo hi) packs))
+                    (hashtable-set! kind (cons lo hi) k)
+                    #t)))
+
+      (define (adjacent-loads? a b)
+        (let ((da (and a (load-form a))) (db (and b (load-form b))))
+          (and da db (eq? (car da) (car db)) (eq? (cadr da) (cadr db))
+               (= (+ (caddr da) 1) (caddr db)))))
+
+      (define (same-op? a b)
+        (and a b (pair? a) (pair? b) (eq? (car a) (car b))
+             (assq (car a) pack-op) (= (length a) 5) (= (length b) 5)
+             (eq? (caddr a) 'raw-f64) (eq? (caddr b) 'raw-f64)))
+
+      ;; Classify one pack and, when it is an op pack, enqueue its operands.
+      (define (classify! p)
+        (let* ((lo (car p)) (hi (cdr p))
+               (a (def-of lo)) (b (def-of hi)))
+          (cond
+           ((adjacent-loads? a b) (hashtable-set! kind p 'load))
+           ((same-op? a b)
+            (hashtable-set! kind p 'op)
+            ;; Operand lanes come from THIS pack's order, which came from a
+            ;; store. Equal operands are a splat and form no pack.
+            (for-each (lambda (x y) (unless (eq? x y) (add-pack! x y 'pending)))
+                      (list (cadddr a) (car (cddddr a)))
+                      (list (cadddr b) (car (cddddr b)))))
+           (else (hashtable-set! kind p 'gather)))))
+
+      ;; Adjacent stores whose values differ: the seed, and the only place lane
+      ;; order is decided.
       (define (collect-store-packs!)
-        (let outer ((a 0))
-          (when (< a n)
-            (let ((fa (store-form (vector-ref vec a))))
-              (when (and fa (f64? (vector-ref vec a) classes))
-                (let inner ((b 0))
-                  (when (< b n)
-                    (let ((fb (store-form (vector-ref vec b))))
-                      (when (and fb (not (= a b))
+        (let outer ((x 0))
+          (when (< x n)
+            (let ((fa (store-form (vector-ref vec x))))
+              (when fa
+                (let inner ((y 0))
+                  (when (< y n)
+                    (let ((fb (store-form (vector-ref vec y))))
+                      (when (and fb (not (= x y))
                                  (eq? (car fa) (car fb))
                                  (eq? (cadr fa) (cadr fb))
                                  (= (+ (caddr fa) 1) (caddr fb))
-                                 (paired? (cadddr fa) (cadddr fb)))
-                        (set! store-packs (cons (cons a b) store-packs))))
-                    (inner (+ b 1))))))
-            (outer (+ a 1)))))
+                                 (f64v? (cadddr fa)) (f64v? (cadddr fb)))
+                        (when (add-pack! (cadddr fa) (cadddr fb) 'pending)
+                          (set! store-packs (cons (cons x y) store-packs)))))
+                    (inner (+ y 1))))))
+            (outer (+ x 1)))))
+
+      (define (classify-all!)
+        (let round ()
+          (let ((pending (filter (lambda (p) (eq? 'pending (hashtable-ref kind p #f)))
+                                 packs)))
+            (unless (null? pending)
+              (for-each classify! pending)
+              (round)))))
 
       (define (uses-of v)
         (let count ((k 0) (acc '()))
@@ -204,93 +234,94 @@
                          (cons k acc)
                          acc)))))
 
-      (define (hi? v)
-        (let scan ((ps packs))
-          (cond ((null? ps) #f) ((eq? (cdar ps) v) #t) (else (scan (cdr ps))))))
-
-      ;; Used here as many times as it is used anywhere: nothing outside this
-      ;; block reads it, so replacing its scalar form loses nothing.
       (define (block-local? v)
         (= (length (uses-of v)) (hashtable-ref guses v 0)))
 
-      (define (packed-instruction? k)
+      ;; Is instruction k replaced by a pack? Only load and op packs replace
+      ;; their members; a gather leaves them.
+      (define (consumed? k)
         (let ((i (vector-ref vec k)))
           (or (and (pair? i) (>= (length i) 2) (symbol? (cadr i))
-                   (or (hashtable-contains? packed (cadr i)) (hi? (cadr i))))
-              (let scan ((sp store-packs))
-                (cond ((null? sp) #f)
-                      ((or (= k (caar sp)) (= k (cdar sp))) #t)
-                      (else (scan (cdr sp))))))))
+                   (exists (lambda (p)
+                             (and (memq (hashtable-ref kind p #f) '(load op))
+                                  (or (eq? (car p) (cadr i)) (eq? (cdr p) (cadr i)))))
+                           packs))
+              (exists (lambda (sp) (or (= k (car sp)) (= k (cdr sp)))) store-packs))))
 
-      ;; An arithmetic pack is only still valid if its OPERAND lanes still line
-      ;; up. Growth pairs operands against the packs that existed then; pruning
-      ;; can remove one of those, and a pack left referring to it is silently
-      ;; wrong rather than merely unprofitable.
-      ;;
-      ;; This is the bug that produced a wrong second energy: the squares
-      ;; `dx*dx` and `dy*dy` feed a REDUCTION, so their pack was correctly
-      ;; pruned, which removed the (dx,dy) pack -- and the pack for `dx*mj`
-      ;; beside `dy*mj` was left behind. At emission `dx` no longer looked
-      ;; packed, so it took the scalar path and was SPLATTED into both lanes.
-      ;; The code was well formed and computed dx twice.
-      (define (operands-still-paired? p)
-        (let ((k (let scan ((k 0))
-                   (cond ((= k n) #f)
-                         ((let ((i (vector-ref vec k)))
-                            (and (pair? i) (>= (length i) 2) (eq? (cadr i) (car p))))
-                          k)
-                         (else (scan (+ k 1)))))))
-          (or (not k)
-              (let ((i (vector-ref vec k)))
-                (or (load-form i)          ; a load pack has no operand lanes
-                    (not (assq (car i) pack-op))
-                    (let ((j (let scan ((j 0))
-                               (cond ((= j n) #f)
-                                     ((let ((o (vector-ref vec j)))
-                                        (and (pair? o) (>= (length o) 2)
-                                             (eq? (cadr o) (cdr p))))
-                                      j)
-                                     (else (scan (+ j 1)))))))
-                      (and j
-                           (let ((o (vector-ref vec j)))
-                             (and (lane-ok? (cadddr i) (cadddr o) paired?)
-                                  (lane-ok? (car (cddddr i)) (car (cddddr o))
-                                            paired?))))))))))
-
-      ;; ALL USES OR NO PACK. A packed value read by anything not itself packed
-      ;; would need an extract, and an extract costs what the pack saved. So
-      ;; packs are built optimistically and then validated, and a chain that
-      ;; fails is discarded whole. Dropping one pack can invalidate another --
-      ;; both by leaving a use unpacked and by breaking an operand pairing -- so
-      ;; this runs to a fixpoint.
-      (define (prune!)
+      ;; DEMOTE rather than drop. A load or op pack deletes the scalar form, so
+      ;; it needs every use packed and every member block-local. When that
+      ;; fails, the scalars are still present, so assembling them is available.
+      (define (demote!)
         (let round ()
-          (let ((dropped #f))
-            (set! packs
-                  (filter (lambda (p)
-                            (let ((ok (and (block-local? (car p)) (block-local? (cdr p))
-                                           (operands-still-paired? p)
-                                           (for-all packed-instruction? (uses-of (car p)))
-                                           (for-all packed-instruction? (uses-of (cdr p))))))
-                              (unless ok
-                                (set! dropped #t)
-                                (hashtable-delete! packed (car p)))
-                              ok))
-                          packs))
-            (set! store-packs
-                  (filter (lambda (sp)
-                            (paired? (cadddr (store-form (vector-ref vec (car sp))))
-                                     (cadddr (store-form (vector-ref vec (cdr sp))))))
-                          store-packs))
-            (when dropped (round)))))
+          (let ((changed #f))
+            (for-each
+             (lambda (p)
+               (when (memq (hashtable-ref kind p #f) '(load op))
+                 (unless (and (block-local? (car p)) (block-local? (cdr p))
+                              (for-all consumed? (uses-of (car p)))
+                              (for-all consumed? (uses-of (cdr p))))
+                   (hashtable-set! kind p 'gather)
+                   (set! changed #t))))
+             packs)
+            (when changed (round)))))
 
-      (collect-seeds!)
-      (grow!)
+      ;; A pack nothing reads is pure cost. Reachability runs from the stores.
+      (define (prune-unreachable!)
+        (let round ()
+          (let ((changed #f))
+            (set! packs
+                  (filter
+                   (lambda (p)
+                     (let ((keep
+                            (or (exists (lambda (sp)
+                                          (let ((f (store-form (vector-ref vec (car sp)))))
+                                            (eq? (cadddr f) (car p))))
+                                        store-packs)
+                                (exists (lambda (q)
+                                          (and (not (eq? q p))
+                                               (eq? 'op (hashtable-ref kind q #f))
+                                               (let ((a (def-of (car q))))
+                                                 (and a (memq (car p) (cdddr a)) #t))))
+                                        packs))))
+                       (unless keep (set! changed #t))
+                       keep))
+                   packs))
+            (when changed (round)))))
+
+      (define (splat-count)
+        (let ((seen (make-eq-hashtable)) (m 0))
+          (for-each
+           (lambda (p)
+             (when (eq? 'op (hashtable-ref kind p #f))
+               (let ((a (def-of (car p))) (b (def-of (cdr p))))
+                 (when (and a b)
+                   (for-each (lambda (x y)
+                               (when (and (eq? x y) (not (hashtable-ref seen x #f)))
+                                 (hashtable-set! seen x #t)
+                                 (set! m (+ m 1))))
+                             (list (cadddr a) (car (cddddr a)))
+                             (list (cadddr b) (car (cddddr b))))))))
+           packs)
+          m))
+
+      ;; A load, op or store pack turns two instructions into one. A gather adds
+      ;; one, and so does each splat. If the savings do not outnumber the
+      ;; assembly, nothing is packed: a block half-packed at a loss is worse
+      ;; than a block left alone.
+      (define (profitable?)
+        (let* ((gathers (length (filter (lambda (p) (eq? 'gather (hashtable-ref kind p #f)))
+                                        packs)))
+               (savings (+ (- (length packs) gathers) (length store-packs)))
+               (costs (+ gathers (splat-count))))
+          (> savings costs)))
+
       (collect-store-packs!)
-      (prune!)
-      (if (null? packs)
+      (classify-all!)
+      (demote!)
+      (prune-unreachable!)
+      (if (or (null? packs) (not (profitable?)))
           instrs
-          (emit vec n packs store-packs packed classes stats))))
+          (emit vec n packs store-packs kind classes stats))))
 
   ;; Operands line up when both sides come from one pack, or both are the same
   ;; scalar -- which becomes a splat, once, feeding every pack that shares it.
@@ -313,27 +344,22 @@
   ;; uses pack P then each of Q's members is defined after the corresponding
   ;; member of P, so max(Q) > max(P). Dependencies are preserved by placing
   ;; every pack at its own maximum.
-  (define (emit vec n packs store-packs packed classes stats)
-    (let ((name (make-eq-hashtable))     ; lo -> the packed vreg
-          (splat (make-eq-hashtable))    ; scalar -> its splatted vreg
-          (at (make-eqv-hashtable))      ; position -> packed instrs to emit there
+  ;; PLACEMENT IS AT THE LATER OF THE TWO, and getting it wrong is a wrong
+  ;; answer rather than slow code.
+  ;;
+  ;; A packed operation replaces two scalar ones that sit at different points in
+  ;; the block. Emitting it where the FIRST one was reads the second lane's
+  ;; operands before they are computed -- nbody's velocity update stores
+  ;; component 0 before component 1 is even loaded. The later position is always
+  ;; safe: if pack Q uses pack P then each member of Q is defined after the
+  ;; corresponding member of P, so max(Q) > max(P).
+  (define (emit vec n packs store-packs kind classes stats)
+    (let ((name (make-eq-hashtable))
+          (splat (make-eq-hashtable))
+          (at (make-eqv-hashtable))
           (drop (make-eqv-hashtable))
           (counter 0)
           (out '()))
-
-      (define (fresh p)
-        (set! counter (+ counter 1))
-        (string->symbol
-         (string-append "p2." (symbol->string p) "." (number->string counter))))
-
-      (define (pack-name lo)
-        (or (hashtable-ref name lo #f)
-            (let ((v (fresh lo)))
-              (hashtable-set! name lo v)
-              (hashtable-set! classes v 'raw-f64)
-              v)))
-
-      (define (lo? v) (hashtable-contains? packed v))
 
       (define (index-of v)
         (let scan ((k 0))
@@ -343,49 +369,69 @@
                  k)
                 (else (scan (+ k 1))))))
 
-      (define (emit-at! k instrs)
-        (hashtable-set! at k (append (hashtable-ref at k '()) instrs)))
+      (define (fresh p)
+        (set! counter (+ counter 1))
+        (string->symbol
+         (string-append "p2." (symbol->string p) "." (number->string counter))))
 
-      ;; A scalar wanted in both lanes is splatted once, and the splat has to
-      ;; land before the first pack that reads it.
+      (define (pack-of v)
+        (let scan ((ps packs))
+          (cond ((null? ps) #f) ((eq? (caar ps) v) (car ps)) (else (scan (cdr ps))))))
+
+      (define (pack-name p)
+        (or (hashtable-ref name (car p) #f)
+            (let ((v (fresh (car p))))
+              (hashtable-set! name (car p) v)
+              (hashtable-set! classes v 'raw-f64)
+              v)))
+
+      (define (emit-at! k is)
+        (hashtable-set! at k (append (hashtable-ref at k '()) is)))
+
       (define pending '())
       (define (operand v)
-        (cond
-         ((lo? v) (pack-name v))
-         (else
-          (or (hashtable-ref splat v #f)
-              (let ((s (fresh v)))
-                (hashtable-set! splat v s)
-                (hashtable-set! classes s 'raw-f64)
-                (set! pending (cons (list 'p2splat s 'raw-f64 v) pending))
-                s)))))
+        (let ((p (pack-of v)))
+          (cond
+           (p (pack-name p))
+           (else
+            (or (hashtable-ref splat v #f)
+                (let ((s (fresh v)))
+                  (hashtable-set! splat v s)
+                  (hashtable-set! classes s 'raw-f64)
+                  (set! pending (cons (list 'p2splat s 'raw-f64 v) pending))
+                  s))))))
 
       (define (plan-pack! p)
         (let* ((lo (car p)) (hi (cdr p))
-               (klo (index-of lo)) (khi (index-of hi)))
-          (when (and klo khi)
-            (let* ((k (max klo khi))
-                   (i (vector-ref vec klo))
-                   (f (load-form i)))
-              (hashtable-set! drop klo #t)
-              (hashtable-set! drop khi #t)
-              (set! pending '())
-              (let ((packed-instr
-                     (cond
-                      (f (list 'p2load (pack-name lo) 'raw-f64
-                               (caddr f) (car f) (cadr f)))
-                      ((assq (car i) pack-op)
-                       (list (cdr (assq (car i) pack-op)) (pack-name lo) 'raw-f64
-                             (operand (cadddr i)) (operand (car (cddddr i)))))
-                      (else #f))))
-                (if packed-instr
-                    (begin
-                      (slp-stats-instructions-set!
-                       stats (+ 1 (slp-stats-instructions stats)))
-                      (emit-at! k (append (reverse pending) (list packed-instr))))
-                    ;; Not a shape this pass emits: put the originals back.
-                    (begin (hashtable-delete! drop klo)
-                           (hashtable-delete! drop khi))))))))
+               (klo (index-of lo)) (khi (index-of hi))
+               (k (max klo khi))
+               (i (vector-ref vec klo))
+               (o (vector-ref vec khi))
+               (kd (hashtable-ref kind p #f)))
+          ;; A GATHER assembles a pair from values that stay where they are, so
+          ;; neither member is dropped: their scalar forms are still read, which
+          ;; is the whole reason the kind exists.
+          (unless (eq? kd 'gather)
+            (hashtable-set! drop klo #t)
+            (hashtable-set! drop khi #t))
+          (set! pending '())
+          (let ((instr
+                 (case kd
+                   ((gather) (list 'p2pack (pack-name p) 'raw-f64 lo hi))
+                   ((load)
+                    (let ((f (load-form i)))
+                      (list 'p2load (pack-name p) 'raw-f64 (caddr f) (car f) (cadr f))))
+                   ((op)
+                    (list (cdr (assq (car i) pack-op)) (pack-name p) 'raw-f64
+                          (operand (cadddr i)) (operand (car (cddddr i)))))
+                   (else #f))))
+            (if instr
+                (begin
+                  (slp-stats-instructions-set!
+                   stats (+ 1 (slp-stats-instructions stats)))
+                  (emit-at! k (append (reverse pending) (list instr))))
+                (begin (hashtable-delete! drop klo)
+                       (hashtable-delete! drop khi))))))
 
       (define (plan-store! sp)
         (let* ((klo (car sp)) (khi (cdr sp))
@@ -401,15 +447,13 @@
              stats (+ 1 (slp-stats-instructions stats)))
             (emit-at! k (append (reverse pending) (list instr))))))
 
-      ;; IN POSITION ORDER. A scalar splatted for one pack is reused by every
-      ;; later pack that shares it, so the splat must be emitted at the FIRST
-      ;; pack that asks -- which is only the earliest one if they are planned in
-      ;; order. Out of order, a pack earlier in the block reads a splat defined
-      ;; after it.
+      ;; IN POSITION ORDER, so a scalar splatted for one pack is emitted at the
+      ;; FIRST pack that asks. Out of order, an earlier pack reads a splat
+      ;; defined after it.
       (for-each plan-pack!
                 (list-sort (lambda (a b)
-                             (< (max (or (index-of (car a)) 0) (or (index-of (cdr a)) 0))
-                                (max (or (index-of (car b)) 0) (or (index-of (cdr b)) 0))))
+                             (< (max (index-of (car a)) (index-of (cdr a)))
+                                (max (index-of (car b)) (index-of (cdr b)))))
                            packs))
       (for-each plan-store!
                 (list-sort (lambda (a b) (< (max (car a) (cdr a)) (max (car b) (cdr b))))
@@ -419,8 +463,7 @@
         (when (< k n)
           (unless (hashtable-ref drop k #f)
             (set! out (cons (vector-ref vec k) out)))
-          (for-each (lambda (x) (set! out (cons x out)))
-                    (hashtable-ref at k '()))
+          (for-each (lambda (x) (set! out (cons x out))) (hashtable-ref at k '()))
           (loop (+ k 1))))
       (slp-stats-packs-set! stats (+ (length packs) (slp-stats-packs stats)))
       (reverse out)))

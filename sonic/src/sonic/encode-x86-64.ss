@@ -284,8 +284,12 @@
   ;;
   ;; 128 bits, so L = 0. A 256-bit form would be a different mnemonic and a
   ;; different lane count, which is why the width is not a parameter here.
+  ;; `vunpcklpd` is here too: it is the same VEX.128.66.0F shape with three
+  ;; register operands, and it takes the LOW double of each source, which is
+  ;; exactly "assemble a pair from two scalars".
   (define vex-packed
-    '((vaddpd . #x58) (vsubpd . #x5C) (vmulpd . #x59) (vdivpd . #x5E)))
+    '((vaddpd . #x58) (vsubpd . #x5C) (vmulpd . #x59) (vdivpd . #x5E)
+      (vunpcklpd . #x14)))
 
   ;; `vmovddup xmm, xmm`: duplicate the low double into both lanes. This is the
   ;; SPLAT a pack needs when one operand is the same scalar in both lanes --

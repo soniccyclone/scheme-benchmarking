@@ -192,6 +192,12 @@
       ;; it once, and it then feeds every packed operation that shares the
       ;; scalar.
       p2splat
+      ;; ASSEMBLE a pair from two scalars. The other packs delete the scalar
+      ;; form of their members; this one does not, which is what lets a value
+      ;; feed both a packed use and an unpackable one -- nbody's `dx` is squared
+      ;; into a reduction AND multiplied beside `dy`, and without this the
+      ;; unpackable square unravels the whole chain.
+      p2pack
       branch branch-if jump                         ; control
       call ret                                      ; calls
       ;; Access to a TOP-LEVEL binding, which is storage rather than a value in
