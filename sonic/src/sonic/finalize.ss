@@ -55,7 +55,7 @@
   (export finalize-function finalize-program
           make-frame-layout frame-layout? frame-layout-map frame-layout-count
           frame-layout-bytes frame-layout-outgoing
-          frame-slot-offset frame-incoming-offset
+          frame-slot-offset frame-incoming-offset frame-borrow-offset
           make-spiller spiller? spiller-target
           spiller-x86-64 spiller-rv64 spiller-for
           finalized? finalized-name finalized-listing
@@ -109,8 +109,30 @@
     ;; does not fault on either target; it misaligns every SSE spill on x86-64,
     ;; where a 16-byte load from an unaligned address DOES fault, and that fault
     ;; would point at the load rather than at the prologue that caused it.
-    (let ((n (* slot-bytes (+ (frame-layout-outgoing f) (frame-layout-count f)))))
+    (let ((n (* slot-bytes (+ (frame-layout-outgoing f) (frame-layout-count f)
+                              borrow-words))))
       (if (zero? (modulo n 16)) n (+ n 8))))
+
+  ;; TWO RESERVED WORDS AT THE TOP OF EVERY FRAME.
+  ;;
+  ;; An instruction can need more registers than the target reserves as
+  ;; scratch. `(vector-set! v i x)` with both the index and the value spilled is
+  ;; the case that forced this: the destination is the memory operand, so the
+  ;; one x86-64 allows is spent, and the target reserves a single integer
+  ;; scratch, so the second reload has nowhere to go. It used to raise.
+  ;;
+  ;; So an allocatable register is BORROWED for the length of that one
+  ;; instruction -- saved here, used as a second scratch, restored after. That
+  ;; is a live-range split of the narrowest possible kind, which is what the old
+  ;; refusal said the real fix was.
+  ;;
+  ;; Reserved unconditionally rather than on demand, because the frame is laid
+  ;; out before the instruction that needs it is rewritten. Sixteen bytes of
+  ;; stack and no instructions when nothing borrows.
+  (define borrow-words 2)
+
+  (define (frame-borrow-offset f k)
+    (* slot-bytes (+ (frame-layout-outgoing f) (frame-layout-count f) k)))
 
   ;; Spill slots sit ABOVE the outgoing area, which is why this adds it in.
   ;; Getting the shift wrong is not a fault: it aliases a spilled value onto an
@@ -777,18 +799,52 @@
                      (float? (lambda (v) (eq? (class-of v) 'raw-f64)))
                      (ints (filter (lambda (v) (not (float? v))) vs))
                      (flts (filter float? vs))
-                     (over-int (max 0 (- (length ints) (length (spiller-int-scratch sp)))))
-                     (over-flt (max 0 (- (length flts) (length (spiller-float-scratch sp)))))
+                     (over-int0 (max 0 (- (length ints) (length (spiller-int-scratch sp)))))
+                     (over-flt0 (max 0 (- (length flts) (length (spiller-float-scratch sp)))))
+                     ;; BORROW WHAT THE SCRATCHES CANNOT COVER.
+                     ;;
+                     ;; The one memory operand absorbs one over-budget operand;
+                     ;; anything past that needs a register the target does not
+                     ;; reserve, so one is taken from the allocatable pool for
+                     ;; the length of this instruction and given back after.
+                     ;; Every register live in this instruction is excluded, and
+                     ;; the borrowed one is saved to a reserved frame slot, so
+                     ;; whatever value it held is untouched.
+                     (borrow-n (max 0 (- (+ over-int0 over-flt0) mem-budget)))
+                     (live-here
+                      (let ((acc '()))
+                        (let walk ((x (cdr i)))
+                          (cond ((symbol? x)
+                                 (let ((r (if (reg-class arch x)
+                                              x
+                                              (hashtable-ref assign x #f))))
+                                   (when r (set! acc (cons r acc)))))
+                                ((pair? x) (walk (car x)) (walk (cdr x)))
+                                (else (void))))
+                        acc))
+                     (borrow-class (if (> over-int0 0) 'raw-word 'raw-f64))
+                     (borrowed
+                      (let loop ((rs (if (eq? borrow-class 'raw-f64)
+                                         (arch-float arch)
+                                         (arch-raw arch)))
+                                 (n borrow-n) (acc '()))
+                        (cond ((or (zero? n) (null? rs)) (reverse acc))
+                              ((memq (car rs) live-here) (loop (cdr rs) n acc))
+                              (else (loop (cdr rs) (- n 1) (cons (car rs) acc))))))
+                     (_ (when (< (length borrowed) borrow-n)
+                          (error 'finalize-function
+                                 (string-append
+                                  "this instruction needs more registers than the "
+                                  "scratches, the one memory operand and the whole "
+                                  "allocatable pool can supply between them")
+                                 (spiller-target sp) i vs)))
+                     (int-scr (append (spiller-int-scratch sp)
+                                      (if (eq? borrow-class 'raw-word) borrowed '())))
+                     (flt-scr (append (spiller-float-scratch sp)
+                                      (if (eq? borrow-class 'raw-f64) borrowed '())))
+                     (over-int (max 0 (- (length ints) (length int-scr))))
+                     (over-flt (max 0 (- (length flts) (length flt-scr))))
                      (need-mem (+ over-int over-flt)))
-                (when (> need-mem mem-budget)
-                  (error 'finalize-function
-                         (string-append
-                          "this instruction has more spilled operands than the "
-                          "target can serve with its reserved scratch registers "
-                          "and its one memory operand, so the reloads would "
-                          "clobber each other; the fix is live-range splitting "
-                          "in the allocator, not another scratch here")
-                         (spiller-target sp) i vs mem-budget))
                 (let* ((cands (filter (lambda (v)
                                         (and (mem-eligible i v)
                                              (if (> over-flt 0) (float? v) (not (float? v)))))
@@ -806,9 +862,9 @@
                        (pick (let ((ni 0) (nf 0))
                                (lambda (v)
                                  (if (float? v)
-                                     (let ((r (list-ref (spiller-float-scratch sp) nf)))
+                                     (let ((r (list-ref flt-scr nf)))
                                        (set! nf (+ nf 1)) r)
-                                     (let ((r (list-ref (spiller-int-scratch sp) ni)))
+                                     (let ((r (list-ref int-scr ni)))
                                        (set! ni (+ ni 1)) r)))))
                        (chosen (map (lambda (v) (cons v (pick v))) scratched))
                        (sub (lambda (x)
@@ -843,7 +899,28 @@
                                                   (frame-slot-offset frame v) r (class-of v))
                                                  '())))
                                          chosen))))
-                  (list pre (cons (car i) ops) post))))))))
+                  ;; The borrow brackets everything: saved before the reloads
+                  ;; that may use it, restored after the stores that may.
+                  (let ((save (apply append
+                                     (map (lambda (r k)
+                                            ((spiller-store sp)
+                                             (frame-borrow-offset frame k) r
+                                             borrow-class))
+                                          borrowed
+                                          (let n ((k 0) (rs borrowed))
+                                            (if (null? rs) '()
+                                                (cons k (n (+ k 1) (cdr rs)))))))) 
+                        (restore (apply append
+                                        (map (lambda (r k)
+                                               ((spiller-reload sp)
+                                                r (frame-borrow-offset frame k)
+                                                borrow-class))
+                                             borrowed
+                                             (let n ((k 0) (rs borrowed))
+                                               (if (null? rs) '()
+                                                   (cons k (n (+ k 1) (cdr rs)))))))))
+                    (list (append save pre) (cons (car i) ops)
+                          (append post restore))))))))))
 
       ;; The two-address forms read their destination. Anything that only writes
       ;; it must NOT be reloaded first: the reload would be dead, and worse, it
