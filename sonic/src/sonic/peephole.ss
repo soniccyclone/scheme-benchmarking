@@ -85,22 +85,61 @@
           ((pair? x) (or (mentions-reg? (car x) r) (mentions-reg? (cdr x) r)))
           (else #f)))
 
-  ;; Opcodes that write their destination without reading it. Everything else on
-  ;; x86-64 is two-address -- `add dst, src` reads dst -- so the list is short
-  ;; and being absent from it costs an optimisation and never correctness.
+  ;; Two different questions, and conflating them cost real folds.
+  ;;
+  ;; `pure-moves` is what this file may DELETE: a copy, and nothing else.
+  ;;
+  ;; `kills-dst?` is the wider question of which instructions write their first
+  ;; operand without reading it, which is what decides whether a value is still
+  ;; live. Every three-address VEX form does -- that is what having three
+  ;; addresses means -- and so does the three-operand `imul`. Reading a VEX
+  ;; destination as a use made `(vmulsd xmm3, xmm0, xmm0)` look like a reader of
+  ;; xmm3, so every value whose register was later reused by arithmetic looked
+  ;; live forever.
   (define pure-moves '(mov movsd lea movzx vmovupd vmovddup))
 
-  (define (pure-move-to? i r)
-    (and (pair? i) (memq (car i) pure-moves) (= (length i) 3)
-         (eq? (cadr i) r)
+  (define three-address '(vaddsd vsubsd vmulsd vdivsd
+                          vaddpd vsubpd vmulpd vdivpd
+                          vunpcklpd vunpckhpd))
+
+  ;; THE HALF-REGISTER WRITES, which are why this is not just a list of opcodes.
+  ;;
+  ;; `sqrtsd dst, src` and the REGISTER form of `movsd` write the low 64 bits of
+  ;; an xmm and leave the upper 64 alone. They therefore do not kill a value
+  ;; living in that register -- half of it survives. `movsd dst, [mem]` is
+  ;; different: loading from memory ZEROES the upper half, so it does.
+  ;;
+  ;; It matters because SLP puts a PAIR in one xmm. Treating a merging write as
+  ;; a kill would let a definition whose high lane is still read be deleted, and
+  ;; the register allocator's one-value-per-register model is the only thing
+  ;; that would have made it unreachable -- which is a property of another pass,
+  ;; not an argument this one gets to rely on.
+  ;;
+  ;; The VEX forms do not have this problem by construction: `vsqrtsd d, a, b`
+  ;; takes its upper lane from `a`, so it writes all of `d`.
+  (define (kills-dst? i)
+    (and (pair? i) (pair? (cdr i)) (symbol? (cadr i))
+         (or (and (memq (car i) '(mov lea movzx vmovupd vmovddup))
+                  (= (length i) 3))
+             ;; movsd kills only when it loads from memory
+             (and (eq? (car i) 'movsd) (= (length i) 3)
+                  (pair? (caddr i)) (eq? (car (caddr i)) 'mem))
+             (and (memq (car i) three-address) (= (length i) 4))
+             (and (eq? (car i) 'vsqrtsd) (= (length i) 4))
+             ;; two-operand `imul dst, src` READS dst; the three-operand form
+             ;; does not.
+             (and (eq? (car i) 'imul) (= (length i) 4)))))
+
+  (define (kills? i r)
+    (and (kills-dst? i) (eq? (cadr i) r)
          ;; `lea rax, [rax+1]` writes rax and reads it; not a kill.
-         (not (mentions-reg? (caddr i) r))))
+         (not (mentions-reg? (cddr i) r))))
 
   (define (reads-reg? i r)
     (and (pair? i)
-         (if (and (memq (car i) pure-moves) (= (length i) 3) (symbol? (cadr i)))
+         (if (kills-dst? i)
              ;; the destination slot is written, not read
-             (mentions-reg? (caddr i) r)
+             (mentions-reg? (cddr i) r)
              (mentions-reg? (cdr i) r))))
 
   ;; Anything that leaves the block. A `call` is here because it reads argument
@@ -119,7 +158,7 @@
       (cond ((null? is) #f)
             ((symbol? (car is)) #f)            ; a label: another path joins
             ((reads-reg? (car is) r) #f)
-            ((pure-move-to? (car is) r) #t)    ; overwritten, so it was dead
+            ((kills? (car is) r) #t)           ; overwritten, so it was dead
             ((leaves-block? (car is)) #f)
             (else (scan (cdr is))))))
 
@@ -178,6 +217,55 @@
         (peephole-stats-fused-set! stats (+ 1 (peephole-stats-fused stats)))
         (loop (cddr is)
               (cons (list (car (car is)) (cadr (cadr is)) (caddr (car is))) out)))
+       (else (loop (cdr is) (cons (car is) out))))))
+
+  ;; --- a load folded into the arithmetic that reads it ----------------------
+  ;;
+  ;;     movsd  xmm3, [r8+rdi*8+15]      ->   vsubsd xmm4, xmm1, [r8+rdi*8+15]
+  ;;     vsubsd xmm4, xmm1, xmm3
+  ;;
+  ;; gcc does this at every site; we emitted the load separately because
+  ;; selection names every value. A folded load reads the same address and
+  ;; produces the same bits, so this is safe under the bit-exact oracle in a way
+  ;; that contraction (D24) is not -- nothing is refactored, one instruction
+  ;; simply addresses memory that the instruction before it was addressing.
+  ;;
+  ;; ONLY THE SECOND SOURCE. VEX's first source rides in the prefix's vvvv
+  ;; field, which holds a register number and has no memory form; the encoder
+  ;; refuses it by name. That halves the hit rate here, because Lmach's
+  ;; `(sub d a b)` puts the loaded value in `a` more often than in `b`, and the
+  ;; remedy -- swapping the operands of the commutative ops so the load lands
+  ;; second -- is exactly commutative for finite values and NOT for NaN
+  ;; payloads, which x86 takes from the first source. That is a decision about
+  ;; numerics rather than an optimisation, so it is not taken here.
+  ;;
+  ;; WIDTHS MUST MATCH. Folding an 8-byte `movsd` into a 16-byte packed operand
+  ;; would read memory the program never asked for -- possibly off the end of an
+  ;; allocation. The pairing is explicit rather than inferred.
+  (define vex-scalar-arith '(vaddsd vsubsd vmulsd vdivsd))
+  (define vex-packed-arith '(vaddpd vsubpd vmulpd vdivpd))
+
+  (define (fold-load-into-arith instrs stats)
+    (let loop ((is instrs) (out '()))
+      (cond
+       ((null? is) (reverse out))
+       ((and (pair? (cdr is))
+             (let ((a (car is)) (b (cadr is)))
+               (and (pair? a) (= (length a) 3) (symbol? (cadr a))
+                    (pair? (caddr a)) (eq? (car (caddr a)) 'mem)
+                    (pair? b) (= (length b) 4)
+                    (or (and (eq? (car a) 'movsd)   (memq (car b) vex-scalar-arith))
+                        (and (eq? (car a) 'vmovupd) (memq (car b) vex-packed-arith)))
+                    ;; the loaded register is the second source
+                    (eq? (list-ref b 3) (cadr a))
+                    ;; and NOT also the first, which would lose it
+                    (not (eq? (list-ref b 2) (cadr a)))
+                    ;; nothing else wants the loaded value
+                    (dead-from? (cadr a) (cddr is)))))
+        (let ((a (car is)) (b (cadr is)))
+          (peephole-stats-fused-set! stats (+ 1 (peephole-stats-fused stats)))
+          (loop (cddr is)
+                (cons (list (car b) (list-ref b 1) (list-ref b 2) (caddr a)) out))))
        (else (loop (cdr is) (cons (car is) out))))))
 
   ;; The pattern, over the SELECTED stream:
@@ -627,7 +715,8 @@
                   ;; every earlier rewrite already done, since each of those
                   ;; removes readers.
                   (drop-dead-copies
-                   (fold-store-through-scratch
+                   (fold-load-into-arith
+                    (fold-store-through-scratch
                     (fuse-index
                      (fuse-copy-imul
                       (fuse-lea
@@ -637,6 +726,7 @@
                        stats)
                       stats)
                      stats)
+                    stats)
                     stats)
                    stats)
                   instrs)

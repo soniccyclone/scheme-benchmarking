@@ -306,6 +306,98 @@
      (equal? (peeped '((mov rax rcx) (mov (mem rax #f 1 8) rax) (mov rax r12)))
              '((mov rax rcx) (mov (mem rax #f 1 8) rax) (mov rax r12))))
 
+;; --- a load folded into the arithmetic that reads it ------------------------
+
+(ck! "a load feeding the SECOND source folds into the instruction"
+     (equal? (peeped '((movsd xmm3 (mem r8 rdi 8 15))
+                       (vsubsd xmm4 xmm1 xmm3)
+                       (movsd xmm3 (mem rsp #f 1 0))))
+             '((vsubsd xmm4 xmm1 (mem r8 rdi 8 15))
+               (movsd xmm3 (mem rsp #f 1 0)))))
+
+(ck! "and the packed form folds the packed load"
+     (equal? (peeped '((vmovupd xmm1 (mem r8 rdi 8 -1))
+                       (vsubpd xmm2 xmm0 xmm1)
+                       (vmovupd xmm1 (mem rsp #f 1 0))))
+             '((vsubpd xmm2 xmm0 (mem r8 rdi 8 -1))
+               (vmovupd xmm1 (mem rsp #f 1 0)))))
+
+;; VEX's first source is the vvvv prefix field, which holds a register number.
+;; The encoder refuses memory there by name; this must never hand it one.
+(ck! "a load feeding the FIRST source is refused: vvvv has no memory form"
+     (equal? (peeped '((movsd xmm1 (mem r8 rdi 8 15))
+                       (vsubsd xmm4 xmm1 xmm0)
+                       (movsd xmm1 (mem rsp #f 1 0))))
+             '((movsd xmm1 (mem r8 rdi 8 15))
+               (vsubsd xmm4 xmm1 xmm0)
+               (movsd xmm1 (mem rsp #f 1 0)))))
+
+;; Folding an 8-byte load into a 16-byte operand reads memory the program never
+;; asked for, which off the end of an allocation is a fault rather than a wrong
+;; number.
+(ck! "widths are not mixed: a scalar load does not fold into a packed op"
+     (equal? (peeped '((movsd xmm1 (mem r8 rdi 8 15))
+                       (vsubpd xmm2 xmm0 xmm1)
+                       (movsd xmm1 (mem rsp #f 1 0))))
+             '((movsd xmm1 (mem r8 rdi 8 15))
+               (vsubpd xmm2 xmm0 xmm1)
+               (movsd xmm1 (mem rsp #f 1 0)))))
+
+(ck! "nor a packed load into a scalar op"
+     (equal? (peeped '((vmovupd xmm1 (mem r8 rdi 8 -1))
+                       (vsubsd xmm2 xmm0 xmm1)
+                       (vmovupd xmm1 (mem rsp #f 1 0))))
+             '((vmovupd xmm1 (mem r8 rdi 8 -1))
+               (vsubsd xmm2 xmm0 xmm1)
+               (vmovupd xmm1 (mem rsp #f 1 0)))))
+
+(ck! "a loaded value still wanted afterwards is not folded away"
+     (equal? (peeped '((movsd xmm3 (mem r8 rdi 8 15))
+                       (vsubsd xmm4 xmm1 xmm3)
+                       (vmulsd xmm5 xmm3 xmm3)))
+             '((movsd xmm3 (mem r8 rdi 8 15))
+               (vsubsd xmm4 xmm1 xmm3)
+               (vmulsd xmm5 xmm3 xmm3))))
+
+;; --- half-register writes ---------------------------------------------------
+;;
+;; SLP puts a PAIR in one xmm, so "this register is overwritten" has to mean all
+;; 128 bits of it. `sqrtsd d, s` and the REGISTER form of `movsd` write the low
+;; half and leave the high half alone, so neither kills what was there. Getting
+;; this wrong deletes a definition whose high lane is still read.
+
+(ck! "a register-to-register movsd MERGES, so it does not kill the high lane"
+     (equal? (peeped '((vmovupd xmm1 (mem r8 #f 1 0))
+                       (movsd xmm1 xmm2)
+                       (vunpckhpd xmm3 xmm1 xmm1)))
+             '((vmovupd xmm1 (mem r8 #f 1 0))
+               (movsd xmm1 xmm2)
+               (vunpckhpd xmm3 xmm1 xmm1))))
+
+(ck! "and two-operand sqrtsd merges too"
+     (equal? (peeped '((vmovupd xmm0 (mem r8 #f 1 0))
+                       (sqrtsd xmm0 xmm3)
+                       (vunpckhpd xmm1 xmm0 xmm0)))
+             '((vmovupd xmm0 (mem r8 #f 1 0))
+               (sqrtsd xmm0 xmm3)
+               (vunpckhpd xmm1 xmm0 xmm0))))
+
+;; A movsd FROM MEMORY zeroes the upper half, so that one really does kill.
+(ck! "a movsd from memory zeroes the high lane, so it does kill"
+     (equal? (peeped '((vmovupd xmm1 (mem r8 #f 1 0))
+                       (movsd xmm1 (mem r9 #f 1 0))
+                       (vunpckhpd xmm3 xmm1 xmm1)))
+             '((movsd xmm1 (mem r9 #f 1 0))
+               (vunpckhpd xmm3 xmm1 xmm1))))
+
+;; A three-address VEX op writes ALL of its destination -- that is what having a
+;; separate first source means -- so it kills, and the copy before it is dead.
+(ck! "a three-address VEX write kills its destination"
+     (equal? (peeped '((movsd xmm3 xmm2)
+                       (vmulsd xmm3 xmm0 xmm0)
+                       (vaddsd xmm4 xmm3 xmm1)))
+             '((vmulsd xmm3 xmm0 xmm0) (vaddsd xmm4 xmm3 xmm1))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))
