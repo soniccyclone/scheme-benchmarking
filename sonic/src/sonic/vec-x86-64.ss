@@ -63,7 +63,7 @@
   (export ;; registers
           vec-reg? vec-reg-width vec-reg-number vec-reg-name
           vec-lane-reg vec-scalar-reg
-          mask-reg? mask-reg-number masked? masked-reg masked-k masked-zeroing?
+          mask-reg? mask-reg-number masked? masked-operand masked-k masked-zeroing?
           ;; encoding
           vec-encode-instr vec-encode-instrs vec-instr-length
           vec-mnemonics vec-supports? vec-fused-mnemonic?
@@ -162,16 +162,27 @@
   ;; different instructions to think about: merging leaves the masked-off lanes
   ;; of the DESTINATION alone, so the destination is also an input, and zeroing
   ;; does not. gas writes them `ymm3{k1}` and `ymm3{k1}{z}`.
+  ;; The wrapper goes round a vector register OR a memory operand. A masked
+  ;; STORE is `vmovupd YMMWORD PTR [rax]{k1}, ymm0` -- the mask selects which
+  ;; lanes reach memory -- and three-lane work cannot do without it: a 256-bit
+  ;; store of an (x,y,z,pad) register writes four doubles and the fourth lands
+  ;; on the next body's x.
+  ;;
+  ;; `{z}` is meaningless on a store and the assembler rejects it: zeroing says
+  ;; what happens to the masked-off lanes of a destination REGISTER, and a
+  ;; store's masked-off lanes are simply not written. Refused where the mask is
+  ;; read, not here, so the message can name the operand.
   (define (masked? x)
     (and (pair? x) (memq (car x) '(mask maskz)) (= (length x) 3)
-         (vec-reg? (cadr x)) (mask-reg? (caddr x))))
-  (define (masked-reg x) (cadr x))
+         (or (vec-reg? (cadr x)) (mem? (cadr x)))
+         (mask-reg? (caddr x))))
+  (define (masked-operand x) (cadr x))   ; a vector register OR a memory operand
   (define (masked-k x) (caddr x))
   (define (masked-zeroing? x) (eq? (car x) 'maskz))
 
   ;; Every place that asks an operand for its register has to see through the
   ;; wrapper, so unwrapping happens once, at the top of the encoder.
-  (define (unmask x) (if (masked? x) (masked-reg x) x))
+  (define (unmask x) (if (masked? x) (masked-operand x) x))
 
   (define (mem? x) (and (pair? x) (eq? (car x) 'mem) (= (length x) 5)))
   (define (mem-base m) (list-ref m 1))
@@ -450,13 +461,10 @@
            (width (operand-width 'vec-encode-instr ops)))
       (when (exists masked? (cdr raw-ops))
         (error 'vec-encode-instr "only the destination may carry a mask" i))
-      ;; A masked STORE is legal in the ISA -- the mask selects which lanes
-      ;; reach memory -- and is not reachable from here, because `masked?`
-      ;; requires a vector register inside the wrapper and a store's
-      ;; destination is a memory operand. Stated rather than guarded: a guard
-      ;; against an unrepresentable shape reads as though the shape were
-      ;; possible, and the first version of this line refused masked LOADS by
-      ;; testing the wrong operand.
+      (when (and (masked? dst) (mem? (masked-operand dst)) (masked-zeroing? dst))
+        (error 'vec-encode-instr
+               "zeroing is meaningless on a store: masked-off lanes are simply not written"
+               i))
       ;; Which register goes in which field. `mov` is the only form whose
       ;; direction is not fixed by the mnemonic.
       (let-values

@@ -378,8 +378,10 @@
 ;; register, and the zeroing modifier as a second brace group -- `ymm3{k1}` and
 ;; `ymm3{k1}{z}`. There is no `{k0}`: aaa=0 IS the unmasked encoding, so gas
 ;; rejects it, which is the assembler agreeing with vex.ss's refusal.
-(define (gas-masked x)
-  (string-append (symbol->string (cadr x))
+(define (gas-masked i x)
+  (string-append (if (and (pair? (cadr x)) (eq? (car (cadr x)) 'mem))
+                     (gas-mem i (cadr x))
+                     (symbol->string (cadr x)))
                  "{" (symbol->string (caddr x)) "}"
                  (if (eq? (car x) 'maskz) "{z}" "")))
 
@@ -394,7 +396,7 @@
 
 (define (gas-op i x)
   (cond ((and (pair? x) (eq? (car x) 'mem)) (gas-mem i x))
-        ((and (pair? x) (memq (car x) '(mask maskz))) (gas-masked x))
+        ((and (pair? x) (memq (car x) '(mask maskz))) (gas-masked i x))
         ((and (eq? (car i) 'kmovw) (assq x gpr32)) => (lambda (p) (symbol->string (cdr p))))
         ((symbol? x) (symbol->string x))
         (else (error 'gas-op "cannot print operand" x))))
@@ -516,7 +518,13 @@
     (kmovw k7 rdi)
     (kmovw rax k1)
     (kmovw rdx k5)
-    (kmovw k2 k3)))
+    (kmovw k2 k3)
+    ;; A masked STORE, which three-lane work cannot do without: an unmasked
+    ;; 256-bit store of (x,y,z,pad) writes four doubles and the fourth lands on
+    ;; the next body's x.
+    (vmovupd (mask (mem r9 rcx 8 32) k1) ymm7)
+    (vmovupd (mask (mem rsi rax 8 0) k2) ymm0)
+    (vmovapd (mask (mem r8 rdx 8 64) k3) zmm2)))
 
 ;; --- what masking must REFUSE ----------------------------------------------
 ;;
@@ -536,6 +544,10 @@
                      "three-byte"))
 (ck! "kmovw between two GPRs is not a kmovw"
      (raises? (lambda () (vec-encode-instr '(kmovw rax rcx)))))
+(ck! "zeroing on a STORE is refused: masked-off lanes are simply not written"
+     (raises-naming? (lambda ()
+                       (vec-encode-instr '(vmovupd (maskz (mem r9 rcx 8 32) k1) ymm7)))
+                     "not written"))
 (ck! "zeroing with no mask register is refused at the prefix"
      (raises-naming? (lambda () (evex-bytes 0 0 0 0 1 0 0 1 1 1 0 1))
                      "zeroing"))
