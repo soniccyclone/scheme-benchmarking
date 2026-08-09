@@ -328,6 +328,61 @@ The practical consequence is that the remaining milestone-5 work has to shorten 
 the DEPENDENCE CHAIN, not the listing. Cutting another 100 moves is now known to be worth
 about 6 cycles.
 
+### D35 --- a call destroys what its callee writes, not the whole register file
+
+regalloc.ss spilled every value live across a call, and said why:
+
+> Our own convention saves nothing: a called function uses the whole pool. So a value live
+> ACROSS a call cannot stay in a register.
+
+True of the CONVENTION and false of the PROGRAM, and this compiler has the whole program.
+Integer registers actually written by each function in nbody, against the twelve in the
+pool:
+
+| function | writes | free for a caller |
+|---|---:|---|
+| `inner%24` | 5 | r8 r9 r12 r13 r14 rcx rdx |
+| `outer%22` | 6 | r12 r13 r14 rdi r10 r11 |
+| `energy-from` | 4 | rbx r12 r13 r14 rsi rdi r10 r11 |
+| `init!` | 1 | everything but rax |
+
+Not one writes more than half. `inner%24` leaves r8 and r9 alone because its parameters
+ARRIVE there and the parameter pins keep them there --- it reads them and never writes them
+--- while its caller was spilling exactly those two values across the call to it.
+
+So a value live across a call may keep any register the call does not destroy. Functions are
+finalised CALLEE-FIRST, so a caller is allocated knowing what its callees write; the image's
+layout is unchanged, since that is not the call graph's business. A cycle, an unknown callee
+and a runtime routine all answer "everything", which is precisely the old behaviour, so a
+recursive knot costs nothing that was not already lost.
+
+**A call destroys two things and only one is the callee's doing.** The callee writes what
+its body writes; the CALL SITE writes the ARGUMENT REGISTERS, which are the caller's own
+writes and appear in no callee's set. Reading only the callee's half hands a value a
+register the argument setup overwrites a few instructions later. The return registers count
+too, because xmm0 is allocatable.
+
+Program-wide spills fall from 82 to 52. `init!` --- three allocations and their fills,
+almost no arithmetic --- goes from 27 to 6.
+
+**Two latent ordering bugs became reachable the same day, and both produced a program that
+looped for ever rather than one that answered wrongly.** Each was safe only because every
+value live across a call used to be in a frame slot, and neither rule can go wrong about
+memory:
+
+- `resolve-argument-moves` reads the moves before a transfer as a PARALLEL copy. A call's
+  result move is not part of that permutation --- it makes a new value --- and left in the
+  run, `movsd xmm4, xmm0` beside `movsd xmm0, xmm4` is a swap. The loop carried its previous
+  accumulator round for ever.
+- A load from an absolute address is hoisted to the front of the run because a load makes a
+  value rather than permuting one. That argument is about its SOURCES. Its DESTINATION can
+  be a register the run still reads, and in `subtract-pairs` the global `n-bodies` lands in
+  the very register the loop counter arrived in, so the copy read `n` and the counter never
+  advanced.
+
+Both are now conditions on the hoist rather than exceptions to it, and both have a running
+regression test, because a silent infinite loop is the one failure the suite cannot report.
+
 Kept because they are implementation hazards, not trivia.
 
 - **Kildall's Theorem 2 is false** for his own constant propagation. The proof needs distributivity, not monotonicity; his function fails it. Algorithm A computes MFP, not MOP. Kam & Ullman 1977 corrected it.

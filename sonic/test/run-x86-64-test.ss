@@ -115,6 +115,44 @@
 ;; one. This is what caught the frame leak -- `outer` tail-calls ITSELF, so the
 ;; jump lands on its own entry label, and treating that as an intra-function
 ;; edge skipped the epilogue while the prologue kept reserving frames.
+;; TWO ORDERING BUGS THAT INTERPROCEDURAL CLOBBER SETS MADE REACHABLE, both of
+;; which produced a program that looped for ever rather than one that answered
+;; wrongly. Both were latent for the same reason: while every value live across
+;; a call was spilled, the values these rules mishandle were in frame slots, and
+;; neither rule can go wrong about memory.
+;;
+;; 1. THE CALL RESULT IS NOT PART OF THE ARGUMENT SETUP. `resolve-argument-moves`
+;;    reads the run of moves before a transfer as a PARALLEL copy. Put the
+;;    result move in that run and
+;;
+;;        movsd xmm4, xmm0   ; the call's result
+;;        movsd xmm0, xmm4   ; pass it as the next argument
+;;
+;;    is a swap, which the resolver dutifully emitted through the scratch -- so
+;;    the loop carried its previous accumulator round for ever.
+(run! "a call's result feeding the next iteration is not a parallel copy"
+      (string-append
+       "(define n 3)\n"
+       "(define (inner i j acc) (if (fx= j n) acc (inner i (fx+ j 1) (fl+ acc 1.0))))\n"
+       "(define (outer i acc) (if (fx= i n) acc (outer (fx+ i 1) (inner i 0 acc))))\n"
+       "(define (main) (display (outer 0 0.0)) (newline))\n(main)\n")
+      '(9.0))
+
+;; 2. A DEFINITION MAY NOT BE HOISTED PAST A MOVE THAT READS IT. A load from an
+;;    absolute address is hoisted to the front of the run, because a load makes
+;;    a value rather than permuting one. That is right about its SOURCES and
+;;    says nothing about its DESTINATION: here the global lands in the very
+;;    register the loop counter arrived in, and hoisting it makes the copy read
+;;    the global instead of the counter.
+(run! "a global read into a parameter's register does not outrun the copy of it"
+      (string-append
+       "(define lim 4)\n"
+       "(define (go i acc)\n"
+       "  (if (fx= i lim) acc (go (fx+ i 1) (fl+ acc 2.0))))\n"
+       "(define (step p q) (fl+ (go p 0.0) q))\n"
+       "(define (main) (display (step 0 1.0)) (newline))\n(main)\n")
+      '(9.0))
+
 (run! "nested loops: a self-tail-call must still release its frame"
       (string-append
        "(define n 3)\n"

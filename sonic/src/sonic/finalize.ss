@@ -943,8 +943,42 @@
                (and (pair? src) (eq? (car src) 'mem)
                     (not (memq (cadr src) '(rsp sp)))))))
 
+      ;; A CALL'S RESULT MOVE IS A DEFINITION, in exactly the sense above.
+      ;;
+      ;;     call inner
+      ;;     movsd xmm4, xmm0      <- the result: a NEW value
+      ;;     mov   rcx, [rsp+40]   <- argument setup
+      ;;     movsd xmm0, xmm4      <- argument setup, wants the NEW xmm4
+      ;;     jmp   outer.loop
+      ;;
+      ;; Read as one parallel copy those last two are a SWAP of xmm0 and xmm4,
+      ;; and the resolver dutifully emitted one through the scratch -- so the
+      ;; loop carried its previous accumulator forward for ever and the program
+      ;; never terminated.
+      ;;
+      ;; It is the same shape as the pooled-constant load: the move does not
+      ;; permute a value the copy is rearranging, it MAKES one, so what follows
+      ;; wants the register's new contents. Hoisting it to the front of the run
+      ;; is the same remedy for the same reason.
+      ;;
+      ;; LATENT UNTIL A VALUE COULD SURVIVE A CALL. While everything live across
+      ;; a call was spilled, the result's destination was a frame slot, so the
+      ;; result move was a STORE and `mov-of` never admitted it to a run. The
+      ;; interprocedural clobber sets made a register destination possible and
+      ;; the bug became reachable the same day.
+      (define return-regs
+        (let ((cc (callconv-by-name target)))
+          (apply append
+                 (map (lambda (sc) (return-registers cc sc))
+                      '(tagged raw-word raw-f64)))))
+
+      (define (result-move? i)
+        (let ((m (mov-of i)))
+          (and m (symbol? (cdr m)) (memq (cdr m) return-regs) #t)))
+
       (define (resolve-argument-moves xs)
-        (let loop ((xs xs) (run '()) (held '()) (defs '()) (out '()))
+        (let loop ((xs xs) (run '()) (held '()) (defs '()) (out '())
+                   (post-call #f))
           (cond
            ((null? xs)
             (append (reverse out) (reverse defs) (reverse held) (reverse run)))
@@ -952,14 +986,52 @@
            ;; Hoisting is always safe: the load reads no register the copy could
            ;; clobber, and if the copy reads its destination, going first is
            ;; precisely what makes the copy see the value being defined.
+           ;; A DEFINITION MAY ONLY BE HOISTED PAST MOVES THAT DO NOT READ IT.
+           ;;
+           ;; The argument above -- "the load reads no register the copy could
+           ;; clobber" -- is about the load's SOURCES, and the load also has a
+           ;; DESTINATION. nbody's `subtract-pairs` reads a global into the very
+           ;; register its loop counter arrived in:
+           ;;
+           ;;     (move j.58 j.53)          r11 <- rdx      Lmach order
+           ;;     (gref g.38 %g-n-bodies)   rdx <- [n]
+           ;;
+           ;; and hoisting the load ahead of the copy makes the copy read `n`
+           ;; instead of `j`. The counter then never advances and the program
+           ;; does not terminate.
+           ;;
+           ;; So the load is hoisted only when nothing already in the run reads
+           ;; what it writes; otherwise the run happens first, which is simply
+           ;; program order. LATENT until a value could survive a call: while
+           ;; every live-across-call value spilled, the counter was in a frame
+           ;; slot and no move in the run read a register the load could write.
            ((definition-load? (car xs))
-            (loop (cdr xs) run held (cons (car xs) defs) out))
+            (let* ((d (cadr (car xs)))
+                   (needed (exists (lambda (m)
+                                     (let ((p (mov-of m)))
+                                       (and p (eq? (cdr p) d))))
+                                   run)))
+              (if (not needed)
+                  (loop (cdr xs) run held (cons (car xs) defs) out post-call)
+                  (let-values (((resolved st)
+                                (resolve-moves-in-block arch (reverse run)
+                                                        mov-of emit-mov)))
+                    (loop (cdr xs) '() held '()
+                          (cons (car xs)
+                                (append (reverse resolved) (reverse defs) out))
+                          post-call)))))
+           ;; The one move after a call that reads a return register is that
+           ;; call's result. Hoisted like any other definition, and only in the
+           ;; window right after the call, so a genuine permutation that happens
+           ;; to involve a return register elsewhere is left alone.
+           ((and post-call (result-move? (car xs)))
+            (loop (cdr xs) run held (cons (car xs) defs) out #f))
            ((mov-of (car xs))
             ;; A move after the epilogue would read a released frame, so the
             ;; held epilogue stays after the whole run.
-            (loop (cdr xs) (cons (car xs) run) held defs out))
+            (loop (cdr xs) (cons (car xs) run) held defs out #f))
            ((frame-adjust? (car xs))
-            (loop (cdr xs) run (cons (car xs) held) defs out))
+            (loop (cdr xs) run (cons (car xs) held) defs out post-call))
            ((call-or-jump? (car xs))
             ;; The run before a transfer is the argument setup.
             (let-values (((resolved st)
@@ -967,7 +1039,8 @@
               (loop (cdr xs) '() '() '()
                     (cons (car xs)
                           (append (reverse held) (reverse resolved)
-                                  (reverse defs) out)))))
+                                  (reverse defs) out))
+                    (eq? (car (car xs)) 'call))))
            (else
             (loop (cdr xs) '() '() '()
                   ;; No reversing here, and the asymmetry with the call branch
@@ -981,7 +1054,8 @@
                   ;; convention.
                   ;; `defs` splices ahead of `run` for the same reason it is
                   ;; hoisted above: it defines values the run may read.
-                  (cons (car xs) (append held run defs out)))))))
+                  (cons (car xs) (append held run defs out))
+                  post-call)))))
 
       ;; `mov r, r` / `movsd r, r` / RV64's `addi r, r, 0` and `fsgnj.d r, r, r`.
       (define (self-move? i)

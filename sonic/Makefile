@@ -85,6 +85,8 @@ test-suite:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/peephole-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/clobber-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/unroll-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/addrfold-test.ss
