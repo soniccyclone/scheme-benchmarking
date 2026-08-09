@@ -298,6 +298,75 @@
        "(define (main) (display (go)) (newline))\n(main)\n")
       '(18.0))
 
+;; A GENERAL VECTOR'S ELEMENT CLASS IS THE VECTOR'S, NOT THE PRIMITIVE'S.
+;;
+;; `vector-ref` used to be classified `tagged` unconditionally -- the safe
+;; reading, and not what the compiler did. Nothing tags what it stores, so
+;; `(vector-set! v 0 3)` puts a raw 3 in the slot while `vector-ref` claimed a
+;; tagged word came back. The claim is invisible until repr.ss MERGES that
+;; value with a raw one: the join answers `tagged`, convert.ss retags the raw
+;; side at its definition, and every consumer keeps reading it raw, because
+;; there is no untagging direction.
+;;
+;; Three lines are enough. `j` receives the element on entry and `(fx- j 1)` on
+;; the back edge, so it is exactly that merge, and `j` came back shifted left 3.
+;; The back edge has to be TAKEN for it to show, so a one-iteration loop passes
+;; and this one does not -- which is why fannkuch-redux was right at n=3 and
+;; trapped its bounds check at n=4.
+(run! "a vector element merged with computed arithmetic is not retagged"
+      (string-append
+       "(define v (make-vector 8 0))\n"
+       "(define (put) (vector-set! v 0 3))\n"
+       "(define (go j acc) (if (fx> j 1) (go (fx- j 1) (fx+ acc 1)) acc))\n"
+       "(define (main) (begin (put) (display (fx->fl (go (vector-ref v 0) 0)))\n"
+       "                      (newline)))\n(main)\n")
+      '(2.0))
+
+;; The same value used as an INDEX, which is the other half: a tagged fixnum is
+;; the value shifted left 3 and the addressing mode already scales by 8, so a
+;; wrongly-tagged index reads eight times too far in.
+(run! "a vector element indexes another vector at its own magnitude"
+      (string-append
+       "(define v (make-vector 4 0))\n(define w (make-vector 4 0))\n"
+       "(define (put) (begin (vector-set! v 0 2) (vector-set! w 2 7)))\n"
+       "(define (main) (begin (put)\n"
+       "  (display (fx->fl (vector-ref w (vector-ref v 0)))) (newline)))\n(main)\n")
+      '(7.0))
+
+;; A vector that really does hold a tagged object keeps tagged elements. The
+;; classification is computed from what the program STORES, so this is the
+;; verification half of the optimistic assumption doing its job -- and it must
+;; not be optimised into the raw answer just because the fixnum path wanted it.
+(run! "a vector holding another vector still round-trips a fixnum element"
+      (string-append
+       "(define v (make-vector 4 0))\n"
+       "(define (put) (begin (vector-set! v 0 (make-vector 2 0)) (vector-set! v 1 5)))\n"
+       "(define (main) (begin (put) (display (fx->fl (vector-ref v 1))) (newline)))\n"
+       "(main)\n")
+      '(5.0))
+
+;; FANNKUCH-REDUX, END TO END, against the oracle in bench/fannkuch/SPEC.md.
+;;
+;; The second benchmark in the matrix and the first one that is integer work in
+;; general vectors: every index here comes from arithmetic on a loop variable or
+;; out of another element, which is the case nbody's `3i+k` never exercises.
+;; n=7 is the size the variants run; 228 and 16 are `ref.c`'s answers and Chez's.
+(let-values (((code out)
+              (compile-and-run
+               (call-with-input-file "../bench/fannkuch/config-sonic.sps"
+                 (lambda (p)
+                   (let loop ((acc '()))
+                     (let ((l (get-line p)))
+                       (if (eof-object? l)
+                           (apply string-append (reverse acc))
+                           (loop (cons (string-append l "\n") acc)))))))
+               '(display newline))))
+  (ck! "fannkuch-redux n=7 runs and agrees with the specification's oracle"
+       (and (zero? code) (equal? out '(228.0 16.0))))
+  (unless (and (zero? code) (equal? out '(228.0 16.0)))
+    (display "       exit=") (display code)
+    (display " got=") (write out) (newline)))
+
 ;; THE BENCHMARK ITSELF, as far as it currently gets.
 ;;
 ;; nbody's initial energy is the first oracle check in docs/METHOD.md, and it

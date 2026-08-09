@@ -35,7 +35,7 @@
 
 (library (sonic repr)
   (export select-representations select-representations-program
-          prim-result-class datum-class
+          prim-result-class datum-class vector-element-class
           parameter-classes parameter-classes/full
           repr-report repr-report? repr-report-counts repr-report-classes
           repr-report-naturals repr-report-booleans)
@@ -84,19 +84,57 @@
   (define word-prims (append fixnum-word-prims boolean-word-prims))
 
   (define (word-kind pr)
-    (cond ((memq pr fixnum-word-prims) 'fixnum)
+    (cond ((eq? pr 'vector-ref) 'fixnum)   ; a raw element is a fixnum word
+          ((memq pr fixnum-word-prims) 'fixnum)
           ((memq pr boolean-word-prims) 'boolean)
           (else #f)))
 
   (define tagged-prims
-    '(make-flvector make-vector vector-ref cons car cdr error))
+    '(make-flvector make-vector cons car cdr error))
+
+  ;; --- what a general vector's elements are ----------------------------------
+  ;;
+  ;; A PROPERTY OF THE VECTOR, NOT OF THE PRIMITIVE. `vector-ref` used to be in
+  ;; `tagged-prims`, which says every general vector holds Scheme objects. That
+  ;; is the safe reading and it was not what the compiler DID: nothing tags what
+  ;; it stores, so `(vector-set! v i i)` with a raw loop counter puts a raw word
+  ;; in the slot and `(vector-ref v i)` claimed a tagged one came back.
+  ;;
+  ;; The claim cost a wrong answer rather than a missed optimisation. A value
+  ;; joined up to `tagged` gets a `retag` at its definition (convert.ss), and
+  ;; the consumers keep reading it raw -- there is no untagging direction, on
+  ;; the stated grounds that a merged value never needs one. fannkuch-redux's
+  ;; flip loop is the counterexample:
+  ;;
+  ;;     (let loop ((i 0) (j k)) (if (fx< i j) ... (loop (fx+ i 1) (fx- j 1))))
+  ;;
+  ;; `k` comes from `(vector-ref perm 0)` so `j` was tagged; `(fx- j 1)` is raw;
+  ;; the join tagged `j` on the back edge and the loop then indexed `perm` with
+  ;; `j << 3`. It needs two iterations to reach that edge, so it is invisible
+  ;; below n=4 and traps the bounds check at n=4 and above.
+  ;;
+  ;; So the class is computed from the program, OPTIMISTICALLY AND THEN
+  ;; VERIFIED: assume `raw-word`, classify, and check every value the program
+  ;; writes into a general vector. If they are all raw words the assumption was
+  ;; a fixed point; anything else -- a pair, a boxed double, a value whose class
+  ;; the fixpoint could not name -- lifts the answer to `tagged` and the second
+  ;; pass runs with that. The lattice has two points and the walk only goes up,
+  ;; so two passes suffice.
+  ;;
+  ;; PROGRAM-WIDE, NOT PER-VECTOR, and deliberately. Per-vector needs to know
+  ;; which allocation a `vector-set!` reaches, which is aliasing; program-wide
+  ;; needs nothing and errs toward `tagged`, so one `(vector-set! v 0 (cons ...))`
+  ;; anywhere makes every general vector tagged. That is a real precision loss
+  ;; and it is the sound direction.
+  (define vector-element-class (make-parameter 'tagged))
 
   ;; flvector-set! and vector-set! have no useful result; they are classified
   ;; raw-word so the unused destination does not pull a value register.
   (define effect-prims '(flvector-set! vector-set!))
 
   (define (prim-result-class pr)
-    (cond ((memq pr f64-prims) 'raw-f64)
+    (cond ((eq? pr 'vector-ref) (vector-element-class))
+          ((memq pr f64-prims) 'raw-f64)
           ((memq pr word-prims) 'raw-word)
           ((memq pr tagged-prims) 'tagged)
           ((memq pr effect-prims) 'raw-word)
@@ -512,12 +550,51 @@
                       '(tagged raw-word raw-f64))
                  known naturals booleans)))))
 
+  ;; Every value the program writes into a general vector: the third argument
+  ;; of a `vector-set!` and the fill of a `make-vector`. Read off the datum
+  ;; because the shape is uniform there -- `(primcall pr (perms) arg ...)` --
+  ;; and a nanopass walk would need a clause per production to find two of them.
+  (define (values-stored-into-vectors datum)
+    (let ((acc '()))
+      (let walk ((x datum))
+        (when (pair? x)
+          (when (and (eq? (car x) 'primcall) (pair? (cdr x)) (pair? (cddr x)))
+            (let ((args (cdddr x)))
+              (case (cadr x)
+                ;; (vector-set! v i val)
+                ((vector-set!)
+                 (when (>= (length args) 3) (set! acc (cons (caddr args) acc))))
+                ;; (make-vector n fill)
+                ((make-vector)
+                 (when (>= (length args) 2) (set! acc (cons (cadr args) acc))))
+                (else (void)))))
+          (for-each walk x)))
+      acc))
+
+  ;; The verification half. `known` is the whole-program class table computed
+  ;; under the optimistic assumption; a stored value it cannot name is treated
+  ;; as tagged, which is the sound direction.
+  (define (vector-elements-all-raw? datum known)
+    (for-all (lambda (v)
+               (eq? 'raw-word
+                    (cond ((symbol? v) (hashtable-ref known v #f))
+                          ((and (pair? v) (eq? (car v) 'quote)) (datum-class (cadr v)))
+                          (else #f))))
+             (values-stored-into-vectors datum)))
+
+  (define (program-vector-element-class datum)
+    (parameterize ((vector-element-class 'raw-word))
+      (let-values ([(known naturals booleans) (parameter-classes/full datum)])
+        (if (vector-elements-all-raw? datum known) 'raw-word 'tagged))))
+
   (define (select-representations-program p)
     (nanopass-case (Lssa Program) p
       [(top ([,x* ,e*] ...) (,x2* ...) ,body)
        ;; ONE fixpoint over the whole program. Per-binding would be wrong: a
        ;; call crosses top-level bindings, so the class of what a procedure
        ;; returns is not derivable from the binding that contains the call.
+       (parameterize ((vector-element-class
+                       (program-vector-element-class (unparse-Lssa p))))
        (let*-values ([(total) (make-eq-hashtable)]
                      [(known naturals booleans)
                       (parameter-classes/full (unparse-Lssa p))])
@@ -534,5 +611,5 @@
                      (make-repr-report
                       (map (lambda (c) (cons c (hashtable-ref total c 0)))
                            '(tagged raw-word raw-f64))
-                      known naturals booleans)))))]))
+                      known naturals booleans))))))]))
   )

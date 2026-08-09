@@ -21,6 +21,24 @@
           (eq? (prim-result-class 'cons) 'tagged)
           (eq? (prim-result-class 'car) 'tagged)))
 
+;; --- a general vector's elements belong to the VECTOR ----------------------
+;;
+;; `vector-ref` is the one primitive whose result class is not a property of
+;; the primitive. It used to be pinned `tagged`, which reads as the safe
+;; answer and was not what the compiler did -- nothing tags what it stores, so
+;; the claim only ever surfaced when repr.ss MERGED an element with a raw word
+;; and convert.ss retagged the raw side. fannkuch-redux's flip loop indexed a
+;; vector with `j << 3` because of it. See repr.ss for the whole account.
+;;
+;; The DEFAULT stays tagged, and that matters beyond taste: veclegal.ss refuses
+;; to vectorize a general vector on exactly this answer, and anything asking
+;; outside a classified program must get the conservative one.
+(ck! "a general vector's element class defaults to tagged"
+     (eq? (prim-result-class 'vector-ref) 'tagged))
+(ck! "and is the program's answer where one has been computed"
+     (parameterize ([vector-element-class 'raw-word])
+       (eq? (prim-result-class 'vector-ref) 'raw-word)))
+
 ;; A comparison over doubles produces a boolean, not a double. Classifying it
 ;; raw-f64 would put a boolean in a float register and every use of it after
 ;; would read a NaN-shaped integer.
