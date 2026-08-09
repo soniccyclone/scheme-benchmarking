@@ -324,12 +324,53 @@
 
 ;; VEX's first source is the vvvv prefix field, which holds a register number.
 ;; The encoder refuses memory there by name; this must never hand it one.
-(ck! "a load feeding the FIRST source is refused: vvvv has no memory form"
+;; VEX's first source is the vvvv prefix field, which holds a register number.
+;; For a NON-commutative op there is nothing to be done: the operands cannot be
+;; exchanged, so the load stays.
+(ck! "a load feeding the FIRST source of a SUBTRACT is refused: order matters"
      (equal? (peeped '((movsd xmm1 (mem r8 rdi 8 15))
                        (vsubsd xmm4 xmm1 xmm0)
                        (movsd xmm1 (mem rsp #f 1 0))))
              '((movsd xmm1 (mem r8 rdi 8 15))
                (vsubsd xmm4 xmm1 xmm0)
+               (movsd xmm1 (mem rsp #f 1 0)))))
+
+;; For a COMMUTATIVE one the operands are exchanged so the load lands second and
+;; folds. a+b and a*b are identical to b+a and b*a for every finite value, zero
+;; and infinity; only the NaN payload x86 propagates changes, and differential.ss
+;; compares flonums by bit pattern precisely so that it extends to payloads.
+(ck! "a load feeding the first source of an ADD is swapped and folded"
+     (equal? (peeped '((movsd xmm1 (mem r8 rdi 8 15))
+                       (vaddsd xmm4 xmm1 xmm0)
+                       (movsd xmm1 (mem rsp #f 1 0))))
+             '((vaddsd xmm4 xmm0 (mem r8 rdi 8 15))
+               (movsd xmm1 (mem rsp #f 1 0)))))
+
+(ck! "and a MULTIPLY, the other commutative one"
+     (equal? (peeped '((movsd xmm1 (mem r8 rdi 8 15))
+                       (vmulsd xmm4 xmm1 xmm0)
+                       (movsd xmm1 (mem rsp #f 1 0))))
+             '((vmulsd xmm4 xmm0 (mem r8 rdi 8 15))
+               (movsd xmm1 (mem rsp #f 1 0)))))
+
+;; A DIVIDE is not commutative either, and swapping it would compute the
+;; reciprocal of the right answer.
+(ck! "a divide is never swapped"
+     (equal? (peeped '((movsd xmm1 (mem r8 rdi 8 15))
+                       (vdivsd xmm4 xmm1 xmm0)
+                       (movsd xmm1 (mem rsp #f 1 0))))
+             '((movsd xmm1 (mem r8 rdi 8 15))
+               (vdivsd xmm4 xmm1 xmm0)
+               (movsd xmm1 (mem rsp #f 1 0)))))
+
+;; The loaded value in BOTH sources is `x*x`, and folding it would leave one
+;; operand naming a register the load no longer wrote.
+(ck! "a load feeding BOTH sources is refused"
+     (equal? (peeped '((movsd xmm1 (mem r8 rdi 8 15))
+                       (vmulsd xmm4 xmm1 xmm1)
+                       (movsd xmm1 (mem rsp #f 1 0))))
+             '((movsd xmm1 (mem r8 rdi 8 15))
+               (vmulsd xmm4 xmm1 xmm1)
                (movsd xmm1 (mem rsp #f 1 0)))))
 
 ;; Folding an 8-byte load into a 16-byte operand reads memory the program never

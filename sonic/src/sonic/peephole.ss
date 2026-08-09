@@ -262,6 +262,19 @@
   (define vex-scalar-arith '(vaddsd vsubsd vmulsd vdivsd))
   (define vex-packed-arith '(vaddpd vsubpd vmulpd vdivpd))
 
+  ;; COMMUTATIVE, so a load feeding the FIRST source can be swapped into the
+  ;; second and folded there. Lmach's `(sub d a b)` puts the loaded value in `a`
+  ;; more often than in `b`, so without this most loads cannot fold at all.
+  ;;
+  ;; a+b and a*b are identical to b+a and b*a for every finite value, every
+  ;; zero, and every infinity. The one thing that changes is which NaN PAYLOAD
+  ;; propagates when both operands are NaN: x86 takes the first source's. That
+  ;; is a real difference and differential.ss compares flonums by bit pattern
+  ;; precisely so that it "extends to NaN payloads", so this is not waved away
+  ;; -- it is put in front of that oracle and kept only because the oracle
+  ;; passes.
+  (define commutative '(vaddsd vmulsd vaddpd vmulpd))
+
   (define (fold-load-into-arith instrs stats)
     (let loop ((is instrs) (out '()))
       (cond
@@ -273,16 +286,23 @@
                     (pair? b) (= (length b) 4)
                     (or (and (eq? (car a) 'movsd)   (memq (car b) vex-scalar-arith))
                         (and (eq? (car a) 'vmovupd) (memq (car b) vex-packed-arith)))
-                    ;; the loaded register is the second source
-                    (eq? (list-ref b 3) (cadr a))
-                    ;; and NOT also the first, which would lose it
-                    (not (eq? (list-ref b 2) (cadr a)))
+                    ;; the loaded register is a source, and not BOTH sources
+                    (or (eq? (list-ref b 3) (cadr a))
+                        (and (eq? (list-ref b 2) (cadr a))
+                             (memq (car b) commutative)))
+                    (not (and (eq? (list-ref b 2) (cadr a))
+                              (eq? (list-ref b 3) (cadr a))))
                     ;; nothing else wants the loaded value
                     (dead-from? (cadr a) (cddr is)))))
-        (let ((a (car is)) (b (cadr is)))
+        (let* ((a (car is)) (b (cadr is))
+               ;; whichever source is NOT the load becomes the first operand,
+               ;; which for a commutative op is the swap that lets it fold
+               (keep (if (eq? (list-ref b 3) (cadr a))
+                         (list-ref b 2)
+                         (list-ref b 3))))
           (peephole-stats-fused-set! stats (+ 1 (peephole-stats-fused stats)))
           (loop (cddr is)
-                (cons (list (car b) (list-ref b 1) (list-ref b 2) (caddr a)) out))))
+                (cons (list (car b) (list-ref b 1) keep (caddr a)) out))))
        (else (loop (cdr is) (cons (car is) out))))))
 
   ;; --- read, modify, write, through the scratch -----------------------------
