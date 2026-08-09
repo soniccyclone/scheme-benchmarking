@@ -1109,6 +1109,16 @@
         (let ((m (mov-of i)))
           (and m (symbol? (cdr m)) (memq (cdr m) return-regs) #t)))
 
+      ;; Every register the convention passes an argument in, across all three
+      ;; classes. What makes this the right test: `call-sequence` builds the
+      ;; argument setup out of moves into these and stores into the outgoing
+      ;; area, and nothing else it emits writes one.
+      (define arg-regs
+        (let ((cc (callconv-by-name target)))
+          (apply append
+                 (map (lambda (sc) (arg-registers cc sc))
+                      '(tagged raw-word raw-f64)))))
+
       (define (resolve-argument-moves xs)
         (let loop ((xs xs) (run '()) (held '()) (defs '()) (out '())
                    (post-call #f))
@@ -1158,6 +1168,33 @@
            ;; window right after the call, so a genuine permutation that happens
            ;; to involve a return register elsewhere is left alone.
            ((and post-call (result-move? (car xs)))
+            (loop (cdr xs) run held (cons (car xs) defs) out #f))
+           ;; A MOVE INTO A NON-ARGUMENT REGISTER IS NOT ARGUMENT SETUP.
+           ;;
+           ;; This walk collects the maximal run of moves before a transfer and
+           ;; resolves it as one PARALLEL copy. That is right for the argument
+           ;; setup and wrong for anything that merely precedes it: a move which
+           ;; COMPUTES a value the copy then reads has to happen first, and read
+           ;; as simultaneous it becomes a swap.
+           ;;
+           ;;     mov r14, r8     ; k into the register the argument vreg got
+           ;;     mov r8, r14     ; pass it
+           ;;
+           ;; nbody never showed this because its argument sources already sit
+           ;; in argument registers; fannkuch's `count-flips` does, and the swap
+           ;; handed `flip-prefix` whatever r14 held on entry, which on that path
+           ;; was nothing.
+           ;;
+           ;; THE DESTINATION IS THE TEST, and it has to be -- by the time this
+           ;; listing exists, a genuine permutation and a sequential pair look
+           ;; identical. Ordering by "is this move's destination read later"
+           ;; makes count-flips right and nbody wrong, measured: a real swap has
+           ;; exactly that shape. `call-sequence` writes argument setup into
+           ;; argument registers and nothing else, so that is the distinction
+           ;; that survives.
+           ((and (mov-of (car xs))
+                 (symbol? (cadr (car xs)))
+                 (not (memq (cadr (car xs)) arg-regs)))
             (loop (cdr xs) run held (cons (car xs) defs) out #f))
            ((mov-of (car xs))
             ;; A move after the epilogue would read a released frame, so the
