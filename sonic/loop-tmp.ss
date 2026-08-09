@@ -1,5 +1,0 @@
-(import (chezscheme) (sonic driver) (sonic pipeline))
-(compile-sonic-to-file "../bench/fannkuch/config-sonic.sps" '(display newline) "/tmp/fk-sonic")
-(system "chmod +x /tmp/fk-sonic")
-(printf "exit ~a~n" (system "timeout 60 /tmp/fk-sonic > /tmp/fk.out 2>/dev/null"))
-(system "od -An -tf8 /tmp/fk.out")

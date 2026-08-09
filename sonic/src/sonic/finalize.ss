@@ -1039,193 +1039,87 @@
              (or (and (memq (car i) '(add sub)) (eq? (cadr i) 'rsp))
                  (and (eq? (car i) 'addi) (eq? (cadr i) 'sp)))))
 
-      ;; A memory source that is NOT a spill slot is a DEFINITION, not a copy.
+      ;; --- the argument setup, as callseq.ss marked it -----------------------
       ;;
-      ;; This distinction is load-bearing and its absence produced a wrong
-      ;; answer. A parallel copy permutes values that already exist: every
-      ;; source names a location holding a live vreg, and the whole point of
-      ;; resolving it is that a source must be read before the register holding
-      ;; it is overwritten. A constant-pool load has no such value behind it --
-      ;; it MAKES one -- so the moves after it want the register's NEW contents,
-      ;; which is the exact opposite of what parallel semantics gives them.
+      ;; `plan-instrs` brackets the register moves of a call or a tail call with
+      ;; `(%argcopy)` / `(%argcopy-end)`. Everything between them is one parallel
+      ;; copy because it was built as one; nothing here has to work out which
+      ;; moves those were.
       ;;
-      ;; nbody's `offset-momentum!` starts three accumulators at 0.0 and tail
-      ;; calls the loop. Once CSE noticed the three constants were one value,
-      ;; the entry stub became:
+      ;; THAT USED TO BE A GUESS, and it is worth saying why no better guess
+      ;; exists. The rule was "the maximal run of moves before a transfer", and a
+      ;; move that COMPUTES a value the copy reads has to run first while a move
+      ;; that PERMUTES one must not -- and in a finished listing those are the
+      ;; same two instructions. Three predicates were tried against the whole
+      ;; suite. Each fixed one program and broke another: ordering by "is this
+      ;; destination read later" made fannkuch right and nbody non-terminating,
+      ;; and the reverse test made nbody right while fannkuch's `step` silently
+      ;; dropped `maxflips`, because the run then held two writes to one register
+      ;; and the resolver keeps the last. The information is upstream. Ask for it
+      ;; there.
       ;;
-      ;;     movsd xmm0, [rip+pool]   ; 0.0 -- a DEFINITION
-      ;;     movsd xmm1, xmm0
-      ;;     movsd xmm2, xmm0
-      ;;
-      ;; and reading that as a parallel copy says xmm1 and xmm2 want the OLD
-      ;; xmm0, so the resolver dutifully ordered the load LAST. xmm0 is
-      ;; undefined at a function entry, so two of the three momentum
-      ;; accumulators started at garbage and both energies came out wrong in the
-      ;; twelfth digit -- close enough to look like rounding, which is what the
-      ;; bit-exact oracle is for.
-      ;;
-      ;; Spill slots are the case that must stay IN the copy: `mov <argreg>,
-      ;; [rsp+N]` reloads a vreg the copy is permuting, and excluding it was the
-      ;; bug this function was written to fix. So the line is drawn at the base
-      ;; register, which is exactly where the semantic difference lives.
-      (define (definition-load? i)
-        (and (pair? i)
-             (memq (car i) '(mov movsd))
-             (= (length i) 3)
-             (let ((src (caddr i)))
-               (and (pair? src) (eq? (car src) 'mem)
-                    (not (memq (cadr src) '(rsp sp)))))))
+      ;; Markers are dropped here, before the peephole, so nothing downstream --
+      ;; and no encoder -- ever sees one.
+      (define (argcopy-begin? i) (and (pair? i) (eq? (car i) '%argcopy)))
+      (define (argcopy-end? i) (and (pair? i) (eq? (car i) '%argcopy-end)))
 
-      ;; A CALL'S RESULT MOVE IS A DEFINITION, in exactly the sense above.
-      ;;
-      ;;     call inner
-      ;;     movsd xmm4, xmm0      <- the result: a NEW value
-      ;;     mov   rcx, [rsp+40]   <- argument setup
-      ;;     movsd xmm0, xmm4      <- argument setup, wants the NEW xmm4
-      ;;     jmp   outer.loop
-      ;;
-      ;; Read as one parallel copy those last two are a SWAP of xmm0 and xmm4,
-      ;; and the resolver dutifully emitted one through the scratch -- so the
-      ;; loop carried its previous accumulator forward for ever and the program
-      ;; never terminated.
-      ;;
-      ;; It is the same shape as the pooled-constant load: the move does not
-      ;; permute a value the copy is rearranging, it MAKES one, so what follows
-      ;; wants the register's new contents. Hoisting it to the front of the run
-      ;; is the same remedy for the same reason.
-      ;;
-      ;; LATENT UNTIL A VALUE COULD SURVIVE A CALL. While everything live across
-      ;; a call was spilled, the result's destination was a frame slot, so the
-      ;; result move was a STORE and `mov-of` never admitted it to a run. The
-      ;; interprocedural clobber sets made a register destination possible and
-      ;; the bug became reachable the same day.
-      (define return-regs
-        (let ((cc (callconv-by-name target)))
-          (apply append
-                 (map (lambda (sc) (return-registers cc sc))
-                      '(tagged raw-word raw-f64)))))
+      ;; The registers a copy reads and the registers it writes.
+      (define (copy-reads ms)
+        (filter symbol? (map (lambda (i) (cdr (mov-of i))) ms)))
+      (define (copy-writes ms)
+        (map (lambda (i) (car (mov-of i))) ms))
 
-      (define (result-move? i)
-        (let ((m (mov-of i)))
-          (and m (symbol? (cdr m)) (memq (cdr m) return-regs) #t)))
+      ;; Every register an instruction names. Coarse on purpose: this only
+      ;; decides whether spill code may be lifted over the copy, and treating a
+      ;; read as a write costs an ordering, not a wrong answer.
+      (define (regs-of i)
+        (let walk ((x (cdr i)) (acc '()))
+          (cond ((null? x) acc)
+                ((symbol? (car x))
+                 (walk (cdr x) (if (reg-class arch (car x)) (cons (car x) acc) acc)))
+                ((pair? (car x)) (walk (cdr x) (walk (cdr (car x)) acc)))
+                (else (walk (cdr x) acc)))))
 
-      ;; Every register the convention passes an argument in, across all three
-      ;; classes. What makes this the right test: `call-sequence` builds the
-      ;; argument setup out of moves into these and stores into the outgoing
-      ;; area, and nothing else it emits writes one.
-      (define arg-regs
-        (let ((cc (callconv-by-name target)))
-          (apply append
-                 (map (lambda (sc) (arg-registers cc sc))
-                      '(tagged raw-word raw-f64)))))
+      ;; One bracketed region. The moves are the copy; anything else in here is
+      ;; spill code `do-instr` inserted for one of them, which computes a value
+      ;; the copy reads and therefore goes first. It may only be lifted over the
+      ;; copy if it does not touch the copy's registers -- true for a reload,
+      ;; which reads a frame slot and writes a scratch, and the scratch classes
+      ;; are outside every pool `mov-of` admits.
+      (define (resolve-argcopy region)
+        (let* ((moves (filter mov-of region))
+               (others (filter (lambda (i) (not (mov-of i))) region))
+               (touched (append (copy-reads moves) (copy-writes moves)))
+               (tangled (filter (lambda (i)
+                                  (exists (lambda (r) (memq r touched)) (regs-of i)))
+                                others)))
+          ;; Loudly, rather than falling back to program order: program order is
+          ;; the bug, and a fallback would restore it on exactly the day some
+          ;; future spiller starts routing an argument through a pool register.
+          (unless (null? tangled)
+            (error 'finalize-function
+                   "argument setup has spill code on the copy's own registers"
+                   name (car tangled)))
+          (let-values (((resolved st)
+                        (resolve-moves-in-block arch moves mov-of emit-mov)))
+            (append others resolved))))
 
       (define (resolve-argument-moves xs)
-        (let loop ((xs xs) (run '()) (held '()) (defs '()) (out '())
-                   (post-call #f))
+        (let loop ((xs xs) (out '()))
           (cond
-           ((null? xs)
-            (append (reverse out) (reverse defs) (reverse held) (reverse run)))
-           ;; Hoisted to the FRONT of the run rather than dropped from it.
-           ;; Hoisting is always safe: the load reads no register the copy could
-           ;; clobber, and if the copy reads its destination, going first is
-           ;; precisely what makes the copy see the value being defined.
-           ;; A DEFINITION MAY ONLY BE HOISTED PAST MOVES THAT DO NOT READ IT.
-           ;;
-           ;; The argument above -- "the load reads no register the copy could
-           ;; clobber" -- is about the load's SOURCES, and the load also has a
-           ;; DESTINATION. nbody's `subtract-pairs` reads a global into the very
-           ;; register its loop counter arrived in:
-           ;;
-           ;;     (move j.58 j.53)          r11 <- rdx      Lmach order
-           ;;     (gref g.38 %g-n-bodies)   rdx <- [n]
-           ;;
-           ;; and hoisting the load ahead of the copy makes the copy read `n`
-           ;; instead of `j`. The counter then never advances and the program
-           ;; does not terminate.
-           ;;
-           ;; So the load is hoisted only when nothing already in the run reads
-           ;; what it writes; otherwise the run happens first, which is simply
-           ;; program order. LATENT until a value could survive a call: while
-           ;; every live-across-call value spilled, the counter was in a frame
-           ;; slot and no move in the run read a register the load could write.
-           ((definition-load? (car xs))
-            (let* ((d (cadr (car xs)))
-                   (needed (exists (lambda (m)
-                                     (let ((p (mov-of m)))
-                                       (and p (eq? (cdr p) d))))
-                                   run)))
-              (if (not needed)
-                  (loop (cdr xs) run held (cons (car xs) defs) out post-call)
-                  (let-values (((resolved st)
-                                (resolve-moves-in-block arch (reverse run)
-                                                        mov-of emit-mov)))
-                    (loop (cdr xs) '() held '()
-                          (cons (car xs)
-                                (append (reverse resolved) (reverse defs) out))
-                          post-call)))))
-           ;; The one move after a call that reads a return register is that
-           ;; call's result. Hoisted like any other definition, and only in the
-           ;; window right after the call, so a genuine permutation that happens
-           ;; to involve a return register elsewhere is left alone.
-           ((and post-call (result-move? (car xs)))
-            (loop (cdr xs) run held (cons (car xs) defs) out #f))
-           ;; A MOVE INTO A NON-ARGUMENT REGISTER IS NOT ARGUMENT SETUP.
-           ;;
-           ;; This walk collects the maximal run of moves before a transfer and
-           ;; resolves it as one PARALLEL copy. That is right for the argument
-           ;; setup and wrong for anything that merely precedes it: a move which
-           ;; COMPUTES a value the copy then reads has to happen first, and read
-           ;; as simultaneous it becomes a swap.
-           ;;
-           ;;     mov r14, r8     ; k into the register the argument vreg got
-           ;;     mov r8, r14     ; pass it
-           ;;
-           ;; nbody never showed this because its argument sources already sit
-           ;; in argument registers; fannkuch's `count-flips` does, and the swap
-           ;; handed `flip-prefix` whatever r14 held on entry, which on that path
-           ;; was nothing.
-           ;;
-           ;; THE DESTINATION IS THE TEST, and it has to be -- by the time this
-           ;; listing exists, a genuine permutation and a sequential pair look
-           ;; identical. Ordering by "is this move's destination read later"
-           ;; makes count-flips right and nbody wrong, measured: a real swap has
-           ;; exactly that shape. `call-sequence` writes argument setup into
-           ;; argument registers and nothing else, so that is the distinction
-           ;; that survives.
-           ((and (mov-of (car xs))
-                 (symbol? (cadr (car xs)))
-                 (not (memq (cadr (car xs)) arg-regs)))
-            (loop (cdr xs) run held (cons (car xs) defs) out #f))
-           ((mov-of (car xs))
-            ;; A move after the epilogue would read a released frame, so the
-            ;; held epilogue stays after the whole run.
-            (loop (cdr xs) (cons (car xs) run) held defs out #f))
-           ((frame-adjust? (car xs))
-            (loop (cdr xs) run (cons (car xs) held) defs out post-call))
-           ((call-or-jump? (car xs))
-            ;; The run before a transfer is the argument setup.
-            (let-values (((resolved st)
-                          (resolve-moves-in-block arch (reverse run) mov-of emit-mov)))
-              (loop (cdr xs) '() '() '()
-                    (cons (car xs)
-                          (append (reverse held) (reverse resolved)
-                                  (reverse defs) out))
-                    (eq? (car (car xs)) 'call))))
-           (else
-            (loop (cdr xs) '() '() '()
-                  ;; No reversing here, and the asymmetry with the call branch
-                  ;; above is correct rather than an oversight.
-                  ;;
-                  ;; `out` is built so that `(reverse out)` is the final
-                  ;; sequence, and `run` and `held` are accumulated by `cons` in
-                  ;; that same reversed convention -- so they splice in as-is.
-                  ;; The call branch reverses because `resolved` comes back from
-                  ;; `resolve-moves-in-block` in FINAL order, which is the other
-                  ;; convention.
-                  ;; `defs` splices ahead of `run` for the same reason it is
-                  ;; hoisted above: it defines values the run may read.
-                  (cons (car xs) (append held run defs out))
-                  post-call)))))
+           ((null? xs) (reverse out))
+           ((argcopy-begin? (car xs))
+            (let region ((ys (cdr xs)) (acc '()))
+              (cond
+               ((null? ys)
+                (error 'finalize-function "unterminated argument copy" name))
+               ((argcopy-end? (car ys))
+                (loop (cdr ys)
+                      (append (reverse (resolve-argcopy (reverse acc))) out)))
+               (else (region (cdr ys) (cons (car ys) acc))))))
+           ((argcopy-end? (car xs))
+            (error 'finalize-function "argument copy ends without starting" name))
+           (else (loop (cdr xs) (cons (car xs) out))))))
 
       ;; `mov r, r` / `movsd r, r` / RV64's `addi r, r, 0` and `fsgnj.d r, r, r`.
       (define (self-move? i)

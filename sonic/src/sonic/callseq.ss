@@ -112,6 +112,26 @@
   ;; `store` picks which of the two outgoing areas this call writes: the one at
   ;; the bottom of our own frame for an ordinary call, or the caller's incoming
   ;; area for a tail call.
+  ;;
+  ;; THE REGISTER MOVES ARE BRACKETED, and that bracket is the whole interface
+  ;; to hazard 1. `parcopy.ss` cannot run until allocation has happened, and by
+  ;; then the moves are indistinguishable from any other run of moves in the
+  ;; instruction stream -- so finalize.ss used to recover them by pattern, as
+  ;; "the maximal run of moves before a transfer".
+  ;;
+  ;; That pattern is not sound and could not be made sound. A move that COMPUTES
+  ;; a value the copy then reads has to happen first; read as simultaneous it
+  ;; becomes a swap. A genuine permutation has exactly the same shape, so no
+  ;; predicate over the finished listing separates them -- three were tried, and
+  ;; each made one program right and a different one wrong: nbody's
+  ;; `subtract-pairs` looped forever, then fannkuch's `count-flips` passed a
+  ;; register that was never written, then fannkuch's `step` dropped the
+  ;; assignment of `maxflips` because the run held two writes to one register
+  ;; and the resolver kept the last.
+  ;;
+  ;; This is the only place that knows, so this is the place that says. What is
+  ;; between the markers is a parallel copy because it was BUILT as one, and
+  ;; nothing downstream has to guess.
   (define (plan-instrs cc em plan store)
     (append
      (let loop ((ss (tail-plan-stack-args plan)) (slot 0) (out '()))
@@ -120,11 +140,17 @@
            (loop (cdr ss) (+ slot 1)
                  (cons (store (car (car ss)) slot (cdr (car ss)))
                        out))))
-     (apply append
-            (map (lambda (m)
-                   ((call-emitter-move em) (reg-storage-class cc (car m))
-                                           (car m) (cdr m)))
-                 (tail-plan-moves plan)))))
+     (let ((moves (apply append
+                         (map (lambda (m)
+                                ((call-emitter-move em) (reg-storage-class cc (car m))
+                                                        (car m) (cdr m)))
+                              (tail-plan-moves plan)))))
+       (if (null? moves)
+           '()
+           ;; Operandless, so every walk between here and finalize.ss ignores
+           ;; them: the spiller asks `(cdr i)` for vregs and gets none, the
+           ;; clobber scan asks for a destination and gets none.
+           (append '((%argcopy)) moves '((%argcopy-end)))))))
 
   (define (split-callee who srcs)
     (when (null? srcs)

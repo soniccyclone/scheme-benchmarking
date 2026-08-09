@@ -236,8 +236,35 @@
       (for-each-indexed
        (lambda (b k)
          (let ((start pos))
-           ;; live-in covers the block from its first instruction
+           ;; A BLOCK'S HEAD IS ITS OWN POSITION, before its first instruction.
+           ;;
+           ;; A live-in value is live BEFORE the block runs, and giving it the
+           ;; same number as the first instruction loses exactly that. The
+           ;; interval `(v start end)` cannot say whether `start` is where `v`
+           ;; was defined or merely where the walk first saw it, and the two
+           ;; want opposite answers at a call: a call's own result is defined AT
+           ;; the call and is not live across it, which is why `crosses-call?`
+           ;; tests `start < position` strictly -- and that same strictness then
+           ;; says a parameter live-in at 0 does not cross a call at 0.
+           ;;
+           ;; It is not a corner case. Every parameter of every function is
+           ;; live-in to its entry block at position 0, so any function whose
+           ;; FIRST instruction is a call had no value at all counted as live
+           ;; across it, and the allocator handed those parameters the argument
+           ;; registers that call was about to overwrite. `step` in
+           ;; fannkuch-redux is `(begin (fill-counts r) (next 1 mx (+ cs 1) sg))`
+           ;; -- a call in the first slot -- and `cs` was given rcx, which is
+           ;; where `r` then went as the argument. The checksum came out 2
+           ;; instead of 24.
+           ;;
+           ;; Reserving a head position makes live-in strictly earlier than
+           ;; anything in the block, so the strict test means what it says. The
+           ;; transfer already had a reserved position at the other end for the
+           ;; same kind of reason; this is the missing half. `call-positions`
+           ;; and `call-sites` reserve it too -- the three walks share one
+           ;; numbering and a disagreement is a silent mis-allocation.
            (for-each (lambda (v) (touch! v start)) (vector-ref in* k))
+           (set! pos (+ pos 1))
            (for-each (lambda (i)
                        (let ((d (instr-def i)))
                          (when (and d (not (physical-or-label? d))) (touch! d pos)))
@@ -474,6 +501,7 @@
                              (and (eq? (car last) 'call)
                                   (eq? (cadr last) (cadr t))
                                   last)))))
+           (set! pos (+ pos 1))         ; the block head, where live-in sits
            (for-each (lambda (i)
                        (when (and (eq? (car i) 'call) (not (eq? i tail)))
                          (set! acc (cons pos acc)))
@@ -502,6 +530,7 @@
                              (and (eq? (car last) 'call)
                                   (eq? (cadr last) (cadr t))
                                   last)))))
+           (set! pos (+ pos 1))         ; the block head, where live-in sits
            (for-each (lambda (i)
                        (when (and (eq? (car i) 'call) (not (eq? i tail)))
                          (set! acc (cons (cons pos i) acc)))
