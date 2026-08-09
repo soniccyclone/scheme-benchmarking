@@ -166,16 +166,39 @@
       (define (f64v? v)
         (and (symbol? v) (eq? (hashtable-ref classes v #f) 'raw-f64)))
 
-      (define (member-of-pack? v)
-        (exists (lambda (p) (or (eq? (car p) v) (eq? (cdr p) v))) packs))
+      ;; A PACK IS A LIST OF MEMBERS IN LANE ORDER, not a cons of two.
+      ;;
+      ;; It was `(lo . hi)`, which put the lane count in the representation:
+      ;; every `(cdr p)` in this file meant "the high member" rather than "the
+      ;; remaining lanes". Three components pack as two plus one today, and the
+      ;; encoder can now emit a masked 256-bit form that takes all three. This
+      ;; commit changes the SHAPE only -- two members in, two members out, and
+      ;; the emitted image is byte-identical.
+      ;;
+      ;; `(car p)` still means lane 0 everywhere, which is why most of the file
+      ;; is untouched. Lane 0 is load-bearing in its own right: a packed
+      ;; register's low double IS the scalar, so a scalar use of it is free.
+      (define (pack-lo p) (car p))
+      (define (pack-hi p) (cadr p))       ; the last lane, while packs are pairs
 
-      (define (add-pack! lo hi k)
-        (and (f64v? lo) (f64v? hi) (not (eq? lo hi))
-             (not (member-of-pack? lo)) (not (member-of-pack? hi))
-             (index-of lo) (index-of hi)
-             (begin (set! packs (cons (cons lo hi) packs))
-                    (hashtable-set! kind (cons lo hi) k)
-                    #t)))
+      (define (member-of-pack? v)
+        (exists (lambda (p) (and (memq v p) #t)) packs))
+
+      (define (no-dups? ms)
+        (or (null? ms) (and (not (memq (car ms) (cdr ms))) (no-dups? (cdr ms)))))
+
+      ;; Variadic, with the kind last, so a triple is `(add-pack! x y z 'pending)`
+      ;; and the arity is not a thing to change again.
+      (define (add-pack! . args)
+        (let* ((r (reverse args)) (k (car r)) (ms (reverse (cdr r))))
+          (and (>= (length ms) 2)
+               (for-all f64v? ms)
+               (no-dups? ms)
+               (not (exists member-of-pack? ms))
+               (for-all (lambda (m) (and (index-of m) #t)) ms)
+               (begin (set! packs (cons ms packs))
+                      (hashtable-set! kind ms k)
+                      #t))))
 
       (define (adjacent-loads? a b)
         (let ((da (and a (load-form a))) (db (and b (load-form b))))
@@ -189,7 +212,7 @@
 
       ;; Classify one pack and, when it is an op pack, enqueue its operands.
       (define (classify! p)
-        (let* ((lo (car p)) (hi (cdr p))
+        (let* ((lo (pack-lo p)) (hi (pack-hi p))
                (a (def-of lo)) (b (def-of hi)))
           (cond
            ((adjacent-loads? a b) (hashtable-set! kind p 'load))
@@ -218,7 +241,7 @@
                                  (= (+ (caddr fa) 1) (caddr fb))
                                  (f64v? (cadddr fa)) (f64v? (cadddr fb)))
                         (when (add-pack! (cadddr fa) (cadddr fb) 'pending)
-                          (set! store-packs (cons (cons x y) store-packs)))))
+                          (set! store-packs (cons (list x y) store-packs)))))
                     (inner (+ y 1))))))
             (outer (+ x 1)))))
 
@@ -267,9 +290,9 @@
           (or (and (pair? i) (>= (length i) 2) (symbol? (cadr i))
                    (exists (lambda (p)
                              (and (memq (hashtable-ref kind p #f) '(load op))
-                                  (or (eq? (car p) (cadr i)) (eq? (cdr p) (cadr i)))))
+                                  (and (memq (cadr i) p) #t)))
                            packs))
-              (exists (lambda (sp) (or (= k (car sp)) (= k (cdr sp)))) store-packs))))
+              (exists (lambda (sp) (and (memv k sp) #t)) store-packs))))
 
       ;; A SCALAR USE OF A PACKED VALUE IS NOT ALWAYS AN EXTRACT.
       ;;
@@ -296,7 +319,7 @@
             (for-each
              (lambda (p)
                (when (memq (hashtable-ref kind p #f) '(load op))
-                 (unless (and (block-local? (car p)) (block-local? (cdr p)))
+                 (unless (for-all block-local? p)
                    (hashtable-set! kind p 'gather)
                    (set! changed #t))))
              packs)
@@ -329,7 +352,7 @@
       ;; untouched. A fixpoint, because demoting one pack can unpair another.
       (define (paired? x y)
         (or (eq? x y)
-            (exists (lambda (q) (and (eq? (car q) x) (eq? (cdr q) y))) packs)))
+            (exists (lambda (q) (and (eq? (pack-lo q) x) (eq? (pack-hi q) y))) packs)))
 
       (define (demote-unpaired!)
         (let round ()
@@ -337,7 +360,7 @@
             (for-each
              (lambda (p)
                (when (eq? 'op (hashtable-ref kind p #f))
-                 (let ((a (def-of (car p))) (b (def-of (cdr p))))
+                 (let ((a (def-of (pack-lo p))) (b (def-of (pack-hi p))))
                    (when (and a b
                               (not (and (paired? (cadddr a) (cadddr b))
                                         (paired? (car (cddddr a))
@@ -357,13 +380,13 @@
                      (let ((keep
                             (or (exists (lambda (sp)
                                           (let ((f (store-form (vector-ref vec (car sp)))))
-                                            (eq? (cadddr f) (car p))))
+                                            (eq? (cadddr f) (pack-lo p))))
                                         store-packs)
                                 (exists (lambda (q)
                                           (and (not (eq? q p))
                                                (eq? 'op (hashtable-ref kind q #f))
-                                               (let ((a (def-of (car q))))
-                                                 (and a (memq (car p) (cdddr a)) #t))))
+                                               (let ((a (def-of (pack-lo q))))
+                                                 (and a (memq (pack-lo p) (cdddr a)) #t))))
                                         packs))))
                        (unless keep (set! changed #t))
                        keep))
@@ -375,7 +398,7 @@
           (for-each
            (lambda (p)
              (when (eq? 'op (hashtable-ref kind p #f))
-               (let ((a (def-of (car p))) (b (def-of (cdr p))))
+               (let ((a (def-of (pack-lo p))) (b (def-of (pack-hi p))))
                  (when (and a b)
                    (for-each (lambda (x y)
                                (when (and (eq? x y) (not (hashtable-ref seen x #f)))
@@ -395,7 +418,7 @@
       (define (extract-count)
         (length (filter (lambda (p)
                           (and (memq (hashtable-ref kind p #f) '(load op))
-                               (pair? (scalar-uses (cdr p)))))
+                               (pair? (scalar-uses (pack-hi p)))))
                         packs)))
 
       (define (profitable?)
@@ -479,14 +502,20 @@
         (string->symbol
          (string-append "p2." (symbol->string p) "." (number->string counter))))
 
+      ;; A pack is a LIST of members in lane order; `(car p)` is lane 0.
+      (define (pack-lo p) (car p))
+      (define (pack-hi p) (cadr p))       ; the last lane, while packs are pairs
+
       (define (pack-of v)
         (let scan ((ps packs))
-          (cond ((null? ps) #f) ((eq? (caar ps) v) (car ps)) (else (scan (cdr ps))))))
+          (cond ((null? ps) #f)
+                ((eq? (pack-lo (car ps)) v) (car ps))
+                (else (scan (cdr ps))))))
 
       (define (pack-name p)
-        (or (hashtable-ref name (car p) #f)
-            (let ((v (fresh (car p))))
-              (hashtable-set! name (car p) v)
+        (or (hashtable-ref name (pack-lo p) #f)
+            (let ((v (fresh (pack-lo p))))
+              (hashtable-set! name (pack-lo p) v)
               (hashtable-set! classes v 'raw-f64)
               v)))
 
@@ -525,7 +554,7 @@
                   s))))))
 
       (define (plan-pack! p)
-        (let* ((lo (car p)) (hi (cdr p))
+        (let* ((lo (pack-lo p)) (hi (pack-hi p))
                (klo (index-of lo)) (khi (index-of hi))
                (k (max klo khi))
                (i (vector-ref vec klo))
@@ -570,7 +599,7 @@
                        (hashtable-delete! drop khi))))))
 
       (define (plan-store! sp)
-        (let* ((klo (car sp)) (khi (cdr sp))
+        (let* ((klo (car sp)) (khi (cadr sp))
                (k (max klo khi))
                (i (vector-ref vec klo))
                (f (store-form i)))
@@ -588,11 +617,11 @@
       ;; defined after it.
       (for-each plan-pack!
                 (list-sort (lambda (a b)
-                             (< (max (index-of (car a)) (index-of (cdr a)))
-                                (max (index-of (car b)) (index-of (cdr b)))))
+                             (< (apply max (map index-of a))
+                                (apply max (map index-of b))))
                            packs))
       (for-each plan-store!
-                (list-sort (lambda (a b) (< (max (car a) (cdr a)) (max (car b) (cdr b))))
+                (list-sort (lambda (a b) (< (apply max a) (apply max b)))
                            store-packs))
 
       (let loop ((k 0))
