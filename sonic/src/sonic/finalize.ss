@@ -1288,49 +1288,187 @@
     (finalize-program* target arch selected blocks entry classes
                        (if (pair? opt) (car opt) (make-eq-hashtable))))
 
+  ;; --- what a function writes, and the order that lets us know -------------
+  ;;
+  ;; Every physical register a finished listing writes: the destination slot of
+  ;; anything that is not a store or a compare or a branch. Read off the LISTING
+  ;; rather than the allocator's assignment, because that is the only place all
+  ;; of it appears -- the allocation, the spill scratches, the argument setup a
+  ;; caller performs, and the return move.
+  (define (listing-writes arch xs)
+    (let ((acc '()))
+      (for-each
+       (lambda (i)
+         (when (and (pair? i) (pair? (cdr i)) (symbol? (cadr i))
+                    (reg-class arch (cadr i))
+                    (not (memq (car i) '(cmp jmp ret call syscall push
+                                         jl jle je jne jge jg jb jbe ja jae))))
+           (unless (memq (cadr i) acc) (set! acc (cons (cadr i) acc)))))
+       (filter pair? xs))
+      acc))
+
+  ;; The functions this one CALLS, tail calls included. A tail call transfers
+  ;; control, so from a caller's point of view calling f runs whatever f jumps
+  ;; to, and its writes are f's writes.
+  (define (callees-of blocks)
+    (let ((acc '()))
+      (for-each
+       (lambda (b)
+         (for-each (lambda (i)
+                     (when (and (pair? i) (eq? (car i) 'call) (>= (length i) 4)
+                                (symbol? (cadddr i))
+                                (not (memq (cadddr i) acc)))
+                       (set! acc (cons (cadddr i) acc))))
+                   (cadr (cadr b))))
+       blocks)
+      acc))
+
+  ;; Callees before callers, so a caller is allocated knowing what its callees
+  ;; write. Anything left when no candidate has all its callees resolved is in a
+  ;; CYCLE, and every member of it is emitted with no clobber information --
+  ;; which is exactly the assumption this compiler made everywhere until now, so
+  ;; a cycle costs nothing that was not already being lost.
+  ;;
+  ;; Self recursion is not a cycle here: a loop's back edge is a TAIL call, which
+  ;; selection turns into a jump, and a function is never its own blocker.
+  (define (callee-first fns)
+    (let* ((names (map car fns))
+           (calls (map (lambda (fn)
+                         (cons (car fn)
+                               (filter (lambda (c) (and (memq c names)
+                                                        (not (eq? c (car fn)))))
+                                       (callees-of (cdr fn)))))
+                       fns)))
+      (let loop ((left fns) (done '()) (out '()))
+        (if (null? left)
+            (reverse out)
+            (let ((ready (filter (lambda (fn)
+                                   (for-all (lambda (c) (memq c done))
+                                            (cdr (assq (car fn) calls))))
+                                 left)))
+              (if (null? ready)
+                  ;; a cycle: emit the rest in the order given, unresolved
+                  (append (reverse out) left)
+                  (loop (filter (lambda (fn) (not (memq fn ready))) left)
+                        (append (map car ready) done)
+                        (append (reverse ready) out))))))))
+
   (define (finalize-program* target arch selected blocks entry classes params)
-    (let ((by-label (make-eq-hashtable)))
+    (let ((by-label (make-eq-hashtable))
+          ;; function name -> the registers calling it can destroy. Absent means
+          ;; "not known", which every caller treats as "everything".
+          (clobbers (make-eq-hashtable)))
       (for-each (lambda (b) (hashtable-set! by-label (car b) (cadr b)))
                 (cadddr selected))
-      (map (lambda (fn)
-             (let* ((labels (remq (car fn) (map car (cdr fn))))
-                    (sel-blocks (map (lambda (b)
-                                       (list (car b) (hashtable-ref by-label (car b) '())))
-                                     (cdr fn)))
-                    (ps (hashtable-ref params (car fn) '()))
-                    (pins (parameter-pins target (cdr fn) ps classes))
-                    (alloc (if (null? pins)
-                               (allocate-program arch (cdr fn) classes)
-                               (allocate-program/precolored
-                                (callconv-by-name target) (cdr fn) classes pins))))
-               (finalize-function target arch (car fn) sel-blocks alloc classes labels
-                                  ps
-                                  ;; From the LMACH blocks, `(cdr fn)`, not the
-                                  ;; selected ones: Lmach still names a call's
-                                  ;; arguments as vregs the class table answers
-                                  ;; for, while selection has already turned
-                                  ;; them into stores whose count would have to
-                                  ;; be recovered by pattern matching.
-                                  (outgoing-words-for target (cdr fn) classes)
-                                  (tail-outgoing-words-for target (cdr fn) classes)
-                                  (remat-table target (cdr fn) classes))))
-           ;; NOT THE ORPHAN BUCKET. `partition-into-functions` gathers blocks
-           ;; that no entry reaches under `<unreachable>` so nothing is silently
-           ;; dropped, which is the right thing for it to do and the wrong thing
-           ;; to compile: a block no entry reaches cannot execute.
-           ;;
-           ;; Compiling it is not merely wasted bytes. The bucket is not a
-           ;; procedure -- it has no parameter list, so it is treated as
-           ;; receiving zero incoming stack words, and a tail call inside it that
-           ;; needs one looks like a tail call that would grow the stack. That
-           ;; refusal is correct for a real function and meaningless here, and it
-           ;; aborts the compile over code that never runs.
-           ;;
-           ;; It became reachable when inline.ss started working: inlining a
-           ;; procedure at its every call site leaves the original binding with
-           ;; no callers, which is exactly what this bucket collects. Removing
-           ;; the binding is dead code elimination and belongs to a pass that
-           ;; does that; declining to emit machine code for it belongs here.
-           (filter (lambda (fn) (not (eq? (car fn) '<unreachable>)))
-                   (partition-into-functions blocks entry)))))
+      (let* (;; NOT THE ORPHAN BUCKET. `partition-into-functions` gathers blocks
+             ;; that no entry reaches under `<unreachable>` so nothing is
+             ;; silently dropped, which is the right thing for it to do and the
+             ;; wrong thing to compile: a block no entry reaches cannot execute.
+             ;;
+             ;; Compiling it is not merely wasted bytes. The bucket is not a
+             ;; procedure -- it has no parameter list, so it is treated as
+             ;; receiving zero incoming stack words, and a tail call inside it
+             ;; that needs one looks like a tail call that would grow the stack.
+             ;; That refusal is correct for a real function and meaningless here,
+             ;; and it aborts the compile over code that never runs.
+             ;;
+             ;; It became reachable when inline.ss started working: inlining a
+             ;; procedure at its every call site leaves the original with no
+             ;; callers, which is exactly what this bucket collects.
+             (fns (filter (lambda (fn) (not (eq? (car fn) '<unreachable>)))
+                          (partition-into-functions blocks entry)))
+             (out (make-eq-hashtable)))
+
+        (define (finalize-one fn)
+          (let* ((labels (remq (car fn) (map car (cdr fn))))
+                 (sel-blocks (map (lambda (b)
+                                    (list (car b)
+                                          (hashtable-ref by-label (car b) '())))
+                                  (cdr fn)))
+                 (ps (hashtable-ref params (car fn) '()))
+                 (pins (parameter-pins target (cdr fn) ps classes))
+                 ;; WHAT A CALL DESTROYS, both halves.
+                 ;;
+                 ;; The callee's own writes, which `clobbers` records, AND the
+                 ;; ARGUMENT REGISTERS this call site fills, which are nobody's
+                 ;; writes but the caller's own. Missing the second half is not a
+                 ;; missed optimisation: it hands a value a register that the
+                 ;; argument setup a few instructions later overwrites. It did
+                 ;; not matter while every live value spilled at every call --
+                 ;; nothing was in a register to lose -- and it matters the
+                 ;; moment one is allowed to stay.
+                 ;;
+                 ;; The return registers go in for the same reason: the call
+                 ;; sequence moves its result out of one, and on x86-64 the
+                 ;; float return register xmm0 IS allocatable.
+                 (clobbers-of
+                  (lambda (i)
+                    (let* ((cc (callconv-by-name target))
+                           (callee (and (pair? i) (>= (length i) 4)
+                                        (symbol? (cadddr i)) (cadddr i)))
+                           (c (and callee (hashtable-ref clobbers callee #f))))
+                      (and c
+                           (append
+                            c
+                            ;; the argument registers this site fills
+                            (let loop ((as (cddddr i))
+                                       (n (make-eq-hashtable)) (acc '()))
+                              (if (null? as)
+                                  acc
+                                  (let* ((cl (or (and (symbol? (car as))
+                                                      (hashtable-ref classes
+                                                                     (car as) #f))
+                                                 'raw-word))
+                                         (k (hashtable-ref n cl 0))
+                                         (r (arg-register cc cl k)))
+                                    (hashtable-set! n cl (+ k 1))
+                                    (loop (cdr as) n (if r (cons r acc) acc)))))
+                            (apply append
+                                   (map (lambda (cl) (return-registers cc cl))
+                                        '(tagged raw-word raw-f64))))))))
+                 (alloc (if (null? pins)
+                            (allocate-program/clobbers arch (cdr fn) classes
+                                                       clobbers-of)
+                            (allocate-program/precolored
+                             (callconv-by-name target) (cdr fn) classes pins)))
+                 (done
+                  (finalize-function
+                   target arch (car fn) sel-blocks alloc classes labels ps
+                   ;; From the LMACH blocks, `(cdr fn)`, not the selected ones:
+                   ;; Lmach still names a call's arguments as vregs the class
+                   ;; table answers for, while selection has already turned them
+                   ;; into stores whose count would have to be recovered by
+                   ;; pattern matching.
+                   (outgoing-words-for target (cdr fn) classes)
+                   (tail-outgoing-words-for target (cdr fn) classes)
+                   (remat-table target (cdr fn) classes))))
+            ;; What this one writes, for whoever calls it. Its own callees are
+            ;; already recorded -- that is what `callee-first` buys -- so the
+            ;; union closes over the call graph without a separate fixpoint.
+            (hashtable-set!
+             clobbers (car fn)
+             (let loop ((cs (callees-of (cdr fn)))
+                        (acc (listing-writes arch (finalized-listing done))))
+               (cond
+                ((null? cs) acc)
+                ((eq? (car cs) (car fn)) (loop (cdr cs) acc))
+                (else
+                 (let ((c (hashtable-ref clobbers (car cs) #f)))
+                   (if c
+                       (loop (cdr cs)
+                             (append (filter (lambda (r) (not (memq r acc))) c)
+                                     acc))
+                       ;; a callee we know nothing about taints this one too
+                       (loop '() (append (arch-value arch) (arch-raw arch)
+                                         (arch-float arch)))))))))
+            done))
+
+        ;; FINALIZED CALLEE-FIRST, RETURNED IN IMAGE ORDER. A caller can only be
+        ;; allocated against real clobber sets once its callees are emitted, so
+        ;; the walk order is the call graph's. The image's layout is not the call
+        ;; graph's business, and reordering it would move every function in the
+        ;; object file for a reason that has nothing to do with them.
+        (for-each (lambda (fn) (hashtable-set! out (car fn) (finalize-one fn)))
+                  (callee-first fns))
+        (map (lambda (fn) (hashtable-ref out (car fn) #f)) fns))))
   )

@@ -18,7 +18,8 @@
 
 (library (sonic regalloc)
   (export allocate live-intervals live-intervals/arch physical? label-operand?
-          allocate-program allocate-functions live-intervals/cfg
+          allocate-program allocate-program/clobbers call-sites
+          allocate-functions live-intervals/cfg
           partition-into-functions call-positions
           instr-def instr-uses transfer-uses transfer-targets
           make-alloc-result alloc-result? alloc-result-map
@@ -418,8 +419,44 @@
       tbl))
 
   (define (allocate-program arch blocks classes)
-    (allocate/intervals* arch (live-intervals/cfg blocks arch) classes
-                         (call-positions blocks) (move-hints blocks)))
+    (allocate-program/clobbers arch blocks classes (lambda (callee) #f)))
+
+  ;; Allocation that knows what each callee actually writes.
+  ;;
+  ;; `clobbers-of` maps a callee's name to the list of physical registers that
+  ;; calling it can destroy, or #f for "assume everything" -- which is what an
+  ;; unknown callee, a runtime routine, or a member of a recursive cycle gets,
+  ;; and is exactly the behaviour every caller had before this existed.
+  ;; `destroys-of` maps a CALL INSTRUCTION to every register that survives it
+  ;; destroyed -- the callee's own writes AND the argument registers this call
+  ;; site fills -- or #f for "assume everything", which is what an unknown
+  ;; callee, a runtime routine, or a member of a recursive cycle gets, and is
+  ;; exactly the behaviour every caller had before this existed.
+  (define (allocate-program/clobbers arch blocks classes destroys-of)
+    (let ((sites (call-sites blocks)))
+      (allocate/intervals* arch (live-intervals/cfg blocks arch) classes
+                           (map car sites) (move-hints blocks)
+                           ;; interval -> the registers destroyed by the calls it
+                           ;; spans, or #f when it spans none
+                           (lambda (iv)
+                             (let loop ((ss sites) (acc '()) (any #f))
+                               (cond
+                                ((null? ss) (and any acc))
+                                ((and (< (cadr iv) (car (car ss)))
+                                      (>= (caddr iv) (car (car ss))))
+                                 (let ((c (destroys-of (cdr (car ss)))))
+                                   (if c
+                                       (loop (cdr ss)
+                                             (append (filter (lambda (r)
+                                                               (not (memq r acc)))
+                                                             c)
+                                                     acc)
+                                             #t)
+                                       (loop (cdr ss) (all-registers arch) #t))))
+                                (else (loop (cdr ss) acc any))))))))
+
+  (define (all-registers arch)
+    (append (arch-value arch) (arch-raw arch) (arch-float arch)))
 
   ;; The instruction positions at which a call happens, in the same numbering
   ;; `live-intervals/cfg` uses.
@@ -446,6 +483,34 @@
        blocks)
       (reverse acc)))
 
+  ;; The same, but carrying the whole CALL INSTRUCTION: (position . instr).
+  ;;
+  ;; The instruction rather than just the callee's name, because a call destroys
+  ;; two different things and only one of them is the callee's doing. The callee
+  ;; writes whatever its body writes; the CALL SITE writes the argument
+  ;; registers, and those are decided by this instruction's operands and the
+  ;; convention. Naming only the callee loses the second half, and losing it
+  ;; hands a caller a register it is about to overwrite itself.
+  (define (call-sites blocks)
+    (let ((acc '()) (pos 0))
+      (for-each
+       (lambda (b)
+         (let* ((blk (cadr b)) (instrs (cadr blk)) (t (caddr blk))
+                (tail (and (pair? instrs)
+                           (eq? (car t) 'ret)
+                           (let ((last (car (reverse instrs))))
+                             (and (eq? (car last) 'call)
+                                  (eq? (cadr last) (cadr t))
+                                  last)))))
+           (for-each (lambda (i)
+                       (when (and (eq? (car i) 'call) (not (eq? i tail)))
+                         (set! acc (cons (cons pos i) acc)))
+                       (set! pos (+ pos 1)))
+                     instrs)
+           (set! pos (+ pos 1))))
+       blocks)
+      (reverse acc)))
+
   (define (allocate/intervals arch ivals classes)
     (allocate/intervals* arch ivals classes '()))
 
@@ -469,15 +534,31 @@
       ((arch ivals classes calls)
        (allocate/intervals* arch ivals classes calls (make-eq-hashtable)))
       ((arch ivals classes calls hints)
-       (allocate/intervals** arch ivals classes calls hints))))
+       (allocate/intervals* arch ivals classes calls hints #f))
+      ((arch ivals classes calls hints clobbers-across)
+       (allocate/intervals** arch ivals classes calls hints clobbers-across))))
 
-  (define (allocate/intervals** arch ivals classes calls hints)
-    (let ((crosses-call?
-           (lambda (iv)
-             (exists (lambda (c) (and (< (cadr iv) c) (>= (caddr iv) c))) calls))))
-      (allocate/scan arch ivals classes crosses-call? hints)))
+  (define (allocate/intervals** arch ivals classes calls hints clobbers-across)
+    (let* ((crosses-call?
+            (lambda (iv)
+              (exists (lambda (c) (and (< (cadr iv) c) (>= (caddr iv) c))) calls)))
+           ;; Without a clobber map, a call destroys everything -- which is what
+           ;; this file assumed unconditionally until the map existed.
+           (across (or clobbers-across
+                       (lambda (iv)
+                         (and (crosses-call? iv) (all-registers arch))))))
+      (allocate/scan arch ivals classes crosses-call? hints across)))
 
-  (define (allocate/scan arch ivals classes crosses-call? hints)
+  (define allocate/scan
+    (case-lambda
+      ((arch ivals classes crosses-call? hints)
+       (allocate/scan* arch ivals classes crosses-call? hints
+                       (lambda (iv)
+                         (and (crosses-call? iv) (all-registers arch)))))
+      ((arch ivals classes crosses-call? hints across)
+       (allocate/scan* arch ivals classes crosses-call? hints across))))
+
+  (define (allocate/scan* arch ivals classes crosses-call? hints across)
     (let* ([ivals ivals]
            [assign (make-eq-hashtable)]
            [spills '()]
@@ -507,13 +588,40 @@
                            (expire (cdr as) keep))]
                         [else (expire (cdr as) (cons (car as) keep))]))])
                 (if (crosses-call? iv)
-                    ;; No register at all: a call destroys the whole pool, so
-                    ;; this value has to live in the frame across it. Not the
-                    ;; eviction path -- evicting someone else would still leave
-                    ;; this one in a register the callee overwrites.
-                    (begin
-                      (set! spills (cons v spills))
-                      (scan (cdr is) still-active))
+                    ;; A REGISTER THE CALLEE DOES NOT WRITE, or the frame.
+                    ;;
+                    ;; This used to spill unconditionally, on the grounds that
+                    ;; "our own convention saves nothing: a called function uses
+                    ;; the whole pool". That is true of the CONVENTION and false
+                    ;; of the program, and this is a whole-program compiler:
+                    ;; measured on nbody, no function writes more than half the
+                    ;; integer pool and the leaves write one or two. inner%24
+                    ;; leaves r8 and r9 untouched -- its parameters arrive there
+                    ;; and `parameter-pins` keeps them there, so it reads them
+                    ;; and never writes them -- while its caller spilled exactly
+                    ;; those two values across the call.
+                    ;;
+                    ;; `across` answers with the union of what the calls this
+                    ;; interval spans can destroy, and answers with the whole
+                    ;; register file for an unknown callee or a recursive cycle,
+                    ;; which reproduces the old behaviour exactly.
+                    ;;
+                    ;; Not the eviction path. Evicting the furthest active
+                    ;; interval would hand this value a register the callee may
+                    ;; still destroy, so there is nothing to win by it; if no
+                    ;; surviving register is free, the frame is the answer.
+                    (let* ([bad (across iv)]
+                           [pool (hashtable-ref free sc '())]
+                           [safe (filter (lambda (r) (not (memq r bad))) pool)])
+                      (if (null? safe)
+                          (begin
+                            (set! spills (cons v spills))
+                            (scan (cdr is) still-active))
+                          (let ([r (car safe)])
+                            (check-assignment! arch sc r)
+                            (hashtable-set! assign v r)
+                            (hashtable-set! free sc (remq r pool))
+                            (scan (cdr is) (cons iv still-active)))))
                 (let ([pool (hashtable-ref free sc '())])
                   (if (null? pool)
                       ;; SPILL. Poletto & Sarkar spill the active interval with
