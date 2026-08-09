@@ -69,6 +69,117 @@
             ((memq v (cdr (car is))) #t)
             (else (loop (cdr is))))))
 
+  ;; --- reading a register, including through an addressing mode -------------
+  ;;
+  ;; `used-later?` above asks `(memq v (cdr i))`, which is a SHALLOW test: it
+  ;; sees `(mov rax rbx)` and misses `(mov rax (mem rbx rcx 8 16))` entirely.
+  ;; That is fine for the pattern it serves, where the operands are known to be
+  ;; bare registers, and it is not fine for the two passes below, which delete
+  ;; instructions on the strength of the answer. A base register mistaken for
+  ;; dead is a deleted definition and a wrong program.
+  (define (mentions-reg? x r)
+    (cond ((symbol? x) (eq? x r))
+          ;; An immediate holds no register, and a label is a name that only
+          ;; looks like one.
+          ((and (pair? x) (memq (car x) '(imm label))) #f)
+          ((pair? x) (or (mentions-reg? (car x) r) (mentions-reg? (cdr x) r)))
+          (else #f)))
+
+  ;; Opcodes that write their destination without reading it. Everything else on
+  ;; x86-64 is two-address -- `add dst, src` reads dst -- so the list is short
+  ;; and being absent from it costs an optimisation and never correctness.
+  (define pure-moves '(mov movsd lea movzx vmovupd vmovddup))
+
+  (define (pure-move-to? i r)
+    (and (pair? i) (memq (car i) pure-moves) (= (length i) 3)
+         (eq? (cadr i) r)
+         ;; `lea rax, [rax+1]` writes rax and reads it; not a kill.
+         (not (mentions-reg? (caddr i) r))))
+
+  (define (reads-reg? i r)
+    (and (pair? i)
+         (if (and (memq (car i) pure-moves) (= (length i) 3) (symbol? (cadr i)))
+             ;; the destination slot is written, not read
+             (mentions-reg? (caddr i) r)
+             (mentions-reg? (cdr i) r))))
+
+  ;; Anything that leaves the block. A `call` is here because it reads argument
+  ;; registers that appear nowhere in its operands, and a branch is here because
+  ;; the other path is not in front of us.
+  (define (leaves-block? i)
+    (and (pair? i)
+         (memq (car i) '(call ret jmp syscall
+                         jl jle je jne jge jg jb jbe ja jae jo jno))))
+
+  ;; Is `r` dead from here -- overwritten before it is read, without leaving the
+  ;; block? Conservative at every edge: a label means another path arrives here
+  ;; and a transfer means we cannot see what reads it, and both answer "no".
+  (define (dead-from? r is)
+    (let scan ((is is))
+      (cond ((null? is) #f)
+            ((symbol? (car is)) #f)            ; a label: another path joins
+            ((reads-reg? (car is) r) #f)
+            ((pure-move-to? (car is) r) #t)    ; overwritten, so it was dead
+            ((leaves-block? (car is)) #f)
+            (else (scan (cdr is))))))
+
+  ;; --- a copy nobody reads --------------------------------------------------
+  ;;
+  ;;     call inner%24        ->    call inner%24
+  ;;     mov  r8, rax              ...
+  ;;     ...                       mov  r8, r12
+  ;;     mov  r8, r12
+  ;;
+  ;; A call's result is moved out of the return register whether or not anything
+  ;; wants it, because selection names every value including the ones nobody
+  ;; reads. nbody's outer loop calls the inner loop for its EFFECT on the
+  ;; velocity vectors; the value it returns is nil and is dropped.
+  ;;
+  ;; Not doable before allocation. The vreg has a live interval there, however
+  ;; short, and the allocator gives it a register accordingly; it is only over
+  ;; the finished listing that the write is visibly overwritten before any read.
+  (define (drop-dead-copies instrs stats)
+    (let loop ((is instrs) (out '()))
+      (cond
+       ((null? is) (reverse out))
+       ((and (pair? (car is)) (memq (car (car is)) pure-moves)
+             (= (length (car is)) 3) (symbol? (cadr (car is)))
+             (dead-from? (cadr (car is)) (cdr is)))
+        (peephole-stats-fused-set! stats (+ 1 (peephole-stats-fused stats)))
+        (loop (cdr is) out))
+       (else (loop (cdr is) (cons (car is) out))))))
+
+  ;; --- a store that went through the scratch --------------------------------
+  ;;
+  ;;     mov rax, rcx          ->   mov [rsp+8], rcx
+  ;;     mov [rsp+8], rax
+  ;;
+  ;; The spiller stores a value by way of the scratch register because that is
+  ;; the shape that always works. When the value was already in a register it
+  ;; did not need to: x86-64 stores a register to memory directly.
+  ;;
+  ;; SOURCE MUST BE A REGISTER. Folding a memory source would ask for a
+  ;; memory-to-memory `mov`, which x86-64 does not have, and the encoder would
+  ;; report bad operands somewhere far from here.
+  (define (fold-store-through-scratch instrs stats)
+    (let loop ((is instrs) (out '()))
+      (cond
+       ((null? is) (reverse out))
+       ((and (pair? (cdr is))
+             (let ((a (car is)) (b (cadr is)))
+               (and (pair? a) (memq (car a) pure-moves) (= (length a) 3)
+                    (symbol? (cadr a)) (symbol? (caddr a))
+                    (pair? b) (eq? (car b) (car a)) (= (length b) 3)
+                    (pair? (cadr b)) (eq? (car (cadr b)) 'mem)
+                    (eq? (caddr b) (cadr a))
+                    ;; the address must not be built out of the scratch
+                    (not (mentions-reg? (cadr b) (cadr a)))
+                    (dead-from? (cadr a) (cddr is)))))
+        (peephole-stats-fused-set! stats (+ 1 (peephole-stats-fused stats)))
+        (loop (cddr is)
+              (cons (list (car (car is)) (cadr (cadr is)) (caddr (car is))) out)))
+       (else (loop (cdr is) (cons (car is) out))))))
+
   ;; The pattern, over the SELECTED stream:
   ;;   (cmp a b) (setcc r) (movzx r r) ... (cmp r 0) (jne L)
   ;; collapses when nothing between them touches the flags or r, and r is dead.
@@ -509,12 +620,22 @@
                   ;; immediate folding produces, so the order is forced.
                   ;; index folding LAST: it consumes the `lea` that the copy-add
                   ;; fold produces, so the order is forced twice over.
-                  (fuse-index
-                   (fuse-copy-imul
-                    (fuse-lea
-                    (fold-immediates
-                     (fuse-sub-neg (fuse-compare-branch instrs stats) stats)
-                     stats)
+                  ;; The two copy passes go LAST, and in this order. Folding a
+                  ;; store through the scratch leaves the scratch's own load
+                  ;; with no reader, which is then a dead copy -- so running
+                  ;; them the other way round finds half as much. Both want
+                  ;; every earlier rewrite already done, since each of those
+                  ;; removes readers.
+                  (drop-dead-copies
+                   (fold-store-through-scratch
+                    (fuse-index
+                     (fuse-copy-imul
+                      (fuse-lea
+                       (fold-immediates
+                        (fuse-sub-neg (fuse-compare-branch instrs stats) stats)
+                        stats)
+                       stats)
+                      stats)
                      stats)
                     stats)
                    stats)

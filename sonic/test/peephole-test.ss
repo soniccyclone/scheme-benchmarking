@@ -232,6 +232,80 @@
                        (mov rdi rax)))
              '((imul r10 rcx (imm 3)) (mov rdi rax))))
 
+;; --- copies nobody reads ----------------------------------------------------
+;;
+;; These two DELETE instructions, so the refusals matter more than the hits. A
+;; register wrongly believed dead is a deleted definition, which is a wrong
+;; program rather than a slow one -- and the tests that would catch it are the
+;; ones below where the answer is "left alone".
+
+(ck! "a copy overwritten before it is read is dropped"
+     (equal? (peeped '((mov r8 rax) (mov rdx r13) (mov r8 r12)))
+             '((mov rdx r13) (mov r8 r12))))
+
+;; THE READ THROUGH AN ADDRESSING MODE is the case a shallow membership test
+;; gets wrong, and it gets it wrong silently: `rbx` appears nowhere in the
+;; instruction's top-level operands, only inside the memory operand.
+(ck! "a register read only as an ADDRESS BASE is not dead"
+     (equal? (peeped '((mov rbx rax) (mov rdx (mem rbx #f 1 8)) (mov rbx r12)))
+             '((mov rbx rax) (mov rdx (mem rbx #f 1 8)) (mov rbx r12))))
+
+(ck! "nor as an address INDEX"
+     (equal? (peeped '((mov rbx rax) (mov rdx (mem r9 rbx 8 0)) (mov rbx r12)))
+             '((mov rbx rax) (mov rdx (mem r9 rbx 8 0)) (mov rbx r12))))
+
+;; A call reads its argument registers, and they appear nowhere in its operands.
+;; Stopping at the call is the only safe answer.
+(ck! "a copy into an argument register before a call is NOT dropped"
+     (equal? (peeped '((mov r8 rax) (call (label f)) (mov r8 r12)))
+             '((mov r8 rax) (call (label f)) (mov r8 r12))))
+
+(ck! "and a copy into the return register before a ret is not dropped"
+     (equal? (peeped '((mov rax rbx) (ret)))
+             '((mov rax rbx) (ret))))
+
+;; NO LABEL CASE HERE, and that is the contract rather than an omission:
+;; `peephole-runs` in finalize.ss splits the listing at every label and calls
+;; this on straight-line runs only, because fusing a compare with a branch
+;; across a branch target would hand the branch flags that some paths never
+;; set. `dead-from?` still refuses at a label, defensively, but no caller can
+;; reach it -- and the passes above this one assume a label-free run outright.
+
+;; `lea rax, [rax+1]` writes rax and READS it, so it does not kill the value the
+;; instruction before it put there. Both writes survive here because the third
+;; instruction reads the result: drop either one and the read gets the wrong
+;; number.
+(ck! "a self-referencing lea reads its own destination, so it kills nothing"
+     (equal? (peeped '((mov rax rbx) (lea rax (mem rax #f 1 1)) (mov rdx rax)))
+             '((mov rax rbx) (lea rax (mem rax #f 1 1)) (mov rdx rax))))
+
+;; --- a store that went through the scratch ----------------------------------
+
+(ck! "a register stored via the scratch stores directly, and the copy goes"
+     (equal? (peeped '((mov rax rcx) (mov (mem rsp #f 1 8) rax) (mov rax r12)))
+             '((mov (mem rsp #f 1 8) rcx) (mov rax r12))))
+
+;; x86-64 has no memory-to-memory move, so a memory SOURCE cannot be folded --
+;; doing it would hand the encoder two memory operands and the report would come
+;; from somewhere else entirely.
+(ck! "a memory source is NOT folded into the store: that mov does not exist"
+     (equal? (peeped '((mov rax (mem rsp #f 1 0))
+                       (mov (mem rsp #f 1 8) rax)
+                       (mov rax r12)))
+             '((mov rax (mem rsp #f 1 0))
+               (mov (mem rsp #f 1 8) rax)
+               (mov rax r12))))
+
+(ck! "nor when the scratch is still live afterwards"
+     (equal? (peeped '((mov rax rcx) (mov (mem rsp #f 1 8) rax) (mov rdx rax)))
+             '((mov rax rcx) (mov (mem rsp #f 1 8) rax) (mov rdx rax))))
+
+;; The address itself may be built out of the scratch, and then the fold would
+;; destroy the address before using it.
+(ck! "nor when the scratch is part of the ADDRESS"
+     (equal? (peeped '((mov rax rcx) (mov (mem rax #f 1 8) rax) (mov rax r12)))
+             '((mov rax rcx) (mov (mem rax #f 1 8) rax) (mov rax r12))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))
