@@ -158,10 +158,24 @@
              (eq? (car (cadr is)) 'sub)
              (eq? (car (caddr is)) 'mov)
              (let ((t (cadr (car is))))
-               (and (eq? (cadr (cadr is)) t)
-                    (eq? (caddr (caddr is)) t)
-                    ;; the temp must be dead after
-                    (not (used-later? t (cdddr is))))))
+               (and
+                ;; THE SUB MUST BE THREE-ADDRESS: (sub t t src2). Only slot 1
+                ;; was checked, which a two-address `(sub t src2)` also
+                ;; satisfies -- and then `src2` was read from slot 3, off the
+                ;; end of the list. It never fired that way because no
+                ;; two-address sub had previously landed in this position, so
+                ;; the pass raised the first time one did. Requiring both slots
+                ;; to name the temp is the shape the rewrite below assumes.
+                ;;
+                ;; The two-address case IS fusible by the same argument, and is
+                ;; deliberately left alone here: adding it is a new
+                ;; optimisation, not part of making this one match its body.
+                (= (length (cadr is)) 4)
+                (eq? (cadr (cadr is)) t)
+                (eq? (caddr (cadr is)) t)
+                (eq? (caddr (caddr is)) t)
+                ;; the temp must be dead after
+                (not (used-later? t (cdddr is))))))
         (let* ((src1 (caddr (car is)))
                (src2 (cadddr (cadr is)))
                (dst  (cadr (caddr is))))

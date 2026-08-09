@@ -238,6 +238,52 @@
                     (allocate/precolored ccr prog cls
                                          (list (make-pin 'sink 'a0 'tagged))))))))
 
+;; --- precoloring over a CFG ------------------------------------------------
+;;
+;; The single-block entry point is not enough for the case this exists to serve.
+;; A loop parameter arrives in an argument register and is written back to that
+;; register on the back edge, and both of those are only visible across blocks.
+;;
+;; What makes the CFG version its own function rather than a call to the other
+;; one is the TRANSFER: a block carries `ret` and `branch-if` separately from
+;; its instructions, and a pinned vreg read there would put its live range back
+;; into the scan that the hiding exists to keep it out of.
+
+(define cfg-prog
+  '((entry (block ((const one raw-word 1)
+                   (add nxt raw-word i one))
+                  (branch-if nxt body done)))
+    (body  (block ((add acc raw-word i one))
+                  (ret acc)))
+    (done  (block () (ret i)))))
+(define cfg-cls (make-eq-hashtable))
+(for-each (lambda (v) (hashtable-set! cfg-cls v 'raw-word)) '(one nxt i acc))
+
+(let* ([pins (list (make-pin 'i 'rcx 'raw-word))]
+       [res (allocate-program/precolored ccx cfg-prog cfg-cls pins)]
+       [m (alloc-result-map res)])
+  (ck! "x86-64: a vreg pinned across a CFG lands exactly where told"
+       (eq? (hashtable-ref m 'i #f) 'rcx))
+  (ck! "and no other vreg was handed that register, in any block"
+       (for-all (lambda (v) (not (eq? (hashtable-ref m v #f) 'rcx)))
+                '(one nxt acc)))
+  (ck! "the pinned vreg is live in the TRANSFER of the last block, and hiding
+       it there is what keeps the scan from re-placing it"
+       (null? (alloc-result-spills res)))
+  (ck! "the ORIGINAL arch comes back out, not the narrowed one"
+       (eq? (alloc-result-arch res) arch-x86-64)))
+
+;; Two pins on one register is a caller bug here rather than a live-range
+;; question, because the pins come from a parameter list where distinct
+;; parameters take distinct argument registers by construction. Checked
+;; directly, and refused.
+(ck! "two pins claiming the same register are REFUSED over a CFG too"
+     (raises? (lambda ()
+                (allocate-program/precolored
+                 ccx cfg-prog cfg-cls
+                 (list (make-pin 'i 'rcx 'raw-word)
+                       (make-pin 'acc 'rcx 'raw-word))))))
+
 ;; --- tail calls ------------------------------------------------------------
 
 (define even-frame (make-frame 'even? 4))

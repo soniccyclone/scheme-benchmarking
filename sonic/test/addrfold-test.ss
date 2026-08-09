@@ -79,6 +79,71 @@
                               entry)))
              '((add t raw-word i j) (load v raw-f64 p t))))
 
+;; --- the constant out of the register, where the result is a VALUE ----------
+;;
+;; The rules above delete the add entirely, because its result was only ever an
+;; address. A loop counter is not an address: the add has to survive. What does
+;; NOT have to survive is the register holding the 1, and that register is the
+;; whole point -- in nbody's force loop it and the stride constant were the two
+;; values that pushed the block over its register budget and made it spill.
+
+(ck! "an add of a constant whose result is a value keeps the add and drops the register"
+     (let*-values (((p) (fold '(program ((entry (block ((const k raw-word 1)
+                                                       (add t raw-word i k))
+                                                      (ret t))))
+                                entry)))
+                   ((q st) (dce-program p)))
+       (equal? (instrs q) '((add-imm t raw-word 1 i)))))
+
+(ck! "and the same for a multiply, whose constant is the element stride"
+     (let*-values (((p) (fold '(program ((entry (block ((const k raw-word 3)
+                                                       (mul t raw-word i k))
+                                                      (ret t))))
+                                entry)))
+                   ((q st) (dce-program p)))
+       (equal? (instrs q) '((mul-imm t raw-word 3 i)))))
+
+(ck! "either operand order, for both"
+     (and (equal? (instrs (fold '(program ((entry (block ((const k raw-word 5)
+                                                         (add t raw-word k i))
+                                                        (ret t))))
+                                  entry)))
+                  '((const k raw-word 5) (add-imm t raw-word 5 i)))
+          (equal? (instrs (fold '(program ((entry (block ((const k raw-word 7)
+                                                         (mul t raw-word k i))
+                                                        (ret t))))
+                                  entry)))
+                  '((const k raw-word 7) (mul-imm t raw-word 7 i)))))
+
+;; RESTRICTED TO raw-word, and the restriction is the interesting half. A tagged
+;; add carries a tagged datum, whose bit pattern is not the integer written in
+;; the source; folding one would put the wrong number in the instruction. A
+;; float add is not this instruction at all.
+(ck! "a tagged add is left alone, because its constant is not the integer it reads as"
+     (equal? (instrs (fold '(program ((entry (block ((const k tagged 1)
+                                                    (add t tagged i k))
+                                                   (ret t))))
+                             entry)))
+             '((const k tagged 1) (add t tagged i k))))
+
+(ck! "a float add is left alone"
+     (equal? (instrs (fold '(program ((entry (block ((const k raw-f64 1)
+                                                    (add t raw-f64 i k))
+                                                   (ret t))))
+                             entry)))
+             '((const k raw-f64 1) (add t raw-f64 i k))))
+
+;; A constant on BOTH sides is a constant, not an operation, and belongs to
+;; whatever folds constants -- not here, where rewriting it would leave an
+;; instruction whose one operand is also a literal.
+(ck! "constants on both sides are left for the constant folder"
+     (equal? (instrs (fold '(program ((entry (block ((const a raw-word 2)
+                                                    (const b raw-word 3)
+                                                    (add t raw-word a b))
+                                                   (ret t))))
+                             entry)))
+             '((const a raw-word 2) (const b raw-word 3) (add t raw-word a b))))
+
 ;; --- end to end, on nbody ---------------------------------------------------
 ;;
 ;; The measurement that justifies the pass. Before it, the pairwise force loop

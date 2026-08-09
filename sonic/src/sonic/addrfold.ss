@@ -116,6 +116,34 @@
                   (list 'store-at (cadr i) (caddr i) (cdr f) (cadddr i) (car f)
                         (cadr (cddddr i))))
                 i)))
+         ;; (add dst raw-word a b), where one side is a constant.
+         ;;
+         ;; The two rules above remove the add entirely when its result is only
+         ;; ever an address. This one is for the result that is a VALUE -- the
+         ;; loop counter is the case that pays -- where the add has to survive
+         ;; but the constant does not need a register to sit in.
+         ;;
+         ;; Restricted to `raw-word` on purpose. A tagged add carries a tagged
+         ;; datum and a float add is not this instruction at all; the counter is
+         ;; the measured case and widening it would mean reasoning about
+         ;; representations this pass has no business knowing.
+         ;; The same for `mul`, whose constant is the element stride: nbody
+         ;; derives 3i and 3j, so the 3 is live across the whole block.
+         ((and (pair? i) (memq (car i) '(add mul)) (= (length i) 5)
+               (eq? (caddr i) 'raw-word))
+          (let* ((dst (cadr i)) (a (cadddr i)) (b (car (cddddr i)))
+                 (form (if (eq? (car i) 'add) 'add-imm 'mul-imm))
+                 (ka (and (symbol? a) (hashtable-ref consts a #f)))
+                 (kb (and (symbol? b) (hashtable-ref consts b #f))))
+            (cond
+             ;; Constant on both sides is a constant, not an operation. Left for
+             ;; the folder that owns that question.
+             ((and ka kb) i)
+             (kb (addrfold-stats-folded-set! stats (+ 1 (addrfold-stats-folded stats)))
+                 (list form dst (caddr i) kb a))
+             (ka (addrfold-stats-folded-set! stats (+ 1 (addrfold-stats-folded stats)))
+                 (list form dst (caddr i) ka b))
+             (else i))))
          (else i)))
 
       (let ((out

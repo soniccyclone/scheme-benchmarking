@@ -21,7 +21,8 @@
         (sonic policy) (sonic anf) (sonic assign) (sonic inline) (sonic essa)
         (sonic elide) (sonic repr) (sonic lower) (sonic select) (sonic regs)
         (sonic regalloc) (sonic finalize) (sonic litpool) (sonic object)
-        (sonic target-rv64) (sonic target-x86-64) (sonic globals) (sonic runtime))
+        (sonic target-rv64) (sonic target-x86-64) (sonic globals) (sonic runtime)
+        (sonic driver))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -144,6 +145,47 @@
 (ck! "the two targets emit comparable amounts of code for the same program"
      (let ((r (/ (bytevector-length x86-code) (bytevector-length rv-code))))
        (and (> r 1/2) (< r 2))))
+
+;; --- the loop does not rotate its own parameters ----------------------------
+;;
+;; A parameter arrives in an argument register, and a self tail call has to put
+;; it back into one before jumping. When the allocator picks a DIFFERENT
+;; register for it, both ends become real moves -- and because each parameter
+;; then sits in some other parameter's argument register, the moves form a
+;; permutation that has to be rotated through a temporary. nbody's force loop
+;; paid four moves at the top and four at the bottom of every iteration:
+;;
+;;     inner%24: mov rbx,r9 / mov rax,rcx / mov rcx,rdx / mov rdx,rsi
+;;               mov rsi,rax / mov r9,[rsp+24]
+;;
+;; Pinning each parameter to the register it already arrives in makes the
+;; arrival `mov r, r`, which is deleted outright.
+;;
+;; Asserted as a BOUND rather than as zero. Not every loop-carried value is
+;; unchanged across an iteration -- the counter is not -- so some copies on the
+;; back edge are real work. The rotation is what must not come back, and a
+;; permutation of five parameters cannot hide under a bound of four.
+(let* ((c (compile-sonic src nbody-externs))
+       (inner (let find ((fs (compiled-functions c)))
+                (cond ((null? fs) #f)
+                      ((eq? (finalized-name (car fs)) 'inner%24.201) (car fs))
+                      (else (find (cdr fs))))))
+       (header (let walk ((xs (finalized-listing inner)) (seen #f) (acc '()))
+                 ;; the entry block: from the function label to the first branch
+                 (cond ((null? xs) (reverse acc))
+                       ((symbol? (car xs))
+                        (if seen (reverse acc) (walk (cdr xs) #t acc)))
+                       ((memq (car (car xs)) '(jl jge jle jg je jne jmp))
+                        (reverse acc))
+                       (else (walk (cdr xs) seen (cons (car xs) acc))))))
+       (reg->reg (filter (lambda (i)
+                           (and (eq? (car i) 'mov) (= (length i) 3)
+                                (symbol? (cadr i)) (symbol? (caddr i))))
+                         header)))
+  (ck! "nbody's force loop is found, and its entry block was read"
+       (and inner (pair? header)))
+  (ck! "its parameters are not rotated on arrival: at most one register copy"
+       (<= (length reg->reg) 1)))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)

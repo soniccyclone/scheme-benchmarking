@@ -95,7 +95,7 @@
           make-pin pin? pin-vreg pin-reg pin-class
           pin-ok? check-pins! pins-conflict?
           precolor-return precolor-returns
-          allocate/precolored)
+          allocate/precolored allocate-program/precolored)
   (import (chezscheme)
           (sonic regs)
           (sonic regalloc))
@@ -455,4 +455,63 @@
       ;; The ORIGINAL arch goes back out. Callers reason about the real
       ;; partition, not the temporarily narrowed one.
       (make-alloc-result a m (alloc-result-spills result))))
+
+  ;; The same, over a CFG rather than one block.
+  ;;
+  ;; `hide` cannot be reused: a block carries its transfer separately from its
+  ;; instructions, and `ret`/`branch-if` read a vreg there. A pinned vreg left
+  ;; visible in a transfer would put its live range back into the scan, which
+  ;; is the one thing the hiding exists to prevent.
+  (define (hide-blocks blocks pinned)
+    (define (sub x)
+      (if (and (symbol? x) (memq x pinned)) (list 'pinned x) x))
+    (define (sub-instr i)
+      ;; op, dst, storage class, then operands. The class is not an operand and
+      ;; a shorter instruction has no operands to rewrite.
+      (if (< (length i) 3)
+          (cons (car i) (map sub (cdr i)))
+          (cons (car i)
+                (cons (sub (cadr i)) (cons (caddr i) (map sub (cdddr i)))))))
+    (define (sub-transfer t)
+      (case (car t)
+        ((branch-if) (cons 'branch-if (cons (sub (cadr t)) (cddr t))))
+        ((ret)       (if (pair? (cdr t)) (list 'ret (sub (cadr t))) t))
+        (else t)))
+    (map (lambda (b)
+           (let ((blk (cadr b)))
+             (list (car b)
+                   (list 'block (map sub-instr (cadr blk))
+                         (sub-transfer (caddr blk))))))
+         blocks))
+
+  (define (allocate-program/precolored cc blocks classes pins)
+    (check-pins! cc pins)
+    ;; No live-range test here, unlike the single-block entry point. Pins over a
+    ;; CFG come from the parameter list, where distinct parameters take distinct
+    ;; argument registers by construction; two pins on one register would be a
+    ;; bug in the caller, so it is checked directly and cheaply.
+    (let ((rs (map pin-reg pins)))
+      (unless (= (length rs) (length (remove-duplicates rs)))
+        (error 'allocate-program/precolored
+               "two pins claim the same register" rs)))
+    (let* ((a (callconv-arch cc))
+           (taken (map pin-reg pins))
+           (pinned-vregs (map pin-vreg pins))
+           (reduced (make-arch (arch-name a)
+                               (without (arch-value a) taken)
+                               (without (arch-raw a) taken)
+                               (without (arch-float a) taken)
+                               (arch-structural a)
+                               (arch-scratch a)))
+           (result (allocate-program reduced (hide-blocks blocks pinned-vregs)
+                                     classes))
+           (m (alloc-result-map result)))
+      (for-each (lambda (p) (hashtable-set! m (pin-vreg p) (pin-reg p))) pins)
+      (make-alloc-result a m (alloc-result-spills result))))
+
+  (define (remove-duplicates xs)
+    (let loop ((xs xs) (acc '()))
+      (cond ((null? xs) (reverse acc))
+            ((memq (car xs) acc) (loop (cdr xs) acc))
+            (else (loop (cdr xs) (cons (car xs) acc))))))
   )

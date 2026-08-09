@@ -291,6 +291,35 @@
               (let ((n (offset-disp 'rv64-select d)))
                 (if (float? sc) `((fsd ,val ,t ,n)) `((sd ,val ,t ,n)))))))
 
+  ;; Adding a constant. RV64 spells it directly and three-address, so this is
+  ;; the one selection rule in this file that is a single instruction with
+  ;; nothing to arrange around it.
+  ;;
+  ;; The range is the I-type's 12-bit signed field. Outside it the constant has
+  ;; to be built in a register, which is exactly the instruction the pass that
+  ;; produced `add-imm` was removing -- so it refuses rather than silently
+  ;; emitting a truncated offset.
+  (define (r:add-imm dst sc srcs)
+    (arity-check! 'rv64-select 2 srcs)
+    (let ((d (car srcs)) (src (cadr srcs)))
+      (unless (and (exact? d) (integer? d) (<= -2048 d 2047))
+        (error 'rv64-select "add-imm constant does not fit an I-type field" d))
+      `((addi ,dst ,src ,d))))
+
+  ;; Multiplying by a constant. RV64 has no multiply-immediate, so the constant
+  ;; has to be built -- which is exactly the instruction the pass that produced
+  ;; `mul-imm` removed. Nothing is lost: it goes into the reserved address
+  ;; scratch instead of into an allocatable register, so the saving is the
+  ;; REGISTER, which is what the pass was after, and the instruction count is
+  ;; unchanged.
+  (define (r:mul-imm dst sc srcs)
+    (arity-check! 'rv64-select 2 srcs)
+    (let ((d (car srcs)) (src (cadr srcs)) (t (rv64-addr-scratch)))
+      (unless (and (exact? d) (integer? d) (<= -2048 d 2047))
+        (error 'rv64-select "mul-imm constant does not fit an I-type field" d))
+      `((addi ,t zero ,d)
+        (mul ,dst ,src ,t))))
+
   ;; (store <unused> sc base idx val). Lmach's `(op v sc v* ...)` makes the
   ;; destination slot mandatory even for an op with no result, and `store-mach`
   ;; in sonic/src/sonic/fixtures.ss PINS that slot as unused with the base, the
@@ -490,6 +519,8 @@
      (cons 'store    r:store)
      (cons 'load-at  r:load-at)
      (cons 'store-at r:store-at)
+     (cons 'add-imm  r:add-imm)
+     (cons 'mul-imm  r:mul-imm)
      (cons 'move   r:move)
      (cons 'branch    r:jump)
      (cons 'branch-if r:branch-if)

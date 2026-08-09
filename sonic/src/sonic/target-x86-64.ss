@@ -363,6 +363,43 @@
                   ,(mem/disp base idx (+ heap-element-disp (* d word-scale)))
                   ,val)))))
 
+     ;; Adding a constant, with the constant in the instruction.
+     ;;
+     ;; The whole gain here is that the constant no longer occupies a register.
+     ;; The two-address `mov`/`add` is deliberately NOT collapsed into the `lea`
+     ;; that computes the same thing in one instruction, even though the encoder
+     ;; has it and the peephole emits it.
+     ;;
+     ;; `lea` cannot address memory for its destination, and `add` can. A
+     ;; spilled source together with a spilled destination is two operands to
+     ;; serve, and x86-64 reserves ONE integer scratch; `add [rsp+n], k` serves
+     ;; that shape and `lea` refuses it outright. Emitting `lea` here took the
+     ;; compiler from working to raising on a loop that has nothing to do with
+     ;; this optimisation.
+     ;;
+     ;; Nothing is lost. peephole.ss fuses this exact pair back into `lea` once
+     ;; registers are known -- which is the point at which the choice can be
+     ;; made on evidence rather than on hope.
+     (cons 'add-imm
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'x86-64-selector
+                      "add-imm expects (add-imm dst sc d src)" dst srcs))
+             `((mov ,dst ,(cadr srcs))
+               (add ,dst (imm ,(car srcs))))))
+
+     ;; Multiplying by a constant. Unlike the add, this one IS emitted in its
+     ;; three-address form: x86-64's `imul r, r/m, imm` (opcodes 6B and 69)
+     ;; takes its source from memory, so a spilled operand costs the memory
+     ;; operand this instruction was not otherwise using rather than a scratch
+     ;; the target does not have.
+     (cons 'mul-imm
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'x86-64-selector
+                      "mul-imm expects (mul-imm dst sc d src)" dst srcs))
+             `((imul ,dst ,(cadr srcs) (imm ,(car srcs))))))
+
      ;; --- packed pairs -------------------------------------------------------
      ;;
      ;; One 128-bit register holds two doubles, so these are `xmm` operations on

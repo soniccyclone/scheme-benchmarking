@@ -498,6 +498,29 @@
       ;; means here.
       (load-at v sc d v* ...)
       (store-at v sc d v* ...)
+      ;; An integer add of a CONSTANT, with the constant in the instruction
+      ;; instead of in a register: `(add-imm v sc d x)` is `v = x + d`.
+      ;;
+      ;; It exists for the same reason `load-at` does, and the argument is the
+      ;; same one. A loop counter incremented by one lowers to a `const` vreg
+      ;; and an `add` that reads it, and the allocator must place that vreg.
+      ;; peephole.ss folds the constant into the instruction afterwards, so the
+      ;; add costs nothing in the end -- but the REGISTER is already spent, and
+      ;; a peephole cannot give it back. In nbody's pairwise force loop that one
+      ;; register was the difference between the block fitting and spilling.
+      ;;
+      ;; Both targets have a three-address form that adds a small constant
+      ;; without touching flags, so nothing is lost by naming it here: x86-64
+      ;; has `lea`, RV64 has `addi`.
+      (add-imm v sc d v* ...)
+      ;; The same for multiplication: `(mul-imm v sc d x)` is `v = x * d`.
+      ;;
+      ;; nbody's force loop derives `3i` and `3j`, so the constant 3 is live
+      ;; across the entire block for the same reason the increment was. x86-64
+      ;; has a three-address `imul` with an immediate; RV64 has no
+      ;; multiply-immediate and has to build the constant, which costs it
+      ;; nothing it was not already paying.
+      (mul-imm v sc d v* ...)
       ;; The packed-pair load and store: two ADJACENT elements starting at
       ;; element `idx + d`. Adjacency is the precondition the SLP pass proves;
       ;; nothing here can check it, which is why that pass is where the

@@ -199,6 +199,69 @@
                most)))
        0 blocks)))
 
+  ;; --- parameters pinned to the registers they arrive in ---------------------
+  ;;
+  ;; A parameter arrives in `arg-register(class, k)`. The allocator knows
+  ;; nothing about that and puts it wherever its scan had room, so the arrival
+  ;; is a real move -- and a self tail call has to put the value BACK into the
+  ;; argument register before jumping. nbody's inner loop paid both ends:
+  ;;
+  ;;     inner%24:  mov rbx, r9      mov rax, rcx     ; four moves rotating
+  ;;                mov rcx, rdx     mov rdx, rsi     ; parameters into place
+  ;;                mov rsi, rax     mov r9, [rsp+24]
+  ;;                ...
+  ;;                mov [rsp+24], r9  mov rdx, rcx    ; and four rotating them
+  ;;                mov rcx, rsi      mov r9, rbx     ; back out
+  ;;                mov rsi, r11      jmp inner%24
+  ;;
+  ;; Eleven instructions of pure shuffling per iteration, none of which computes
+  ;; anything. It is a ROTATION, not a spill: every parameter is in some other
+  ;; parameter's argument register. Pinning each to its own makes the arrival
+  ;; `mov r, r`, which the peephole deletes, and makes a loop-carried parameter
+  ;; that does not change an identity move on the back edge as well.
+  ;;
+  ;; ONLY WHERE EVERY CALL IS A TAIL CALL. Argument registers are caller-saved,
+  ;; so a parameter live across an ordinary call is destroyed by it -- and the
+  ;; allocator would have spilled it, which is exactly the decision a pin
+  ;; overrides. A tail call is a jump: nothing is live after it, so there is
+  ;; nothing to destroy.
+  (define (every-call-is-tail? blocks)
+    (for-all
+     (lambda (b)
+       (let* ((blk (cadr b)) (is (cadr blk)) (t (caddr blk)))
+         (let loop ((is is))
+           (cond
+            ((null? is) #t)
+            ((not (eq? (car (car is)) 'call)) (loop (cdr is)))
+            ;; A tail call is the last instruction of a block whose transfer
+            ;; returns precisely its result.
+            (else (and (null? (cdr is))
+                       (pair? t) (eq? (car t) 'ret)
+                       (pair? (cdr t)) (eq? (cadr t) (cadr (car is)))))))))
+     blocks))
+
+  ;; The counter walk here must agree instruction-for-instruction with the one
+  ;; that builds the arrivals in `finalize-function`, because the whole point is
+  ;; that the pin names the register the arrival would have moved out of.
+  (define (parameter-pins target blocks params classes)
+    (if (or (null? params) (not (every-call-is-tail? blocks)))
+        '()
+        (let ((cc (callconv-by-name target)))
+          (let loop ((ps params) (n (make-eq-hashtable)) (acc '()))
+            (if (null? ps)
+                (reverse acc)
+                (let* ((p (car ps))
+                       (c (hashtable-ref classes p #f))
+                       (k (and c (hashtable-ref n c 0)))
+                       (r (and c (arg-register cc c k))))
+                  (when c (hashtable-set! n c (+ k 1)))
+                  (loop (cdr ps) n
+                        ;; No register means this parameter overflowed onto the
+                        ;; stack; there is nothing to pin it to.
+                        (if (and r (pin-ok? cc c r))
+                            (cons (make-pin p r c) acc)
+                            acc))))))))
+
   ;; Which spilled vregs can be REBUILT rather than reloaded.
   ;;
   ;; A vreg whose Lmach definition is `(const v sc d)` need not occupy a frame
@@ -1176,9 +1239,14 @@
                     (sel-blocks (map (lambda (b)
                                        (list (car b) (hashtable-ref by-label (car b) '())))
                                      (cdr fn)))
-                    (alloc (allocate-program arch (cdr fn) classes)))
+                    (ps (hashtable-ref params (car fn) '()))
+                    (pins (parameter-pins target (cdr fn) ps classes))
+                    (alloc (if (null? pins)
+                               (allocate-program arch (cdr fn) classes)
+                               (allocate-program/precolored
+                                (callconv-by-name target) (cdr fn) classes pins))))
                (finalize-function target arch (car fn) sel-blocks alloc classes labels
-                                  (hashtable-ref params (car fn) '())
+                                  ps
                                   ;; From the LMACH blocks, `(cdr fn)`, not the
                                   ;; selected ones: Lmach still names a call's
                                   ;; arguments as vregs the class table answers
