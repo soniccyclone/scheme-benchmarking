@@ -328,26 +328,28 @@ The practical consequence is that the remaining milestone-5 work has to shorten 
 the DEPENDENCE CHAIN, not the listing. Cutting another 100 moves is now known to be worth
 about 6 cycles.
 
-**Addendum, 2026-08-09: measure the RATIO, not the absolute.** Cycles on this laptop APU
-vary about 5% run to run and earlier readings bounced far more than that, which made single
-measurements useless for steering. Three trials of `perf stat -r 20`, two-point, gave:
+**Addendum, 2026-08-09: the ratio is steadier than the absolutes and is still not steady.**
+Cycles on this laptop APU vary about 5% run to run, so a single reading steers nothing. The
+ratio between the two binaries is better, because both ride the same clock excursion --- but
+only somewhat. Seven trials of `perf stat -r 20`, two-point:
 
-| trial | SonicScheme | c-native | ratio |
-|---|---:|---:|---:|
-| 1 | 185.8 | 165.5 | 1.123 |
-| 2 | 185.5 | 168.1 | 1.104 |
-| 3 | 193.7 | 170.3 | 1.137 |
+    n=7   min 1.003   median 1.142   max 1.207
 
-The absolutes move and **the ratio does not** --- 1.12 ± 0.02 --- because both binaries ride
-the same clock excursion. So milestone 5 is scored on the ratio, measured as three trials of
-twenty, and a single run of either binary is not evidence about anything.
+**So: report the MEDIAN OF AT LEAST SEVEN TRIALS, with the spread.** An earlier version of
+this note claimed 1.12 ± 0.02 on the strength of three trials that happened to agree; the
+next three included a run where c-native alone read 191.8 against its usual 167, which
+drags the ratio to 1.00 and would have been reported as "we caught gcc" by anyone taking
+one measurement. Three trials is not enough to see that, and the failure is asymmetric ---
+a lucky outlier reads as success.
 
-Where the remaining 12% lives is no longer a mystery. FP is 420 ops/step against c-native's
-297, and the 123-op difference is almost entirely fused multiply-add: gcc emits `vfmadd` and
-`vfnmadd` throughout and each one replaces two of ours. That is D24's contraction
-permission, which is off by default and protects the bit-exact oracle. Integer is 339
-against 17, and that is `outer%22`, whose counters cannot stay in registers for the reason
-recorded on its bead.
+Instruction and op counts have none of this: they are exact and repeat to the digit. Steer
+on those, and use cycles only to confirm direction, over enough trials to see the tail.
+
+Where the remaining ~14% lives is not a mystery. FP is 420 ops/step against c-native's 297,
+and the difference is almost entirely fused multiply-add: gcc emits `vfmadd` and `vfnmadd`
+throughout and each replaces two of ours. That is D24's contraction permission, off by
+default because it protects the bit-exact oracle. Integer is 329 against 17, and that is
+`outer%22`, whose counters cannot stay in registers for the reason recorded on its bead.
 
 So beating gcc on cycles requires re-opening D24. Nothing in the back end reaches it.
 

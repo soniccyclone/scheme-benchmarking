@@ -34,7 +34,7 @@
 (library (sonic peephole)
   (export peephole fuse-compare-branch
           peephole-stats peephole-stats? peephole-stats-fused)
-  (import (chezscheme))
+  (import (chezscheme) (sonic regs))
 
   (define-record-type (peephole-stats make-peephole-stats peephole-stats?)
     (fields (mutable fused)))
@@ -150,16 +150,33 @@
          (memq (car i) '(call ret jmp syscall
                          jl jle je jne jge jg jb jbe ja jae jo jno))))
 
+  ;; A SCRATCH register is dead at every boundary, and that is a property of the
+  ;; register file rather than of this listing. regs.ss keeps the scratches
+  ;; outside every allocatable pool precisely so no live range can occupy one,
+  ;; and the convention passes no argument in one -- so nothing reads a scratch
+  ;; across a call or a branch.
+  ;;
+  ;; `ret` is the exception and it is not a small one: rax IS the return
+  ;; register, so a value there at a `ret` is the function's result.
+  (define (scratch-reg? r)
+    (and (memq r (arch-scratch arch-x86-64)) #t))
+
   ;; Is `r` dead from here -- overwritten before it is read, without leaving the
   ;; block? Conservative at every edge: a label means another path arrives here
-  ;; and a transfer means we cannot see what reads it, and both answer "no".
+  ;; and a transfer means we cannot see what reads it, and both answer "no"
+  ;; unless the register is a scratch, which nothing can be reading.
   (define (dead-from? r is)
     (let scan ((is is))
+      ;; End of the run stays #f, deliberately, even for a scratch. A real run
+      ;; always ends at a label or a transfer and both are handled below; only a
+      ;; hand-written fixture runs off the end, and widening this to satisfy one
+      ;; changes what every other pass in this file deletes.
       (cond ((null? is) #f)
-            ((symbol? (car is)) #f)            ; a label: another path joins
+            ((symbol? (car is)) (scratch-reg? r))  ; a label: another path joins
             ((reads-reg? (car is) r) #f)
             ((kills? (car is) r) #t)           ; overwritten, so it was dead
-            ((leaves-block? (car is)) #f)
+            ((leaves-block? (car is))
+             (and (not (eq? (car (car is)) 'ret)) (scratch-reg? r)))
             (else (scan (cdr is))))))
 
   ;; --- a copy nobody reads --------------------------------------------------
@@ -266,6 +283,51 @@
           (peephole-stats-fused-set! stats (+ 1 (peephole-stats-fused stats)))
           (loop (cddr is)
                 (cons (list (car b) (list-ref b 1) (list-ref b 2) (caddr a)) out))))
+       (else (loop (cdr is) (cons (car is) out))))))
+
+  ;; --- read, modify, write, through the scratch -----------------------------
+  ;;
+  ;;     mov rax, [rsp+48]        ->   add [rsp+48], 1
+  ;;     add rax, 1
+  ;;     mov [rsp+48], rax
+  ;;
+  ;; A spilled value incremented in place goes through the scratch because that
+  ;; is the shape the spiller always emits: reload, operate, store. x86-64 does
+  ;; the whole thing in one instruction against memory, and the encoder already
+  ;; takes a memory destination with an immediate -- it says so by name.
+  ;;
+  ;; nbody's outer loop does this twice per unrolled body for its counter, which
+  ;; is the loop that spills most and computes least.
+  ;;
+  ;; FLAGS ARE PRESERVED, which matters because an overflow check follows some of
+  ;; these: `add [m], imm` sets OF exactly as `add r, imm` did. Restricted to add
+  ;; and sub, which is what a counter uses; the other ALU ops have the same
+  ;; memory form and are simply not emitted in this shape.
+  (define rmw-ops '(add sub))
+
+  (define (fold-read-modify-write instrs stats)
+    (let loop ((is instrs) (out '()))
+      (cond
+       ((null? is) (reverse out))
+       ((and (pair? (cdr is)) (pair? (cddr is))
+             (let ((a (car is)) (b (cadr is)) (c (caddr is)))
+               (and (pair? a) (memq (car a) '(mov)) (= (length a) 3)
+                    (symbol? (cadr a))
+                    (pair? (caddr a)) (eq? (car (caddr a)) 'mem)
+                    ;; the address must not be built out of the register the
+                    ;; load is about to overwrite
+                    (not (mentions-reg? (caddr a) (cadr a)))
+                    (pair? b) (memq (car b) rmw-ops) (= (length b) 3)
+                    (eq? (cadr b) (cadr a))
+                    (pair? (caddr b)) (eq? (car (caddr b)) 'imm)
+                    (pair? c) (eq? (car c) 'mov) (= (length c) 3)
+                    (equal? (cadr c) (caddr a))     ; same address
+                    (eq? (caddr c) (cadr a))
+                    (dead-from? (cadr a) (cdddr is)))))
+        (let ((a (car is)) (b (cadr is)))
+          (peephole-stats-fused-set! stats (+ 1 (peephole-stats-fused stats)))
+          (loop (cdddr is)
+                (cons (list (car b) (caddr a) (caddr b)) out))))
        (else (loop (cdr is) (cons (car is) out))))))
 
   ;; The pattern, over the SELECTED stream:
@@ -715,7 +777,8 @@
                   ;; every earlier rewrite already done, since each of those
                   ;; removes readers.
                   (drop-dead-copies
-                   (fold-load-into-arith
+                   (fold-read-modify-write
+                    (fold-load-into-arith
                     (fold-store-through-scratch
                     (fuse-index
                      (fuse-copy-imul
@@ -726,6 +789,7 @@
                        stats)
                       stats)
                      stats)
+                    stats)
                     stats)
                     stats)
                    stats)

@@ -398,6 +398,88 @@
                        (vaddsd xmm4 xmm3 xmm1)))
              '((vmulsd xmm3 xmm0 xmm0) (vaddsd xmm4 xmm3 xmm1))))
 
+;; --- read, modify, write, through the scratch -------------------------------
+
+;; Each fixture ends in a TRANSFER, which is what a real run ends in --
+;; `peephole-runs` splits the listing at every label, so a run that simply stops
+;; is a shape the pass never sees and is not worth widening `dead-from?` for.
+(ck! "a spilled counter incremented in place becomes one instruction"
+     (equal? (peeped '((mov rax (mem rsp #f 1 48))
+                       (add rax (imm 1))
+                       (mov (mem rsp #f 1 48) rax)
+                       (mov rcx r9)
+                       (jmp (label L))))
+             '((add (mem rsp #f 1 48) (imm 1)) (mov rcx r9) (jmp (label L)))))
+
+(ck! "and subtraction, which is the other shape a counter takes"
+     (equal? (peeped '((mov rax (mem rsp #f 1 8))
+                       (sub rax (imm 4))
+                       (mov (mem rsp #f 1 8) rax)
+                       (mov rcx r9)
+                       (jmp (label L))))
+             '((sub (mem rsp #f 1 8) (imm 4)) (mov rcx r9) (jmp (label L)))))
+
+;; The store must be to the SAME address. Two different slots are a copy with
+;; arithmetic in the middle, not a read-modify-write, and folding it would drop
+;; the write to one of them.
+(ck! "a different slot is not a read-modify-write and is left alone"
+     (equal? (peeped '((mov rax (mem rsp #f 1 48))
+                       (add rax (imm 1))
+                       (mov (mem rsp #f 1 56) rax)
+                       (mov rcx r9)
+                       (jmp (label L))))
+             '((mov rax (mem rsp #f 1 48))
+               (add rax (imm 1))
+               (mov (mem rsp #f 1 56) rax)
+               (mov rcx r9)
+               (jmp (label L)))))
+
+;; The address must not be built out of the register the load overwrites, or
+;; the two memory references are not the same place at all.
+(ck! "an address built from the loaded register is refused"
+     (equal? (peeped '((mov rax (mem rax #f 1 0))
+                       (add rax (imm 1))
+                       (mov (mem rax #f 1 0) rax)
+                       (mov rcx r9)
+                       (jmp (label L))))
+             '((mov rax (mem rax #f 1 0))
+               (add rax (imm 1))
+               (mov (mem rax #f 1 0) rax)
+               (mov rcx r9)
+               (jmp (label L)))))
+
+;; A NON-scratch register carrying the value must still be proved dead, because
+;; an allocated value can be live across a call and a scratch cannot.
+(ck! "with a non-scratch register the value must be visibly dead"
+     (equal? (peeped '((mov rbx (mem rsp #f 1 48))
+                       (add rbx (imm 1))
+                       (mov (mem rsp #f 1 48) rbx)
+                       (mov rcx rbx)))
+             '((mov rbx (mem rsp #f 1 48))
+               (add rbx (imm 1))
+               (mov (mem rsp #f 1 48) rbx)
+               (mov rcx rbx))))
+
+;; --- the scratch is dead at a boundary, except at a ret ---------------------
+;;
+;; regs.ss keeps the scratches out of every allocatable pool so that no live
+;; range can occupy one, and the convention passes no argument in one. So
+;; nothing can be reading a scratch across a call or a branch -- which is what
+;; lets the fold above fire when a call follows it.
+
+(ck! "a scratch is dead across a call, so the fold still fires before one"
+     (equal? (peeped '((mov rax (mem rsp #f 1 48))
+                       (add rax (imm 1))
+                       (mov (mem rsp #f 1 48) rax)
+                       (call (label f))))
+             '((add (mem rsp #f 1 48) (imm 1)) (call (label f)))))
+
+;; rax IS the return register, so a value there at a `ret` is the result. This
+;; is the one boundary where a scratch is emphatically live.
+(ck! "but a scratch is LIVE at a ret: that is the return value"
+     (equal? (peeped '((mov rax rbx) (ret)))
+             '((mov rax rbx) (ret))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))
