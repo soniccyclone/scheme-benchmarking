@@ -118,5 +118,21 @@ WORKDIR /work/sonic
 # run-duration limit of its own -- `--stop-timeout` is the SIGTERM-to-SIGKILL
 # grace period and `--health-timeout` bounds a single probe, neither is a
 # lifetime -- so this is where wall clock has to come from.
-ENTRYPOINT ["timeout", "--signal=KILL", "1800"]
+#
+# NO `--signal=KILL`, AND DO NOT ADD IT BACK. It reads like the stronger
+# choice and in this image it disables the guard entirely. `timeout` here is
+# uutils coreutils 0.2.2, not GNU, and its `--signal=KILL` does not deliver the
+# signal -- it waits for the child to exit on its own and only then reports
+# 124. Measured in the container:
+#
+#     timeout 2 sleep 10                 -> 2.0s, exit 124   (works)
+#     timeout --signal=KILL 2 sleep 10   -> 10.0s, exit 124   (does not)
+#     timeout -k 2 3 <ignores SIGTERM>   -> never returns     (does not)
+#
+# So this guard silently did nothing for as long as it has existed, which is
+# how a miscompiled program that looped for ever wedged the suite instead of
+# failing it. The DEFAULT SIGTERM works, and works on a spinning Chez (4.0s,
+# exit 124) and on our emitted binaries, which install no signal handlers and
+# so cannot decline it.
+ENTRYPOINT ["timeout", "1800"]
 CMD ["make", "test-suite"]

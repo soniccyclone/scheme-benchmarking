@@ -51,7 +51,16 @@
     ;;
     ;; 20s is far longer than any program here needs; exit 124 says "hung",
     ;; which is a result rather than a silence.
-    (let ((code (system (string-append "timeout --signal=KILL 20 "
+    ;;
+    ;; NO `--signal=KILL`, AND DO NOT ADD IT BACK -- see the note on the
+    ;; ENTRYPOINT in the Dockerfile. `timeout` in this image is uutils
+    ;; coreutils, whose `--signal=KILL` does not deliver the signal: it waits
+    ;; for the child to exit and only then reports 124. Written that way this
+    ;; guard did nothing, and a miscompile that looped for ever stalled the
+    ;; whole suite with no output rather than failing this one check. The
+    ;; default SIGTERM works; an emitted binary installs no handlers and cannot
+    ;; decline it.
+    (let ((code (system (string-append "timeout 20 "
                                        exe " > " tmp ".out 2>/dev/null"))))
       (values code (read-doubles (string-append tmp ".out"))))))
 
@@ -71,6 +80,14 @@
                           acc)))))))
 
 (define (run! name source expected)
+  ;; ANNOUNCED BEFORE IT RUNS, not after it passes. The last line of a stalled
+  ;; log used to name the last check that SUCCEEDED, so the one that hung had to
+  ;; be inferred from this file -- and a compile that loops has no 20-second
+  ;; guard on it at all, since that one bounds only the emitted program.
+  ;; `flush-output-port` because a hang is exactly the case where the buffer
+  ;; never drains on its own.
+  (display "       running: ") (display name) (newline)
+  (flush-output-port (current-output-port))
   (let-values (((code out) (compile-and-run source '(display newline))))
     (ck! name (and (zero? code) (equal? out expected)))
     (unless (and (zero? code) (equal? out expected))
