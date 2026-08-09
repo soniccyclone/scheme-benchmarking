@@ -249,6 +249,40 @@
                                      (eq? (cadr i) 'rsp)))
                     body))))
 
+;; --- no frame slot is copied to itself --------------------------------------
+;;
+;; Two spilled vregs joined by an Lmach `move` share a slot, so the reload and
+;; store that would copy one to the other is a copy from a place to the same
+;; place and is emitted as nothing. Asserted as the ABSENCE of the shape over
+;; the whole program, which is stronger than a count and does not move when
+;; anything upstream does.
+;;
+;; It is also the check that would catch the coalescing going too far in the
+;; other direction -- if a slot were shared that should not be, the copy would
+;; still vanish here but nbody's energies would stop matching, which the
+;; bit-exact oracle already asserts.
+(let* ((c (compile-sonic src nbody-externs))
+       (self-copies
+        (let count ((fs (compiled-functions c)) (n 0))
+          (if (null? fs)
+              n
+              (let walk ((xs (finalized-listing (car fs))) (n n))
+                (cond
+                 ((or (null? xs) (null? (cdr xs))) (count (cdr fs) n))
+                 ((let ((a (car xs)) (b (cadr xs)))
+                    (and (pair? a) (pair? b)
+                         (memq (car a) '(mov movsd)) (eq? (car a) (car b))
+                         (= (length a) 3) (= (length b) 3)
+                         (symbol? (cadr a))            ; reload into a register
+                         (pair? (caddr a)) (eq? (car (caddr a)) 'mem)
+                         (pair? (cadr b)) (eq? (car (cadr b)) 'mem)
+                         (eq? (caddr b) (cadr a))      ; storing what was loaded
+                         (equal? (cadr b) (caddr a)))) ; to the same address
+                  (walk (cdr xs) (+ n 1)))
+                 (else (walk (cdr xs) n))))))))
+  (ck! "no emitted instruction copies a frame slot to itself"
+       (zero? self-copies)))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))

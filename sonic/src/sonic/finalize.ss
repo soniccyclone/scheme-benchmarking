@@ -143,15 +143,57 @@
                       (patch-incoming frame (cdr x))))
      (else x)))
 
-  (define (build-frame spills outgoing)
-    (let ((tbl (make-eq-hashtable)))
+  ;; TWO SPILLED VREGS CONNECTED BY A MOVE SHARE A SLOT.
+  ;;
+  ;; A `(move a b)` whose two ends both spilled becomes a reload into the scratch
+  ;; and a store back out -- two instructions to copy a value from one frame slot
+  ;; to another. Given the same slot it is a copy from a place to itself, and
+  ;; `do-instr` emits nothing at all.
+  ;;
+  ;; SOUND BECAUSE LMACH IS SINGLE-ASSIGNMENT, and that is the whole argument.
+  ;; `a` is defined by this move and nowhere else, `b` by its own definition and
+  ;; nowhere else, and the move makes them equal -- so one slot holds one value
+  ;; for the life of both. Nothing here has to reason about liveness or overlap.
+  ;;
+  ;; ONLY AN LMACH `move`. The trap is that a two-address fixup looks the same in
+  ;; the emitted listing: `(add-imm d 1 src)` becomes `mov d, src` then
+  ;; `add d, 1`, and reading THAT as a copy would coalesce d with src and then
+  ;; increment src in place. qaq.7.7 fell into exactly that reading. The alias
+  ;; map is built from Lmach, before any of those exist.
+  (define (move-aliases blocks spilled?)
+    (let ((find (make-eq-hashtable)))
+      (define (root x)
+        (let ((p (hashtable-ref find x #f)))
+          (if p (let ((r (root p))) (hashtable-set! find x r) r) x)))
+      (for-each
+       (lambda (lb)
+         (for-each
+          (lambda (i)
+            (when (and (pair? i) (eq? (car i) 'move) (= (length i) 4)
+                       (symbol? (cadr i)) (symbol? (cadddr i))
+                       (spilled? (cadr i)) (spilled? (cadddr i)))
+              (let ((ra (root (cadr i))) (rb (root (cadddr i))))
+                (unless (eq? ra rb) (hashtable-set! find ra rb)))))
+          (cadr (cadr lb))))
+       blocks)
+      root))
+
+  (define (build-frame spills outgoing . opt)
+    (let ((tbl (make-eq-hashtable))
+          ;; vreg -> the representative whose slot it shares, or itself
+          (rep (if (pair? opt) (car opt) (lambda (v) v))))
       (let loop ((vs spills) (i 0))
         (if (null? vs)
             (make-frame-layout tbl i outgoing)
-            (if (hashtable-ref tbl (car vs) #f)
-                (loop (cdr vs) i)
-                (begin (hashtable-set! tbl (car vs) i)
-                       (loop (cdr vs) (+ i 1))))))))
+            (let* ((v (car vs)) (r (rep v)))
+              (cond
+               ((hashtable-ref tbl v #f) (loop (cdr vs) i))
+               ;; the representative already has a slot: share it
+               ((hashtable-ref tbl r #f)
+                => (lambda (k) (hashtable-set! tbl v k) (loop (cdr vs) i)))
+               (else (hashtable-set! tbl v i)
+                     (unless (eq? r v) (hashtable-set! tbl r i))
+                     (loop (cdr vs) (+ i 1)))))))))
 
   ;; How many words of outgoing argument area this function needs: the most any
   ;; one of its calls overflows by. Read off the Lmach blocks rather than the
@@ -472,14 +514,18 @@
                         (if (and (pair? opt) (pair? (cddr opt))) (caddr opt) 0)
                         (if (and (pair? opt) (pair? (cdddr opt)))
                             (cadddr opt)
-                            (make-eq-hashtable))))
+                            (make-eq-hashtable))
+                        (if (and (pair? opt) (pair? (cdddr opt))
+                                 (pair? (cddddr opt)))
+                            (car (cddddr opt))
+                            (lambda (v) v))))
 
   (define (finalize-function* target arch name blocks alloc classes own-labels
-                              params outgoing tail-outgoing remat)
+                              params outgoing tail-outgoing remat slot-rep)
     (let* ((sp (spiller-for target))
            (assign (alloc-result-map alloc))
            (spills (alloc-result-spills alloc))
-           (frame (build-frame spills outgoing))
+           (frame (build-frame spills outgoing slot-rep))
            (bytes (frame-layout-bytes frame))
            (spilled? (lambda (v) (and (symbol? v)
                                       (hashtable-ref (frame-layout-map frame) v #f)
@@ -704,6 +750,16 @@
            ;; Safe only because the vreg has exactly one definition -- Lmach is
            ;; single-assignment -- so there is no other instruction whose
            ;; destination this could be.
+           ;; A COPY FROM A SLOT TO ITSELF IS NOT A COPY. Two spilled vregs
+           ;; joined by an Lmach `move` were given one slot (see `move-aliases`),
+           ;; so the reload-and-store this would otherwise emit moves a value
+           ;; from a place to the same place.
+           ((and (memq (car i) '(mov movsd)) (= (length i) 3)
+                 (symbol? (cadr i)) (symbol? (caddr i))
+                 (spilled? (cadr i)) (spilled? (caddr i))
+                 (eqv? (frame-slot-offset frame (cadr i))
+                       (frame-slot-offset frame (caddr i))))
+            (list '() #f '()))
            ((and (pair? (cdr i)) (symbol? (cadr i)) (remat? (cadr i))
                  (not (reads-dst? i)))
             ;; #f, not '(), as the "no instruction" marker: the caller asks the
@@ -1515,7 +1571,15 @@
                    ;; pattern matching.
                    (outgoing-words-for target (cdr fn) classes)
                    (tail-outgoing-words-for target (cdr fn) classes)
-                   (remat-table target (cdr fn) classes))))
+                   (remat-table target (cdr fn) classes)
+                   ;; Spilled vregs joined by an Lmach `move` share a slot, so
+                   ;; the copy between them costs nothing. Computed here because
+                   ;; it needs BOTH the Lmach form -- a two-address fixup in the
+                   ;; selected stream looks identical and must not be read as a
+                   ;; copy -- and the spill set, which allocation has just
+                   ;; produced.
+                   (let ((sp (alloc-result-spills alloc)))
+                     (move-aliases (cdr fn) (lambda (v) (memq v sp)))))))
             ;; What this one writes, for whoever calls it. Its own callees are
             ;; already recorded -- that is what `callee-first` buys -- so the
             ;; union closes over the call graph without a separate fixpoint.
