@@ -164,6 +164,45 @@
        (let ((a (car (filter (lambda (i) (eq? (car i) 'add)) is))))
          (and (= 5 (length a)) (eq? (car a) 'add)))))
 
+;; --- an op pack whose operands cannot be paired ------------------------------
+;;
+;; `plan-pack!` builds an op pack's operands from the LOW member's instruction
+;; and splats any that are not themselves in a pack. A splat puts one value in
+;; both lanes, which is right ONLY when the high member names the same value
+;; there.
+;;
+;; `classify!` enqueues the differing pairs so they become packs and discards
+;; the result -- and `add-pack!` refuses a pair whose members have no defining
+;; instruction in this block, which is every parameter. Here `vx` and `vy` are
+;; parameters multiplied by a shared `m`: the pair cannot be packed, and before
+;; `demote-unpaired!` nothing noticed, so vx was splatted into both lanes and
+;; vx*m was stored where vy*m belonged.
+;;
+;; This is nbody's `put!` exactly, and it presented for a day as "exempting
+;; tagged global reads from CSE is unsound" -- because folding two reads of one
+;; global into a single vreg is what puts the pack into this shape at all.
+(define unpairable
+  '(program ((entry (block ((mul e0 raw-f64 vx m)
+                            (mul e1 raw-f64 vy m)
+                            (store    z raw-f64 r i e0)
+                            (store-at z2 raw-f64 1 r i e1))
+                           (ret z))))
+     entry))
+
+(let-values (((is st) (run unpairable (classes-for 'e0 'e1 'vx 'vy 'm))))
+  (ck! "an op pack whose operands cannot be paired is NOT emitted as a pack"
+       (not (exists (lambda (i) (eq? (car i) 'p2mul)) is)))
+  ;; The scalar multiplies must survive intact, each reading its own operand.
+  (ck! "both multiplies survive, and each keeps its own first operand"
+       (let ((ms (filter (lambda (i) (eq? (car i) 'mul)) is)))
+         (and (= 2 (length ms))
+              (eq? 'vx (cadddr (car ms)))
+              (eq? 'vy (cadddr (cadr ms))))))
+  ;; The failure this guards is silent: with the splat in place the program is
+  ;; shorter and wrong, so a count alone would have called it an improvement.
+  (ck! "and nothing is splatted, which is what put the wrong value in lane 1"
+       (not (exists (lambda (i) (eq? (car i) 'p2splat)) is))))
+
 ;; --- nbody ------------------------------------------------------------------
 ;;
 ;; The measurement that justifies the pass. `dx` is read by `dx*dx`, which feeds

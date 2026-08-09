@@ -302,6 +302,51 @@
              packs)
             (when changed (round)))))
 
+      ;; AN OP PACK WHOSE OPERANDS ARE NOT PAIRED COMPUTES THE WRONG ANSWER.
+      ;;
+      ;; `plan-pack!` builds an op pack's operands from the LOW member's
+      ;; instruction and calls `operand` on each, which yields the pack holding
+      ;; that value or, failing that, a SPLAT of it. A splat puts the low
+      ;; member's operand in both lanes, which is right only when the high
+      ;; member's operand at that position is the same value.
+      ;;
+      ;; `classify!` enqueues the differing pairs so they become packs, and
+      ;; DISCARDS THE RESULT -- `add-pack!` refuses a pair whose members have no
+      ;; defining instruction in this block, which is every parameter and every
+      ;; value from another block. nbody's `put!` multiplies vx and vy by the
+      ;; same `days-per-year`, and vx and vy are parameters: the pair could not
+      ;; be packed, nothing noticed, and the emitted code splatted vx into both
+      ;; lanes and stored vx*dpy into vel[3i+1] where vy*dpy belonged.
+      ;;
+      ;; It was reachable only through a CSE fold that made the two reads of
+      ;; `days-per-year` one vreg -- which is what put the pack in the
+      ;; shared-scalar shape at all -- so it presented as "exempting tagged
+      ;; global reads from CSE is unsound" and was recorded that way for a day.
+      ;;
+      ;; So: an op pack survives only if, at every operand position, the two
+      ;; members either name the SAME value or are packed together. Demoted to a
+      ;; gather otherwise, which assembles both scalars and reads them
+      ;; untouched. A fixpoint, because demoting one pack can unpair another.
+      (define (paired? x y)
+        (or (eq? x y)
+            (exists (lambda (q) (and (eq? (car q) x) (eq? (cdr q) y))) packs)))
+
+      (define (demote-unpaired!)
+        (let round ()
+          (let ((changed #f))
+            (for-each
+             (lambda (p)
+               (when (eq? 'op (hashtable-ref kind p #f))
+                 (let ((a (def-of (car p))) (b (def-of (cdr p))))
+                   (when (and a b
+                              (not (and (paired? (cadddr a) (cadddr b))
+                                        (paired? (car (cddddr a))
+                                                 (car (cddddr b))))))
+                     (hashtable-set! kind p 'gather)
+                     (set! changed #t)))))
+             packs)
+            (when changed (round)))))
+
       ;; A pack nothing reads is pure cost. Reachability runs from the stores.
       (define (prune-unreachable!)
         (let round ()
@@ -363,7 +408,11 @@
       (collect-store-packs!)
       (classify-all!)
       (demote!)
+      (demote-unpaired!)
       (prune-unreachable!)
+      ;; Pruning can remove a pack an op pack was relying on for its operands,
+      ;; so the pairing question has to be asked again after it.
+      (demote-unpaired!)
       (if (or (null? packs) (not (profitable?)))
           instrs
           (emit vec n packs store-packs kind consumed? classes stats))))
