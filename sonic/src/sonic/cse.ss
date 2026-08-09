@@ -65,7 +65,81 @@
 
 (library (sonic cse)
   (export cse-program cse-stats cse-stats? cse-stats-folded cse-stats-invalidations)
-  (import (chezscheme))
+  (import (chezscheme) (sonic regalloc))
+
+  ;; --- availability across blocks, for global reads only ---------------------
+  ;;
+  ;; The value tables are per block, which is why unrolling put two reads of one
+  ;; global beyond each other's reach: the copies land in different blocks, and
+  ;; nbody's force loop reloads `dt` once per unrolled half for that reason
+  ;; alone.
+  ;;
+  ;; Extending the table across blocks needs two things and they are cheap here.
+  ;;
+  ;; DOMINANCE, because folding B onto A requires A's definition to reach every
+  ;; use of B's. Computed by the textbook iterative intersection, per function,
+  ;; over the blocks `partition-into-functions` groups.
+  ;;
+  ;; NO INTERVENING WRITE, which would otherwise need a path-sensitive analysis.
+  ;; Instead the whole function is checked for a `gset` or a NON-TAIL `call`,
+  ;; and availability is offered only when it has neither. A tail call is the
+  ;; last instruction of its block and control never comes back, so nothing it
+  ;; does can be observed by a read in this invocation -- which is what lets a
+  ;; LOOP qualify at all, since every loop's back edge is a tail call.
+  (define (non-tail-call? blk i)
+    (and (pair? i) (eq? (car i) 'call)
+         (let ((is (cadr blk)) (t (caddr blk)))
+           (not (and (pair? is) (eq? i (car (reverse is)))
+                     (pair? t) (eq? (car t) 'ret)
+                     (pair? (cdr t)) (eq? (cadr t) (cadr i)))))))
+
+  (define (function-has-writes? fn)
+    (exists (lambda (lb)
+              (let ((blk (cadr lb)))
+                (exists (lambda (i)
+                          (or (and (pair? i) (eq? (car i) 'gset))
+                              (non-tail-call? blk i)))
+                        (cadr blk))))
+            (cdr fn)))
+
+  ;; label -> list of labels that dominate it, itself included.
+  (define (dominators fn)
+    (let* ((lbs (map car (cdr fn)))
+           (entry (car fn))
+           (preds (make-eq-hashtable))
+           (dom (make-eq-hashtable)))
+      (for-each (lambda (l) (hashtable-set! preds l '())) lbs)
+      (for-each
+       (lambda (lb)
+         (for-each (lambda (t)
+                     (when (memq t lbs)
+                       (hashtable-update! preds t (lambda (ps) (cons (car lb) ps)) '())))
+                   (transfer-targets (caddr (cadr lb)))))
+       (cdr fn))
+      (for-each (lambda (l)
+                  (hashtable-set! dom l (if (eq? l entry) (list entry) lbs)))
+                lbs)
+      (let fix ()
+        (let ((changed #f))
+          (for-each
+           (lambda (l)
+             (unless (eq? l entry)
+               (let* ((ps (hashtable-ref preds l '()))
+                      (inter (if (null? ps)
+                                 '()
+                                 (fold-left (lambda (acc p)
+                                              (filter (lambda (x)
+                                                        (memq x (hashtable-ref dom p '())))
+                                                      acc))
+                                            (hashtable-ref dom (car ps) '())
+                                            (cdr ps))))
+                      (new (if (memq l inter) inter (cons l inter))))
+                 (unless (= (length new) (length (hashtable-ref dom l '())))
+                   (hashtable-set! dom l new)
+                   (set! changed #t)))))
+           lbs)
+          (when changed (fix))))
+      dom))
 
   (define-record-type (cse-stats make-cse-stats cse-stats?)
     (fields (mutable folded) (mutable invalidations)))
@@ -174,11 +248,48 @@
           (let ((r (hashtable-ref rename v #f)))
             (if (and r (< n 1000)) (loop r (+ n 1)) v))))
 
+      ;; What each block may inherit: for a function with no gset and no non-tail
+      ;; call, the global reads recorded by every block that DOMINATES this one.
+      ;; Built after the per-block pass records them, so a second sweep applies
+      ;; it; one sweep would depend on block order rather than on dominance.
+      (define block-globals (make-eq-hashtable))
+      (define available (make-eq-hashtable))
+      (define rank (make-eq-hashtable))
+      (for-each
+       (lambda (fn)
+         (unless (function-has-writes? fn)
+           (let ((dom (dominators fn)))
+             (for-each (lambda (lb)
+                         (hashtable-set! available (car lb)
+                                         (remq (car lb) (hashtable-ref dom (car lb) '())))
+                         ;; A dominates B implies doms(A) is a proper subset of
+                         ;; doms(B), so ordering by how many blocks dominate you
+                         ;; puts every dominator before what it dominates. The
+                         ;; sweep fills a block's table as it goes, so it has to
+                         ;; visit them in that order or the seeding would depend
+                         ;; on the layout instead of on dominance.
+                         (hashtable-set! rank (car lb)
+                                         (length (hashtable-ref dom (car lb) '()))))
+                       (cdr fn)))))
+       (partition-into-functions blocks (caddr prog)))
+
       (for-each
        (lambda (lb)
          (let ((values-tbl (make-hashtable equal-hash equal?))
                (mem-tbl (make-hashtable equal-hash equal?))
                (glob-tbl (make-hashtable equal-hash equal?)))
+           ;; Seed from the dominators, which the first sweep filled in.
+           (for-each
+            (lambda (d)
+              (let ((g (hashtable-ref block-globals d #f)))
+                (when g
+                  (let-values (((ks vs) (hashtable-entries g)))
+                    (vector-for-each
+                     (lambda (k v)
+                       (unless (hashtable-ref glob-tbl k #f)
+                         (hashtable-set! glob-tbl k v)))
+                     ks vs)))))
+            (hashtable-ref available (car lb) '()))
            (for-each
             (lambda (i)
               (when (pair? i)
@@ -241,8 +352,12 @@
                                stats (+ 1 (cse-stats-folded stats)))
                               (hashtable-set! rename dst prev))
                             (hashtable-set! tbl k dst)))))))))
-            (cadr (cadr lb)))))
-       blocks)
+            (cadr (cadr lb)))
+           (hashtable-set! block-globals (car lb) glob-tbl)))
+       (list-sort (lambda (a b)
+                    (< (hashtable-ref rank (car a) 0)
+                       (hashtable-ref rank (car b) 0)))
+                  blocks))
 
       ;; Apply. Every OPERAND position is rewritten; destinations are left
       ;; alone, so the folded definition survives here with nobody reading it
