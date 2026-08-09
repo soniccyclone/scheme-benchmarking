@@ -368,11 +368,13 @@
 
 (define (gas-mem i m)
   (let ((b (cadr m)) (x (caddr m)) (s (cadddr m)) (d (list-ref m 4)))
+    (if (eq? b 'rip)
+        (string-append (ptr-keyword i) "[rip + " (number->string d) "]")
     (string-append (ptr-keyword i)
                    "[" (symbol->string b)
                    (if x (string-append " + " (symbol->string x)
                                         "*" (number->string s)) "")
-                   " + " (number->string d) "]")))
+                   " + " (number->string d) "]"))))
 
 ;; A masked destination. gas writes the mask register in braces after the
 ;; register, and the zeroing modifier as a second brace group -- `ymm3{k1}` and
@@ -524,7 +526,19 @@
     ;; the next body's x.
     (vmovupd (mask (mem r9 rcx 8 32) k1) ymm7)
     (vmovupd (mask (mem rsi rax 8 0) k2) ymm0)
-    (vmovapd (mask (mem r8 rdx 8 64) k3) zmm2)))
+    (vmovapd (mask (mem r8 rdx 8 64) k3) zmm2)
+    ;; Lane assembly and extraction. These are what slp.ss emits today through
+    ;; the SCALAR encoder, and they are here because that encoder is about to
+    ;; delegate: the same mnemonic must not have two implementations.
+    (vunpcklpd xmm4 xmm5 xmm6)
+    (vunpckhpd xmm1 xmm1 xmm1)
+    (vunpcklpd ymm12 ymm13 ymm14)
+    (vunpckhpd zmm20 zmm21 zmm22)
+    ;; RIP-relative, which is how a pooled constant is addressed and what the
+    ;; emitted image hands this encoder now that object.ss delegates to it.
+    (vmovupd xmm7 (mem rip #f 1 0))
+    (vaddpd ymm3 ymm1 (mem rip #f 1 64))
+    (vmulpd zmm20 zmm21 (mem rip #f 1 -128))))
 
 ;; --- what masking must REFUSE ----------------------------------------------
 ;;

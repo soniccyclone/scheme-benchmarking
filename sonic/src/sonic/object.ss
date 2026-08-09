@@ -67,6 +67,7 @@
           (sonic emit)
           (sonic gcmeta)
           (prefix (sonic encode-x86-64) x86:)
+          (prefix (sonic vec-x86-64) vx:)
           (prefix (sonic encode-rv64) rv:))
 
   ;; --- targets --------------------------------------------------------------
@@ -191,14 +192,39 @@
 
   (define (object-instruction-size target i) (instruction-size target i))
 
+  ;; ONE ENCODER PER MNEMONIC, and the vector one wins where both have it.
+  ;;
+  ;; x86-64 has two encoders and they overlap. encode-x86-64.ss grew the packed
+  ;; forms when slp.ss needed them and is 128-bit only -- its own comment says
+  ;; "a 256-bit form would be a different mnemonic and a different lane count,
+  ;; which is why the width is not a parameter here". vec-x86-64.ss was written
+  ;; for the loop vectorizer and dispatches width across xmm/ymm/zmm, selects
+  ;; EVEX, and now carries masking.
+  ;;
+  ;; Two implementations of one instruction is the hazard vex.ss's header names
+  ;; about the prefix BYTES, one level up: they must agree to the bit, and the
+  ;; differential test against gas is only meaningful if there is one thing
+  ;; under test. Measured before switching -- every packed instruction in a full
+  ;; nbody compile, 155 of them, encoded identically under both -- so this
+  ;; changes no byte in the image today. What it changes is that the emitted
+  ;; path can now reach a width and a mask, which is what (x,y,z,pad) needs.
+  ;;
+  ;; The scalar encoder keeps everything the vector one does not claim,
+  ;; including `vmovddup` and the legacy SSE `xorpd`/`andpd` that carry no VEX
+  ;; prefix at all.
+  (define (x86-encode i)
+    (if (and (pair? i) (symbol? (car i)) (vx:vec-supports? (car i)))
+        (vx:vec-encode-instr i)
+        (x86:encode-instr i)))
+
   (define (instruction-size target i)
     (case (check-target 'instruction-size target)
-      ((x86-64) (length (x86:encode-instr (x86-blank i))))
+      ((x86-64) (length (x86-encode (x86-blank i))))
       ((rv64)   4)))
 
   (define (encode-instruction target i)
     (case (check-target 'encode-instruction target)
-      ((x86-64) (x86:encode-instr i))
+      ((x86-64) (x86-encode i))
       ((rv64)   (rv:encode-instr i))))
 
   ;; RV64 branch and jump targets are the last operand and are relative to the

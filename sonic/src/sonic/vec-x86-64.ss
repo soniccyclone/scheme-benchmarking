@@ -221,6 +221,11 @@
       (vsqrtpd      1 #x51 1 0 1 rm)
       (vmovupd      1 (#x10 . #x11) 1 0 1 mov)
       (vmovapd      1 (#x28 . #x29) 1 0 1 mov)
+      ;; Lane assembly and extraction, which slp.ss emits for a gather pack and
+      ;; for a scalar read of a pack's HIGH member. Both take the low double of
+      ;; each source, which is exactly "assemble a pair from two scalars".
+      (vunpcklpd    1 #x14 1 0 1 rvm)
+      (vunpckhpd    1 #x15 1 0 1 rvm)
       ;; packed double, 0F38 map. W1 under both encodings.
       (vfmadd132pd  2 #x98 1 1 1 rvm)
       (vfmadd213pd  2 #xA8 1 1 1 rvm)
@@ -308,6 +313,25 @@
                   (list (bitwise-ior #b11000000
                                      (bitwise-arithmetic-shift-left rlo 3)
                                      (bitwise-and num 7))))))
+       ;; RIP-RELATIVE, which is how a pooled constant is addressed.
+       ;;
+       ;; mod=00 rm=101 with no SIB. Spelled as a distinct BASE rather than as
+       ;; base=#f, because base=#f is the absolute form (SIB with base=101) and
+       ;; conflating them turns every pooled load into a load from a low
+       ;; absolute address -- see encode-x86-64.ss, which says the same thing
+       ;; and is where this shape comes from.
+       ;;
+       ;; NO disp8*N COMPRESSION HERE. EVEX scales a one-byte displacement by
+       ;; the vector width, and the displacement in a rip-relative operand is a
+       ;; link-time addend that reloc.ss fixes up assuming four bytes. A
+       ;; compressed one would be the wrong size and the wrong scale.
+       ((and (mem? rm) (eq? (mem-base rm) 'rip))
+        (when (mem-index rm)
+          (error who "RIP-relative addressing takes no index" rm))
+        (values rhi rhi2 0 0
+                (append (list (bitwise-ior #b00000101
+                                           (bitwise-arithmetic-shift-left rlo 3)))
+                        (imm32-bytes (mem-disp rm)))))
        ((mem? rm)
         (let ((base (mem-base rm)) (index (mem-index rm))
               (scale (mem-scale rm)) (disp (mem-disp rm)))
