@@ -1001,6 +1001,57 @@
               (if float? `(fsgnj.d ,dst ,src ,src) `(addi ,dst ,src 0))
               (if float? `(movsd ,dst ,src) `(mov ,dst ,src)))))
 
+      ;; --- a self tail call jumps PAST the prologue ---------------------------
+      ;;
+      ;; A loop is a procedure that tail-calls itself, so its back edge is a jump
+      ;; to its own entry label -- where the prologue lives. The epilogue before
+      ;; the jump released the frame and the prologue at the entry reserved it
+      ;; again, every iteration, for a frame whose size cannot have changed:
+      ;;
+      ;;     inner%24.201:  sub rsp, 16      <- every iteration
+      ;;                    ...
+      ;;                    add rsp, 16      <- every iteration
+      ;;                    jmp inner%24.201
+      ;;
+      ;; So the back edge targets a label placed AFTER the prologue and the
+      ;; epilogue is not emitted for it. Both cancel and both disappear.
+      ;;
+      ;; THE LABEL GOES BEFORE THE ARRIVAL MOVES, not after them, and that is the
+      ;; whole subtlety. An arrival copies a parameter out of the argument
+      ;; register it came in, and a self tail call has just written the next
+      ;; iteration's values into those registers -- so the arrivals must run
+      ;; again. Only the frame adjustment is redundant. Placing the label after
+      ;; them would leave every parameter holding its first-iteration value,
+      ;; which is a loop that runs once with the right answer and then forever
+      ;; with the wrong one.
+      ;;
+      ;; Offsets stay correct because rsp simply never moves. A self tail call
+      ;; writes the callee's incoming argument area, which for a self call is our
+      ;; own, at [rsp + bytes + 8 + 8i]; the reader at the top uses the same
+      ;; expression. Both were already computed against a lowered rsp, since the
+      ;; write happened before the epilogue.
+      (define loop-label
+        (string->symbol (string-append (symbol->string name) ".loop")))
+
+      (define (jump-target i)
+        (let loop ((xs (cdr i)))
+          (cond ((null? xs) #f)
+                ((and (pair? (car xs)) (eq? (car (car xs)) 'label)) (cadr (car xs)))
+                ((symbol? (car xs)) (car xs))
+                (else (loop (cdr xs))))))
+
+      (define (self-jump? i)
+        (and ((spiller-tail-jump? sp) i) (eq? (jump-target i) name)))
+
+      (define (retarget i)
+        (cons (car i)
+              (map (lambda (x)
+                     (cond ((and (pair? x) (eq? (car x) 'label) (eq? (cadr x) name))
+                            (list 'label loop-label))
+                           ((eq? x name) loop-label)
+                           (else x)))
+                   (cdr i))))
+
       (let* (;; Before any rewriting: decide which rematerialisable vregs have
              ;; to go back to a frame slot because some instruction needs them
              ;; in memory. Must run before `do-instr` sees anything, since
@@ -1025,10 +1076,16 @@
                                                     (if (and ins
                                                              (or ((spiller-returns? sp) ins)
                                                                  (and ((spiller-tail-jump? sp) ins)
-                                                                      (not (own-label? ins own-labels)))))
+                                                                      (not (own-label? ins own-labels))
+                                                                      ;; the back edge keeps the frame
+                                                                      (not (self-jump? ins)))))
                                                         ((spiller-epilogue sp) bytes)
                                                         '())
-                                                    (if ins (list ins) '())
+                                                    (if ins
+                                                        (list (if (self-jump? ins)
+                                                                  (retarget ins)
+                                                                  ins))
+                                                        '())
                                                     post)))
                                                instrs)))))
                          blocks)))
@@ -1207,6 +1264,7 @@
                                                 mov-of emit-mov)))
                           out)))
                (head (append ((spiller-prologue sp) bytes)
+                             (list loop-label)
                              arrival-instrs stack-arrivals)))
           ;; The prologue goes AFTER the function's entry label, not before it.
           ;;

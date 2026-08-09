@@ -187,6 +187,52 @@
   (ck! "its parameters are not rotated on arrival: at most one register copy"
        (<= (length reg->reg) 1)))
 
+;; --- and it does not re-reserve its frame every iteration -------------------
+;;
+;; A loop is a procedure that tail-calls itself, so its back edge lands on its
+;; own entry label -- where the prologue is. The epilogue before the jump
+;; released the frame and the prologue reserved it again, per iteration, for a
+;; frame that cannot have changed size.
+;;
+;; The back edge now targets a label placed after the prologue. Asserted on the
+;; LISTING rather than by counting instructions, because the property is
+;; structural: the entry label, then the frame adjustment, then the loop label.
+;; A count would also pass if the adjustment had merely moved somewhere worse.
+(let* ((c (compile-sonic src nbody-externs))
+       (inner (let find ((fs (compiled-functions c)))
+                (cond ((null? fs) #f)
+                      ((eq? (finalized-name (car fs)) 'inner%24.201) (car fs))
+                      (else (find (cdr fs))))))
+       (ls (finalized-listing inner))
+       (loop-lbl 'inner%24.201.loop)
+       ;; everything the back edge executes: from the loop label to the jump
+       ;; that returns to it
+       (body (let walk ((xs ls) (on #f) (acc '()))
+               (cond ((null? xs) (reverse acc))
+                     ((eq? (car xs) loop-lbl) (walk (cdr xs) #t acc))
+                     ((not on) (walk (cdr xs) on acc))
+                     ((and (pair? (car xs)) (eq? (car (car xs)) 'jmp)
+                           (member (list 'label loop-lbl) (car xs)))
+                      (reverse acc))
+                     (else (walk (cdr xs) on (cons (car xs) acc)))))))
+  (ck! "the loop label sits AFTER the frame adjustment, not before it"
+       (let ((pre (let walk ((xs ls) (acc '()))
+                    (cond ((null? xs) #f)
+                          ((eq? (car xs) loop-lbl) (reverse acc))
+                          (else (walk (cdr xs) (cons (car xs) acc)))))))
+         (and pre (exists (lambda (i) (and (pair? i) (memq (car i) '(sub add))
+                                           (eq? (cadr i) 'rsp)))
+                          pre))))
+  ;; The arrivals must be INSIDE the loop: a self tail call writes the next
+  ;; iteration's values into the argument registers, and skipping the arrivals
+  ;; would leave every parameter holding its first-iteration value.
+  (ck! "and the back edge re-executes the body, so the loop is not empty"
+       (pair? body))
+  (ck! "nothing on the back edge touches rsp: the frame is reserved once"
+       (not (exists (lambda (i) (and (pair? i) (memq (car i) '(sub add))
+                                     (eq? (cadr i) 'rsp)))
+                    body))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))
