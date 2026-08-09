@@ -227,6 +227,20 @@
       ;; each source, which is exactly "assemble a pair from two scalars".
       (vunpcklpd    1 #x14 1 0 1 rvm)
       (vunpckhpd    1 #x15 1 0 1 rvm)
+      ;; LANE 2 OF A 256-BIT PACK, which is the one extraction three-lane work
+      ;; needs and the only one that is not already free.
+      ;;
+      ;; Lane 0 costs nothing: a packed register's low double IS the scalar.
+      ;; Lane 1 is `vunpckhpd xmm, xmm, xmm` on the LOW HALF -- and ymm3's low
+      ;; 128 bits are xmm3, so the instruction slp.ss already emits for a pair
+      ;; reads lane 1 of a triple unchanged. Lane 2 is the low double of the
+      ;; HIGH half, and `vextractf128 xmm, ymm, 1` is how you get at it.
+      ;;
+      ;; `rvmi` rather than `rvm`: the immediate selects which half, and it is
+      ;; the only form here that has one. 0F3A map, W0, and the source is the
+      ;; REG field with the destination in r/m -- the opposite of everything
+      ;; else in this table, which is why it is its own form rather than a flag.
+      (vextractf128 3 #x19 1 0 0 exti)
       ;; packed double, 0F38 map. W1 under both encodings.
       (vfmadd132pd  2 #x98 1 1 1 rvm)
       (vfmadd213pd  2 #xA8 1 1 1 rvm)
@@ -545,7 +559,11 @@
            (pp (entry-pp e))
            (mp (entry-map e))
            (scalar? (= pp 3))
-           (width (operand-width 'vec-encode-instr ops)))
+           ;; For an extract the operands DISAGREE about width on purpose --
+           ;; xmm out of ymm -- so the encoding width is the source's.
+           (width (if (eq? (entry-form e) 'exti)
+                      (vec-reg-width (cadr ops))
+                      (operand-width 'vec-encode-instr ops))))
       (when (exists masked? (cdr raw-ops))
         (error 'vec-encode-instr "only the destination may carry a mask" i))
       (when (and (masked? dst) (mem? (masked-operand dst)) (masked-zeroing? dst))
@@ -565,6 +583,14 @@
                (unless (= (length ops) 2)
                  (error 'vec-encode-instr "expects two operands" i))
                (values (car ops) 0 (cadr ops) (entry-op e)))
+              ;; `(vextractf128 xmm-dst ymm-src imm)`. The SOURCE is the reg
+              ;; field and the destination is r/m, which is backwards from
+              ;; every other form here, and the width is the SOURCE's -- the
+              ;; destination is half as wide by construction.
+              ((exti)
+               (unless (= (length ops) 3)
+                 (error 'vec-encode-instr "vextractf128 expects two operands and an immediate" i))
+               (values (cadr ops) 0 (car ops) (entry-op e)))
               ((mov)
                (unless (= (length ops) 2)
                  (error 'vec-encode-instr "expects two operands" i))
@@ -597,7 +623,8 @@
                             "this operand needs EVEX but the width does not select it" i))
                    (vex-bytes r x b w vvvv (ll-bits (if scalar? 128 width)) pp mp)))
              (list opcode)
-             tail))))))
+             tail
+             (if (eq? form 'exti) (list (bitwise-and (caddr ops) #xff)) '())))))))
 
   (define (vec-encode-instrs is) (apply append (map vec-encode-instr is)))
   (define (vec-instr-length i) (length (vec-encode-instr i)))

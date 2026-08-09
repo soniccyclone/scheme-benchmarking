@@ -401,6 +401,8 @@
         ((and (pair? x) (memq (car x) '(mask maskz))) (gas-masked i x))
         ((and (eq? (car i) 'kmovw) (assq x gpr32)) => (lambda (p) (symbol->string (cdr p))))
         ((symbol? x) (symbol->string x))
+        ;; An immediate. Only `vextractf128` has one, and it selects the half.
+        ((and (integer? x) (exact? x)) (number->string x))
         (else (error 'gas-op "cannot print operand" x))))
 
 (define (commas ss)
@@ -557,7 +559,13 @@
     (v3movupd xmm7 (mem r8 rcx 8 16))            ; a masked LOAD, disp32
     (v3movupd xmm7 (mem r8 rcx 8 32))            ; disp8 of 1, times 32
     (v3movupd (mem r9 rcx 8 32) xmm7)            ; a masked STORE
-    (v3addpd xmm3 xmm1 (mem r8 rcx 8 64))))
+    (v3addpd xmm3 xmm1 (mem r8 rcx 8 64))
+    ;; Lane 2 of a triple: the low double of the HIGH half. Lane 0 is free and
+    ;; lane 1 is the vunpckhpd slp.ss already emits, on ymm3's low 128 bits --
+    ;; which ARE xmm3, so that instruction reads lane 1 of a triple unchanged.
+    (vextractf128 xmm5 ymm3 1)
+    (vextractf128 xmm0 ymm9 0)
+    (vextractf128 xmm12 ymm13 1)))
 
 ;; --- what masking must REFUSE ----------------------------------------------
 ;;
