@@ -328,6 +328,30 @@ The practical consequence is that the remaining milestone-5 work has to shorten 
 the DEPENDENCE CHAIN, not the listing. Cutting another 100 moves is now known to be worth
 about 6 cycles.
 
+**Addendum, 2026-08-09: measure the RATIO, not the absolute.** Cycles on this laptop APU
+vary about 5% run to run and earlier readings bounced far more than that, which made single
+measurements useless for steering. Three trials of `perf stat -r 20`, two-point, gave:
+
+| trial | SonicScheme | c-native | ratio |
+|---|---:|---:|---:|
+| 1 | 185.8 | 165.5 | 1.123 |
+| 2 | 185.5 | 168.1 | 1.104 |
+| 3 | 193.7 | 170.3 | 1.137 |
+
+The absolutes move and **the ratio does not** --- 1.12 ± 0.02 --- because both binaries ride
+the same clock excursion. So milestone 5 is scored on the ratio, measured as three trials of
+twenty, and a single run of either binary is not evidence about anything.
+
+Where the remaining 12% lives is no longer a mystery. FP is 420 ops/step against c-native's
+297, and the 123-op difference is almost entirely fused multiply-add: gcc emits `vfmadd` and
+`vfnmadd` throughout and each one replaces two of ours. That is D24's contraction
+permission, which is off by default and protects the bit-exact oracle. Integer is 339
+against 17, and that is `outer%22`, whose counters cannot stay in registers for the reason
+recorded on its bead.
+
+So beating gcc on cycles requires re-opening D24. Nothing in the back end reaches it.
+
+
 ### D35 --- a call destroys what its callee writes, not the whole register file
 
 regalloc.ss spilled every value live across a call, and said why:
