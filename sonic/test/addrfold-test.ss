@@ -13,7 +13,7 @@
         (sonic lang) (sonic addrfold) (sonic dce)
         (sonic read) (sonic expand) (sonic parse) (sonic policy)
         (sonic anf) (sonic assign) (sonic inline) (sonic essa)
-        (sonic driver) (sonic pipeline) (sonic finalize))
+        (sonic driver) (sonic pipeline) (sonic finalize) (sonic unroll))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -150,11 +150,28 @@
 ;; spilled five values and its block carried sixteen frame-slot references; the
 ;; four derived indices were what made it spill.
 
-(let* ((c (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs))
-       (inner (let find ((fs (compiled-functions c)))
-                (cond ((null? fs) #f)
-                      ((eq? (finalized-name (car fs)) 'inner%24.201) (car fs))
-                      (else (find (cdr fs)))))))
+
+;; FOUND BY PREFIX, not by full name. The `%24` comes from the expander and is
+;; stable with the source; the `.NNN` suffix is a global gensym counter that
+;; every pass upstream shifts -- unrolling moved it from .201 to .271. A test
+;; that pins the counter fails whenever an unrelated pass allocates a name, and
+;; reports it as a missing loop.
+(define (force-loop c)
+  (let find ((fs (compiled-functions c)))
+    (cond ((null? fs) #f)
+          ((let ((s (symbol->string (finalized-name (car fs)))))
+             (and (>= (string-length s) 6) (string=? (substring s 0 6) "inner%")))
+           (car fs))
+          (else (find (cdr fs))))))
+
+;; UNROLLING OFF for this one, so the measurement is about THIS pass. With it on
+;; the force loop is twice the size and spills one value -- which is a fact about
+;; register pressure under unrolling, asserted in unroll-test.ss, and says
+;; nothing either way about whether folding an index into the addressing mode
+;; removed the four derived vregs it exists to remove.
+(let* ((c (parameterize ((unroll-size-budget 0))
+            (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs)))
+       (inner (force-loop c)))
   (ck! "nbody's pairwise force loop is found" (and inner #t))
   (ck! "and it spills NOTHING, where it used to spill five"
        (and inner (null? (finalized-spills inner)))))

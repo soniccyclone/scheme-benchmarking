@@ -165,11 +165,22 @@
 ;; unchanged across an iteration -- the counter is not -- so some copies on the
 ;; back edge are real work. The rotation is what must not come back, and a
 ;; permutation of five parameters cannot hide under a bound of four.
+
+;; FOUND BY PREFIX, not by full name. The `%24` comes from the expander and is
+;; stable with the source; the `.NNN` suffix is a global gensym counter that
+;; every pass upstream shifts -- unrolling moved it from .201 to .271. A test
+;; that pins the counter fails whenever an unrelated pass allocates a name, and
+;; reports it as a missing loop.
+(define (force-loop c)
+  (let find ((fs (compiled-functions c)))
+    (cond ((null? fs) #f)
+          ((let ((s (symbol->string (finalized-name (car fs)))))
+             (and (>= (string-length s) 6) (string=? (substring s 0 6) "inner%")))
+           (car fs))
+          (else (find (cdr fs))))))
+
 (let* ((c (compile-sonic src nbody-externs))
-       (inner (let find ((fs (compiled-functions c)))
-                (cond ((null? fs) #f)
-                      ((eq? (finalized-name (car fs)) 'inner%24.201) (car fs))
-                      (else (find (cdr fs))))))
+       (inner (force-loop c))
        (header (let walk ((xs (finalized-listing inner)) (seen #f) (acc '()))
                  ;; the entry block: from the function label to the first branch
                  (cond ((null? xs) (reverse acc))
@@ -199,12 +210,10 @@
 ;; structural: the entry label, then the frame adjustment, then the loop label.
 ;; A count would also pass if the adjustment had merely moved somewhere worse.
 (let* ((c (compile-sonic src nbody-externs))
-       (inner (let find ((fs (compiled-functions c)))
-                (cond ((null? fs) #f)
-                      ((eq? (finalized-name (car fs)) 'inner%24.201) (car fs))
-                      (else (find (cdr fs))))))
+       (inner (force-loop c))
        (ls (finalized-listing inner))
-       (loop-lbl 'inner%24.201.loop)
+       (loop-lbl (string->symbol
+                  (string-append (symbol->string (finalized-name inner)) ".loop")))
        ;; everything the back edge executes: from the loop label to the jump
        ;; that returns to it
        (body (let walk ((xs ls) (on #f) (acc '()))

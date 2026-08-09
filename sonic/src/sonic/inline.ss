@@ -77,7 +77,11 @@
 
 (library (sonic inline)
   (export inline-program inline-program/report
-          inline-size-budget inline-depth-budget)
+          inline-size-budget inline-depth-budget
+          ;; For the unroller, which is a different transformation with a
+          ;; different cost model (see rule 4) but needs the same two tools:
+          ;; capture-avoiding copying, and a node count to budget against.
+          freshen expr-size)
   (import (chezscheme) (nanopass) (sonic lang))
 
   ;; --- the budgets ---------------------------------------------------------
@@ -124,6 +128,9 @@
       [(letrec ([,x* ,e*] ...) ,body)
        (+ 1 (apply + (map expr-size e*)) (expr-size body))]
       [(declare ([,x* ,prem*] ...) ,body) (+ 1 (expr-size body))]
+      ;; Without this a procedure whose body is wrapped in one measures 1 node,
+      ;; so every size budget passes it and none of them means anything.
+      [(declare-distinct (,x* ...) ,body) (+ 1 (expr-size body))]
       [(policy ([,pn* ,b*] ...) ,body) (+ 1 (expr-size body))]
       [else 1]))
 
@@ -266,6 +273,19 @@
         [(declare ([,x* ,prem*] ...) ,body)
          (let ([x1* (map (lambda (a) (rn a sub)) x*)])
            `(declare ([,x1* ,prem*] ...) ,(freshen body sub)))]
+        ;; NOT an `else` case, and the difference is name capture. Falling
+        ;; through returns the node UNCHANGED -- every binder inside it keeps
+        ;; its original name, so the copy and the original share names and the
+        ;; program has two definitions of one variable. It was unreachable only
+        ;; because this pass never matched a real program at all (see the note
+        ;; on `Expr`); the unroller reaches it.
+        ;;
+        ;; Like `declare`, this NAMES existing variables rather than binding
+        ;; them, so the names are renamed through the substitution and the body
+        ;; is freshened under the same one.
+        [(declare-distinct (,x* ...) ,body)
+         (let ([x1* (map (lambda (a) (rn a sub)) x*)])
+           `(declare-distinct (,x1* ...) ,(freshen body sub)))]
         [(policy ([,pn* ,b*] ...) ,body)
          `(policy ([,pn* ,b*] ...) ,(freshen body sub))]
         [else e])))

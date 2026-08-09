@@ -38,7 +38,8 @@
           compiled-globals compiled-lift-report)
   (import (chezscheme) (nanopass)
           (sonic lang) (sonic read) (sonic expand) (sonic parse) (sonic policy)
-          (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide)
+          (sonic anf) (sonic assign) (sonic inline) (sonic unroll)
+          (sonic essa) (sonic elide)
           (sonic repr) (sonic lift) (sonic convert) (sonic lower) (sonic globals)
           (sonic shapes) (sonic interval) (sonic cse) (sonic dce) (sonic addrfold) (sonic slp)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
@@ -50,12 +51,20 @@
     (fields image code pool entry listing functions globals lift-report))
 
   (define (compile-sonic path externs)
-    (let* ((p0 (inline-program
+    (let* (;; UNROLL AFTER INLINING, BEFORE SSA. After inlining, because a loop
+           ;; whose body still contains a call to a small procedure would be
+           ;; unrolled around the call rather than around its body, and the
+           ;; size budget would be measured against the wrong thing. Before
+           ;; essa, because the copy needs fresh names and `essa` is what
+           ;; establishes SSA over whatever shape it is handed -- doing it the
+           ;; other way round would mean re-running SSA construction here.
+           (p0 (unroll-program
+                (inline-program
                 (assign-convert-program
                  (anf-program
                   (resolve-policy-program
                    (parse-program (expand-program (read-all-from-file path))
-                                  externs)))))))
+                                  externs))))))))
       ;; SHAPES BEFORE ELISION. The interval domain can discharge nbody's inner
       ;; loop arithmetically and never had the premises: a vector's length was
       ;; never connected to the `make-flvector` that produced it, and a
