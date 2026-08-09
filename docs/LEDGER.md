@@ -286,6 +286,48 @@ allocatable float registers remain, and the float class was never the one under 
 nbody has 179 raw-f64 values against 196 raw-word ones, and it was the raw-word pool that
 spilled.
 
+### D34 --- instruction count stopped predicting cycles, so the instrument changes
+
+Retired instructions have been the primary instrument since D17, and the reason was good:
+wall time on a loaded machine is noise, and instruction count is exactly reproducible. It
+is also, up to a point, a fair proxy. That point has been passed.
+
+Pinning loop parameters and getting two constants out of registers removed **122
+instructions per step, and bought about 7 cycles**:
+
+|                | instr/step | cycles/step | IPC  |
+|----------------|-----------:|------------:|-----:|
+| before         |       1004 |         211 | 4.76 |
+| after          |        882 |       203.8 | 4.33 |
+| c-native       |        333 |       180.5 | 1.84 |
+
+That is 0.057 cycles per instruction, against the 0.21 the milestone-5 arithmetic assumed.
+The explanation is not subtle and it should have been anticipated: every instruction removed
+here was a register-to-register `mov`, and x86 has eliminated those in the RENAMER since
+Sandy Bridge. They retire, so `instructions:u` counts them; they never issue to a port, so
+they cost nothing to remove. A register rotation on a loop back edge is the single most
+move-shaped thing a compiler emits, which is why the effect showed up all at once.
+
+Note what the IPC column really says. Ours FELL, from 4.76 to 4.33, and that is the
+optimisation working: the instructions removed were the cheapest ones in the mix, so what
+remains is denser. Rising IPC would have been the bad outcome.
+
+We are within 13% of `gcc -O3 -march=native` in cycles while issuing 2.6x its instructions.
+Both programs compute the same `sqrt` and the same divide per pair, and c-native's IPC of
+1.84 says it is waiting on that chain rather than on issue bandwidth. It is very likely the
+floor for both of us, and we are 23 cycles/step above it.
+
+**So: cycles are the instrument for milestone 5, with instruction count kept as a
+secondary.** Not a repudiation of D17 --- instruction count remains the right way to compare
+ACROSS runtimes, where startup and GC would otherwise dominate, and it is what every
+cross-implementation number in this project rests on. It is the wrong way to steer inside a
+back end that has already removed the expensive work, because what is left to remove is
+disproportionately free.
+
+The practical consequence is that the remaining milestone-5 work has to shorten or overlap
+the DEPENDENCE CHAIN, not the listing. Cutting another 100 moves is now known to be worth
+about 6 cycles.
+
 Kept because they are implementation hazards, not trivia.
 
 - **Kildall's Theorem 2 is false** for his own constant propagation. The proof needs distributivity, not monotonicity; his function fails it. Algorithm A computes MFP, not MOP. Kam & Ullman 1977 corrected it.
