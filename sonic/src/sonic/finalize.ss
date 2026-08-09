@@ -1314,5 +1314,23 @@
                                   (outgoing-words-for target (cdr fn) classes)
                                   (tail-outgoing-words-for target (cdr fn) classes)
                                   (remat-table target (cdr fn) classes))))
-           (partition-into-functions blocks entry))))
+           ;; NOT THE ORPHAN BUCKET. `partition-into-functions` gathers blocks
+           ;; that no entry reaches under `<unreachable>` so nothing is silently
+           ;; dropped, which is the right thing for it to do and the wrong thing
+           ;; to compile: a block no entry reaches cannot execute.
+           ;;
+           ;; Compiling it is not merely wasted bytes. The bucket is not a
+           ;; procedure -- it has no parameter list, so it is treated as
+           ;; receiving zero incoming stack words, and a tail call inside it that
+           ;; needs one looks like a tail call that would grow the stack. That
+           ;; refusal is correct for a real function and meaningless here, and it
+           ;; aborts the compile over code that never runs.
+           ;;
+           ;; It became reachable when inline.ss started working: inlining a
+           ;; procedure at its every call site leaves the original binding with
+           ;; no callers, which is exactly what this bucket collects. Removing
+           ;; the binding is dead code elimination and belongs to a pass that
+           ;; does that; declining to emit machine code for it belongs here.
+           (filter (lambda (fn) (not (eq? (car fn) '<unreachable>)))
+                   (partition-into-functions blocks entry)))))
   )

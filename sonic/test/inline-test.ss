@@ -14,6 +14,13 @@
 
 (import (chezscheme) (nanopass) (sonic lang) (sonic inline))
 
+;; THE BUDGET IS SET HERE, because this file tests the MECHANISM and the shipped
+;; default is a policy. That default is now 0 -- the pass is disabled by
+;; measurement on nbody, where it changes no code and costs the interval analysis
+;; eighteen discharged facts -- and every fixture below was written against 12,
+;; which is the number to re-enable it at. See the note on `inline-size-budget`.
+(inline-size-budget 12)
+
 (define failures 0)
 (define checks 0)
 

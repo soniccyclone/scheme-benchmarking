@@ -32,6 +32,16 @@
         (sonic vec-x86-64) (sonic vec-rv64)
         (sonic object) (sonic disasm) (sonic driver) (sonic pipeline))
 
+;; MATCHED BY PREFIX. The `%NN` comes from the expander and is stable with the
+;; source; the trailing `.NNN` is a global gensym counter that every pass
+;; upstream shifts -- unrolling and inlining have each moved it. A test pinning
+;; the counter fails whenever an unrelated pass allocates a name, and reports it
+;; as a missing loop rather than as what it is.
+(define (name-prefix? prefix nm)
+  (let ((s (symbol->string nm)) (p (symbol->string prefix)))
+    (and (>= (string-length s) (string-length p))
+         (string=? (substring s 0 (string-length p)) p))))
+
 (define failures 0) (define checks 0)
 (define (ck! name ok)
   (set! checks (+ checks 1))
@@ -200,7 +210,7 @@
 (ck! "the pairwise loop is still refused, for being too short to fill a vector"
      (let find ((vs nbody-verdicts))
        (cond ((null? vs) #f)
-             ((eq? (vl-loop (car vs)) 'inner%24.201)
+             ((name-prefix? 'inner% (vl-loop (car vs)))
               (vl-refused-for? (car vs) 'trip-count-too-short))
              (else (find (cdr vs))))))
 

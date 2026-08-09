@@ -97,7 +97,30 @@
   ;; for instruction cache footprint, and nbody is precisely the program where
   ;; that trade is reported to come out flat. Tuning this number against nbody's
   ;; wall clock would be fitting to noise, so it is not tuned against anything.
-  (define inline-size-budget (make-parameter 12))
+  ;; ZERO, WHICH DISABLES THE PASS, and that is a measurement rather than a
+  ;; retreat. Until 2026-08-08 this pass had never run at all: it matched only
+  ;; on Expr while the pipeline hands a Program, and it stopped at the
+  ;; `declare-distinct` that wraps every kernel here. Both are fixed, so the
+  ;; question "is it worth running" could finally be asked, and nbody answers:
+  ;;
+  ;;   inline-budget    instr/step   fp     int    elide sites proved
+  ;;   0 (off)               775.5   420    348.5              157 of 227
+  ;;   12                    775.5   420    348.5              139 of 227
+  ;;
+  ;; Identical code, and eighteen facts the interval analysis can no longer
+  ;; discharge. The header above says a measured effect of nothing on nbody is
+  ;; the EXPECTED result -- Waddell and Dybvig report 0.92 to 1.05 for cp0 on
+  ;; this exact benchmark -- and that the pass's real value is downstream, in
+  ;; removing call boundaries that cap `(sonic alias)` and `(sonic analyze)`.
+  ;; On this program it removes one boundary, around a wrapper called twice
+  ;; outside every loop, and costs the analysis more than it buys.
+  ;;
+  ;; So it is off by evidence, not by accident, and the knob is the pass's own.
+  ;; A benchmark with many small procedures -- fannkuchredux, milestone 6 -- is
+  ;; where to ask again, and the number to raise it to is 12: an ANF'd accessor
+  ;; of nbody's shape counts 8 to 12 under `expr-size`, and nbody's own
+  ;; procedures measure 28 to 129, so 12 admits helpers and refuses kernels.
+  (define inline-size-budget (make-parameter 0))
 
   ;; DEPTH, 2. Inlining a callee into an already-inlined callee is where growth
   ;; turns multiplicative. Two levels covers accessor-into-kernel, which is the
@@ -152,8 +175,34 @@
       [(let ([,x ,se]) ,body) (tail-count body)]
       [(letrec ([,x* ,e*] ...) ,body) (tail-count body)]
       [(declare ([,x* ,prem*] ...) ,body) (tail-count body)]
+      ;; Falling through to `else` counted a wrapped body as ONE tail position,
+      ;; which is the right number by accident and the wrong reason: rule 5 then
+      ;; admitted a body `splice` could not walk, and the two drifted apart in
+      ;; exactly the way the note on `splice`'s else case predicted.
+      [(declare-distinct (,x* ...) ,body) (tail-count body)]
       [(policy ([,pn* ,b*] ...) ,body) (tail-count body)]
       [else 1]))
+
+  ;; The widest tail call in a body, in ARGUMENTS. Tail positions only: a call
+  ;; that is not in tail position becomes an ordinary call with its own frame and
+  ;; writes its arguments into this procedure's outgoing area, which the frame
+  ;; layout already sizes for.
+  (define (max-tail-arity e)
+    (nanopass-case (Lanf Expr) e
+      [(if ,x ,e0 ,e1) (max (max-tail-arity e0) (max-tail-arity e1))]
+      [(seq ,e0 ,e1) (max-tail-arity e1)]
+      [(let ([,x ,se]) ,body) (max-tail-arity body)]
+      [(letrec ([,x* ,e*] ...) ,body) (max-tail-arity body)]
+      [(declare ([,x* ,prem*] ...) ,body) (max-tail-arity body)]
+      [(declare-distinct (,x* ...) ,body) (max-tail-arity body)]
+      [(policy ([,pn* ,b*] ...) ,body) (max-tail-arity body)]
+      [(tailcall ,x ,x* ...) (length x*)]
+      [else 0]))
+
+  ;; The arity of the procedure whose body is being walked. A dynamic parameter
+  ;; rather than a threaded argument because every `Expr` call site would
+  ;; otherwise grow one, and this is read in exactly one place.
+  (define current-arity (make-parameter 0))
 
   ;; --- which names are known procedures ------------------------------------
 
@@ -198,6 +247,10 @@
                      x* e*)
            (Expr body from)]
           [(declare ([,x* ,prem*] ...) ,body) (for-each use! x*) (Expr body from)]
+          ;; Same treatment as `declare`: it NAMES variables rather than binding
+          ;; them, and every kernel taking vectors is wrapped in one. Without it
+          ;; this walk stops at the top of every procedure in the benchmark.
+          [(declare-distinct (,x* ...) ,body) (for-each use! x*) (Expr body from)]
           [(policy ([,pn* ,b*] ...) ,body) (Expr body from)]
           [else (void)]))
       (define (SimpleExpr se from)
@@ -208,7 +261,30 @@
           [(call ,x ,x* ...) (edge! from x) (for-each use! x*)]
           [(primcall ,pr ([,pn* ,c*] ...) ,x* ...) (for-each use! x*)]
           [else (void)]))
-      (Expr e #f)
+      ;; TOP-LEVEL BINDINGS ARE PROCEDURES TOO, and reaching them is the whole
+      ;; of D32 here. A top-level `(define (f ...) ...)` is bound exactly once,
+      ;; by the Program rather than by a `let`, so it satisfies rule 1 for the
+      ;; same reason a letrec binding does -- and assign conversion has already
+      ;; run, so a name still bound to a bare lambda is one nothing assigns to.
+      ;; ACCEPTS EITHER SHAPE. The pipeline hands a Program; the fixtures in this
+      ;; tree hand a bare Expr, and both are legitimate inputs -- assign.ss keeps
+      ;; two named entry points for the same reason, which is the tidier answer
+      ;; and would rename a function every test in this tree calls.
+      (define (Program prog)
+        (nanopass-case (Lanf Program) prog
+          [(top ([,x* ,e*] ...) (,x2* ...) ,body)
+           (for-each bind! x*)
+           (for-each (lambda (nm rhs)
+                       (nanopass-case (Lanf Expr) rhs
+                         [(lambda (,x1* ...) ,body1)
+                          (hashtable-set! lam nm (cons x1* body1))
+                          (for-each bind! x1*)
+                          (Expr body1 nm)]
+                         [else (Expr rhs #f)]))
+                     x* e*)
+           (Expr body #f)]
+          [else (Expr prog #f)]))
+      (Program e)
       (let ([procs (make-eq-hashtable)])
         (vector-for-each
          (lambda (nm)
@@ -331,6 +407,7 @@
         [(seq ,e0 ,e1) `(seq ,e0 ,(splice e1 r k))]
         [(letrec ([,x* ,e*] ...) ,body) `(letrec ([,x* ,e*] ...) ,(splice body r k))]
         [(declare ([,x* ,prem*] ...) ,body) `(declare ([,x* ,prem*] ...) ,(splice body r k))]
+        [(declare-distinct (,x* ...) ,body) `(declare-distinct (,x* ...) ,(splice body r k))]
         [(policy ([,pn* ,b*] ...) ,body) `(policy ([,pn* ,b*] ...) ,(splice body r k))]
         ;; Unreachable: rule 5 checked tail-count = 1 before we got here. If it
         ;; fires, the check and this walk have drifted apart.
@@ -348,6 +425,32 @@
   (define (inline-program/report e)
     (let-values ([(procs recursive) (scan e)])
       (let ([report '()])
+
+        ;; RULE 6. A TAIL call site may not receive a body that tail-calls
+        ;; something wider than the enclosing procedure.
+        ;;
+        ;; A tail call writes its stack arguments over the enclosing procedure's
+        ;; INCOMING argument area, because the jump pushes no return address and
+        ;; the callee reads its arguments exactly where the caller's were. That
+        ;; is sound only while the callee needs no more words than this procedure
+        ;; received; needing more means writing past that area into the caller's
+        ;; caller's live frame, and finalize.ss refuses it rather than emitting
+        ;; the write. Growing the stack instead needs a frame shuffle this
+        ;; compiler does not have, and could not simply be added: in a cycle of
+        ;; mutually tail-calling procedures a per-call growth never unwinds.
+        ;;
+        ;; nbody reaches this immediately. `energy` takes three arguments and
+        ;; tail-calls `energy-from` with five; x86-64 has two tagged argument
+        ;; registers, so the fifth rides on the stack, and inlining `energy` into
+        ;; a narrower procedure asks for exactly the write that is refused.
+        ;;
+        ;; ARITY IS A PROXY for stack words, deliberately. What actually decides
+        ;; is how many arguments overflow their class's registers, which depends
+        ;; on storage classes that repr.ss has not assigned yet. Comparing counts
+        ;; is conservative in the safe direction: it refuses some inlines that
+        ;; would have fit, and admits none that would not.
+        (define (tail-fits? p)
+          (<= (max-tail-arity (proc-body p)) (current-arity)))
 
         (define (candidate? f nargs stack)
           (let ([p (hashtable-ref procs f #f)])
@@ -379,15 +482,21 @@
                  (or (try-let x se k stack)
                      `(let ([,x ,(SimpleExpr se stack)]) ,k)))]
               [(tailcall ,x ,x* ...)
-               (let ([b (expand x x* stack)])
+               (let* ([p (hashtable-ref procs x #f)]
+                      [b (and p (tail-fits? p) (expand x x* stack))])
                  (cond [b (set! report (cons x report)) b]
                        [else e]))]
-              [(lambda (,x* ...) ,body) `(lambda (,x* ...) ,(Expr body stack))]
+              [(lambda (,x* ...) ,body)
+               `(lambda (,x* ...)
+                  ,(parameterize ([current-arity (length x*)])
+                     (Expr body stack)))]
               [(letrec ([,x* ,e*] ...) ,body)
                (let ([e1* (map (lambda (r) (Expr r stack)) e*)])
                  `(letrec ([,x* ,e1*] ...) ,(Expr body stack)))]
               [(declare ([,x* ,prem*] ...) ,body)
                `(declare ([,x* ,prem*] ...) ,(Expr body stack))]
+              [(declare-distinct (,x* ...) ,body)
+               `(declare-distinct (,x* ...) ,(Expr body stack))]
               [(policy ([,pn* ,b*] ...) ,body)
                `(policy ([,pn* ,b*] ...) ,(Expr body stack))]
               [else e])))
@@ -412,9 +521,19 @@
         (define (SimpleExpr se stack)
           (with-output-language (Lanf SimpleExpr)
             (nanopass-case (Lanf SimpleExpr) se
-              [(lambda (,x* ...) ,body) `(lambda (,x* ...) ,(Expr body stack))]
+              [(lambda (,x* ...) ,body)
+             `(lambda (,x* ...)
+                ,(parameterize ([current-arity (length x*)]) (Expr body stack)))]
               [else se])))
 
-        (let ([out (Expr e '())])
+        (define (Program prog)
+          (nanopass-case (Lanf Program) prog
+            [(top ([,x* ,e*] ...) (,x2* ...) ,body)
+             (let ([e1* (map (lambda (r) (Expr r '())) e*)])
+               (with-output-language (Lanf Program)
+                 `(top ([,x* ,e1*] ...) (,x2* ...) ,(Expr body '()))))]
+            [else (Expr prog '())]))
+
+        (let ([out (Program e)])
           (values out (reverse report))))))
   )

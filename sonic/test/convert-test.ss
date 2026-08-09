@@ -37,14 +37,20 @@
                                    (file-options no-fail)
                                    (buffer-mode block) (native-transcoder))))
     (put-string p src) (close-port p))
-  (let* ((p0 (inline-program
+  ;; INLINING OFF. `pick` is a one-node identity procedure, so the inliner
+  ;; specialises it at both call sites -- which is exactly what an inliner is
+  ;; for, and it dissolves the polymorphic join this file exists to test. The
+  ;; join is the fixture, not an accident of the source, so it is constructed
+  ;; deliberately rather than left to survive whatever other passes do.
+  (let* ((p0 (parameterize ((inline-size-budget 0))
+              (inline-program
               (assign-convert-program
                (anf-program
                 (resolve-policy-program
                  (parse-program
                   (expand-program
                    (read-all-from-file "/tmp/sonic-convert-test.sps"))
-                  externs))))))
+                  externs)))))))
          (ssa (essa-program p0)))
     (let*-values (((p2 rp) (select-representations-program ssa))
                   ((lifted lrep) (lift-program (unparse-Lrepr p2)))

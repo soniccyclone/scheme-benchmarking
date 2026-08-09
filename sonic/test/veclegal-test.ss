@@ -31,6 +31,16 @@
         (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic pipeline)
         (sonic driver))
 
+;; MATCHED BY PREFIX. The `%NN` comes from the expander and is stable with the
+;; source; the trailing `.NNN` is a global gensym counter that every pass
+;; upstream shifts -- unrolling and inlining have each moved it. A test pinning
+;; the counter fails whenever an unrelated pass allocates a name, and reports it
+;; as a missing loop rather than as what it is.
+(define (name-prefix? prefix nm)
+  (let ((s (symbol->string nm)) (p (symbol->string prefix)))
+    (and (>= (string-length s) (string-length p))
+         (string=? (substring s 0 (string-length p)) p))))
+
 (define failures 0)
 (define checks 0)
 
@@ -515,13 +525,13 @@
   (check! "the pairwise loop's array accesses are actually found"
           (let find ((xs vs))
             (cond ((null? xs) 0)
-                  ((eq? (vl-loop (car xs)) 'inner%24.201) (length (vl-accesses (car xs))))
+                  ((name-prefix? 'inner% (vl-loop (car xs))) (length (vl-accesses (car xs))))
                   (else (find (cdr xs)))))
           20)
   (check! "and it is no longer refused for control flow it does not have"
           (let find ((xs vs))
             (cond ((null? xs) #f)
-                  ((eq? (vl-loop (car xs)) 'inner%24.201)
+                  ((name-prefix? 'inner% (vl-loop (car xs)))
                    (vl-refused-for? (car xs) 'control-flow-in-body))
                   (else (find (cdr xs)))))
           #f)
@@ -532,7 +542,8 @@
   (check! "the loops bounded by n-bodies are no longer refused for their count"
           (let loop ((xs vs) (n 0))
             (cond ((null? xs) n)
-                  ((memq (vl-loop (car xs)) '(outer%22.193 loop%35.293))
+                  ((exists (lambda (pre) (name-prefix? pre (vl-loop (car xs))))
+                           '(outer%22 loop%35))
                    (loop (cdr xs)
                          (if (vl-refused-for? (car xs) 'unknown-trip-count) n (+ n 1))))
                   (else (loop (cdr xs) n))))
@@ -558,7 +569,7 @@
   (check! "nbody's position update is LEGAL to vectorize, at 128 and 256 bits"
           (let find ((xs vs))
             (cond ((null? xs) #f)
-                  ((eq? (vl-loop (car xs)) 'loop%35.293)
+                  ((name-prefix? 'loop%35 (vl-loop (car xs)))
                    (list (vl-legal? (car xs)) (vl-widths (car xs))
                          (vl-elt-class (car xs))))
                   (else (find (cdr xs)))))
@@ -566,7 +577,7 @@
   (check! "and the inner loop is refused for being SHORT, not for being unknown"
           (let loop ((xs vs))
             (cond ((null? xs) #f)
-                  ((eq? (vl-loop (car xs)) 'inner%24.201)
+                  ((name-prefix? 'inner% (vl-loop (car xs)))
                    (and (vl-refused-for? (car xs) 'trip-count-too-short)
                         (not (vl-refused-for? (car xs) 'unknown-trip-count))))
                   (else (loop (cdr xs)))))

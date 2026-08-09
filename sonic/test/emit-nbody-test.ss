@@ -128,8 +128,15 @@
     (display " runtime labels") (newline)
     (ck! (string-append (symbol->string target) ": the whole program assembles to bytes")
          (> (bytevector-length code) 1000))
+    ;; DERIVED, not a literal. The count was 17 and is now 16, because inlining
+    ;; `energy` at both its call sites left it with no callers and finalize
+    ;; declines to emit a procedure no entry reaches. A magic number here says
+    ;; nothing about whether a function was DROPPED, which is the actual claim --
+    ;; so it is compared against the reachable functions of the lowered program.
     (ck! (string-append (symbol->string target) ": every function made it into the image")
-         (= (length fns) 17))
+         (= (length fns)
+            (length (filter (lambda (f) (not (eq? (car f) '<unreachable>)))
+                            (partition-into-functions (cadr prog) (caddr prog))))))
     ;; The stubs must be the RUNTIME boundary and nothing else. An undefined
     ;; label that is one of our own blocks would mean a lost edge.
     (ck! (string-append (symbol->string target) ": nothing undefined is one of our own blocks")

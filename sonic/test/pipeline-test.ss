@@ -3,6 +3,16 @@
         (sonic read) (sonic expand) (sonic parse) (sonic policy)
         (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide) (sonic repr) (sonic lower) (sonic regalloc) (sonic regs) (sonic select))
 
+;; MATCHED BY PREFIX. The `%NN` comes from the expander and is stable with the
+;; source; the trailing `.NNN` is a global gensym counter that every pass
+;; upstream shifts -- unrolling and inlining have each moved it. A test pinning
+;; the counter fails whenever an unrelated pass allocates a name, and reports it
+;; as a missing loop rather than as what it is.
+(define (name-prefix? prefix nm)
+  (let ((s (symbol->string nm)) (p (symbol->string prefix)))
+    (and (>= (string-length s) (string-length p))
+         (string=? (substring s 0 (string-length p)) p))))
+
 (define failures 0) (define checks 0)
 (define (ck! name ok)
   (set! checks (+ checks 1))
@@ -105,8 +115,29 @@
   (let* ([fns (partition-into-functions (cadr lowered) (caddr lowered))]
          [orphans (assq '<unreachable> fns)])
     (display "       functions=") (display (length fns)) (newline)
-    (ck! "every block is reachable from some function entry"
-         (not orphans))
+    ;; REFINED, because the bucket now has two meanings and only one is a bug.
+    ;;
+    ;; Since inline.ss started working, inlining a procedure at its every call
+    ;; site leaves the original binding with no callers -- so a whole DEAD
+    ;; PROCEDURE lands here, legitimately. The disconnected CFG this test was
+    ;; written for is a different shape: an intra-function block, one of the
+    ;; `L.` labels an `if` or a join emits, that the function it belongs to
+    ;; cannot branch to.
+    ;;
+    ;; So the invariant is stated on the labels. A whole unreachable procedure
+    ;; is dead code and finalize declines to emit it; an unreachable `L.` block
+    ;; means a function's own control flow lost an edge, which is the failure
+    ;; that hid 287 of nbody's 551 virtual registers.
+    (ck! "no INTRA-FUNCTION block is unreachable: the CFG is not disconnected"
+         (or (not orphans)
+             (for-all (lambda (b)
+                        (let ((n (symbol->string (car b))))
+                          (not (and (>= (string-length n) 2)
+                                    (string=? (substring n 0 2) "L.")))))
+                      (cdr orphans))))
+    (when orphans
+      (display "       unreachable (dead procedures): ")
+      (write (map car (cdr orphans))) (newline))
     (ck! "and the program is many functions, not one"
          (> (length fns) 5)))
 
@@ -159,8 +190,9 @@
     ;; with every loop back edge stacking a frame.
     (let ([callees (map (lambda (b) (cadddr (tail-call-instr (cadr b)))) tails)])
       (ck! "every loop in nbody tail-calls itself"
-           (for-all (lambda (l) (memq l callees))
-                    '(loop%12.139 loop%35.293 inner%24.201 outer%22.193)))))
+           (for-all (lambda (pre)
+                      (exists (lambda (c) (name-prefix? pre c)) callees))
+                    '(loop%12 loop%35 inner%24 outer%22)))))
 
   ;; REGISTER PRESSURE, PER TARGET.
   ;;
