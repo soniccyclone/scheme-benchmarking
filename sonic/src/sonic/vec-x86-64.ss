@@ -63,6 +63,7 @@
   (export ;; registers
           vec-reg? vec-reg-width vec-reg-number vec-reg-name
           vec-lane-reg vec-scalar-reg
+          mask-reg? mask-reg-number masked? masked-reg masked-k masked-zeroing?
           ;; encoding
           vec-encode-instr vec-encode-instrs vec-instr-length
           vec-mnemonics vec-supports? vec-fused-mnemonic?
@@ -131,6 +132,47 @@
   (define (vec-lane-reg plan n) (vec-reg-name (vec-plan-width plan) n))
   (define (vec-scalar-reg n) (vec-reg-name 128 n))
 
+  ;; --- mask registers and masked destinations --------------------------------
+  ;;
+  ;; k0..k7 are a fourth register file. They hold one predicate bit per lane and
+  ;; no Scheme value ever, which is why regs.ss gives them their own partition
+  ;; class rather than folding them into an existing one -- under D21 the
+  ;; collector scavenges the value class unconditionally, and a lane predicate
+  ;; that happened to look like an address would be chased.
+  ;;
+  ;; k0 IS NOT ALLOCATABLE, and the reason is in the encoding rather than in a
+  ;; convention: `aaa = 0` in the EVEX prefix means "unmasked", so there is no
+  ;; bit pattern that says "predicate this on k0". gas rejects `{k0}` on a
+  ;; masked form. A mask allocator that handed out k0 would emit an unmasked
+  ;; instruction and no assembler would ever tell us.
+  (define (mask-reg? r)
+    (and (symbol? r)
+         (let ((s (symbol->string r)))
+           (and (= (string-length s) 2)
+                (char=? (string-ref s 0) #\k)
+                (char<=? #\0 (string-ref s 1) #\7)))))
+
+  (define (mask-reg-number r)
+    (unless (mask-reg? r) (error 'mask-reg-number "not a mask register" r))
+    (- (char->integer (string-ref (symbol->string r) 1)) (char->integer #\0)))
+
+  ;; A masked destination, written `(mask ymm3 k1)` or `(maskz ymm3 k1)`.
+  ;;
+  ;; Two spellings rather than one plus a flag, because merging and zeroing are
+  ;; different instructions to think about: merging leaves the masked-off lanes
+  ;; of the DESTINATION alone, so the destination is also an input, and zeroing
+  ;; does not. gas writes them `ymm3{k1}` and `ymm3{k1}{z}`.
+  (define (masked? x)
+    (and (pair? x) (memq (car x) '(mask maskz)) (= (length x) 3)
+         (vec-reg? (cadr x)) (mask-reg? (caddr x))))
+  (define (masked-reg x) (cadr x))
+  (define (masked-k x) (caddr x))
+  (define (masked-zeroing? x) (eq? (car x) 'maskz))
+
+  ;; Every place that asks an operand for its register has to see through the
+  ;; wrapper, so unwrapping happens once, at the top of the encoder.
+  (define (unmask x) (if (masked? x) (masked-reg x) x))
+
   (define (mem? x) (and (pair? x) (eq? (car x) 'mem) (= (length x) 5)))
   (define (mem-base m) (list-ref m 1))
   (define (mem-index m) (list-ref m 2))
@@ -183,8 +225,10 @@
       (vfmadd231sd  2 #xB9 1 1 1 rvm)))
 
   (define (vec-entry m) (assq m vec-table))
-  (define (vec-supports? m) (and (vec-entry m) #t))
-  (define (vec-mnemonics) (map car vec-table))
+  ;; `kmovw` is encoded by hand rather than from the table, so membership in
+  ;; the table is no longer the whole answer to "can this encoder emit it".
+  (define (vec-supports? m) (or (eq? m 'kmovw) (and (vec-entry m) #t)))
+  (define (vec-mnemonics) (cons 'kmovw (map car vec-table)))
 
   (define (entry-map e) (list-ref e 1))
   (define (entry-op e) (list-ref e 2))
@@ -306,7 +350,7 @@
   ;; The operand width an instruction's registers agree on, and the memory
   ;; stride that follows from it.
   (define (operand-width who ops)
-    (let loop ((os ops) (w #f))
+    (let loop ((os (map unmask ops)) (w #f))
       (cond ((null? os) (or w (error who "no vector register operand" ops)))
             ((vec-reg? (car os))
              (let ((rw (vec-reg-width (car os))))
@@ -316,13 +360,86 @@
             (else (loop (cdr os) w)))))
 
   (define (any-high-reg? ops)
-    (exists (lambda (o) (and (vec-reg? o) (> (vec-reg-number o) 15))) ops))
+    (exists (lambda (o) (and (vec-reg? o) (> (vec-reg-number o) 15)))
+            (map unmask ops)))
+
+  ;; `kmovw`, which is how a mask register gets a value.
+  ;;
+  ;; Encoded here rather than in the table because its operands are not vector
+  ;; registers at all -- a mask and a GPR -- so `operand-width` has nothing to
+  ;; ask and `rm-encoding` has nothing to match. Four directions, one opcode
+  ;; each, all VEX.L0.0F.W0:
+  ;;
+  ;;     90  k, k        91  m16, k        92  k, r32        93  r32, k
+  ;;
+  ;; The 32-bit GPR is spelled with its 64-bit name here, because that is the
+  ;; only register vocabulary the rest of this compiler has. W=0 is what makes
+  ;; the operand 32 bits, so the bytes are the same either way; the difference
+  ;; is only in how gas prints it, and the differential test spells `eax`.
+  ;;
+  ;; The memory forms are not here. Nothing needs them: a constant mask is one
+  ;; `mov` to a GPR and one `kmovw`, and a mask spilled to the stack would need
+  ;; the allocator to know about the file first.
+  (define (kmov-bytes i)
+    (let ((ops (cdr i)))
+      (unless (= (length ops) 2)
+        (error 'vec-encode-instr "kmovw takes two operands" i))
+      (let* ((dst (car ops)) (src (cadr ops)))
+        (let-values
+            (((opcode regn rmn)
+              (cond
+               ((and (mask-reg? dst) (mask-reg? src))
+                (values #x90 (mask-reg-number dst) (mask-reg-number src)))
+               ((and (mask-reg? dst) (gpr? src))
+                (values #x92 (mask-reg-number dst) (reg-number src)))
+               ((and (gpr? dst) (mask-reg? src))
+                (values #x93 (reg-number dst) (mask-reg-number src)))
+               (else
+                (error 'vec-encode-instr
+                       "kmovw moves between mask registers and general-purpose ones"
+                       i)))))
+          (when (> rmn 7)
+            ;; r8..r15 as the rm operand needs VEX.B, which the two-byte form
+            ;; cannot carry. Refused rather than silently encoding rax.
+            (error 'vec-encode-instr
+                   "kmovw with a high general-purpose register needs the three-byte VEX form, which is not implemented"
+                   i))
+          (append (vex-bytes (bitwise-and (bitwise-arithmetic-shift-right regn 3) 1)
+                             0 0 0 0 0 (vex-pp 'none) (vex-map #x0F))
+                  (list opcode
+                        (bitwise-ior #b11000000
+                                     (bitwise-arithmetic-shift-left
+                                      (bitwise-and regn 7) 3)
+                                     (bitwise-and rmn 7))))))))
 
   (define (vec-encode-instr i)
     (unless (and (pair? i) (symbol? (car i)))
       (error 'vec-encode-instr "not an instruction" i))
+    (if (eq? (car i) 'kmovw)
+        (kmov-bytes i)
+        (vec-encode-vector-instr i)))
+
+  (define (vec-encode-vector-instr i)
     (let* ((m (car i))
-           (ops (cdr i))
+           (raw-ops (cdr i))
+           ;; The mask rides on the DESTINATION and nowhere else. A source
+           ;; operand carrying one is a shape the ISA has no field for, so it
+           ;; is a mistake in the caller rather than something to ignore.
+           (dst (car raw-ops))
+           ;; `(mask ymm3 k0)` is the trap this whole file has to refuse. k0 is
+           ;; a real register you can `kmovw` into, and `aaa = 0` is the
+           ;; UNMASKED encoding -- so writing it produces a perfectly valid
+           ;; instruction that computes every lane, including the padding one
+           ;; the mask existed to suppress. gas refuses `{k0}`; so does this,
+           ;; because the differential test can only compare instructions gas
+           ;; will assemble, and a shape it rejects is a shape nothing verifies.
+           (_ (when (and (masked? dst) (= (mask-reg-number (masked-k dst)) 0))
+                (error 'vec-encode-instr
+                       "k0 is the unmasked encoding, not a mask: aaa=0 means no predicate"
+                       i)))
+           (aaa (if (masked? dst) (mask-reg-number (masked-k dst)) 0))
+           (z (if (and (masked? dst) (masked-zeroing? dst)) 1 0))
+           (ops (map unmask raw-ops))
            (e (or (vec-entry m)
                   (error 'vec-encode-instr
                          "no encoding for this mnemonic in the vector encoder" m)))
@@ -331,6 +448,15 @@
            (mp (entry-map e))
            (scalar? (= pp 3))
            (width (operand-width 'vec-encode-instr ops)))
+      (when (exists masked? (cdr raw-ops))
+        (error 'vec-encode-instr "only the destination may carry a mask" i))
+      ;; A masked STORE is legal in the ISA -- the mask selects which lanes
+      ;; reach memory -- and is not reachable from here, because `masked?`
+      ;; requires a vector register inside the wrapper and a store's
+      ;; destination is a memory operand. Stated rather than guarded: a guard
+      ;; against an unrepresentable shape reads as though the shape were
+      ;; possible, and the first version of this line refused masked LOADS by
+      ;; testing the wrong operand.
       ;; Which register goes in which field. `mov` is the only form whose
       ;; direction is not fixed by the mnemonic.
       (let-values
@@ -359,7 +485,7 @@
               (else (error 'vec-encode-instr "unhandled form" m form)))))
         (unless (vec-reg? regop)
           (error 'vec-encode-instr "the register operand must be a vector register" i))
-        (let* ((evex? (or (= width 512) (any-high-reg? ops)))
+        (let* ((evex? (or (= width 512) (any-high-reg? ops) (> aaa 0)))
                (w (if evex? (entry-evex-w e) (entry-vex-w e)))
                (n (if scalar? 8 (div width 8)))
                (regf (vec-reg-number regop)))
@@ -369,7 +495,7 @@
              (if evex?
                  (evex-bytes r r2 x b w (bitwise-and vvvv #xf)
                              (bitwise-and (bitwise-arithmetic-shift-right vvvv 4) 1)
-                             (ll-bits (if scalar? 128 width)) pp mp)
+                             (ll-bits (if scalar? 128 width)) pp mp aaa z)
                  (begin
                    (when (or (= r2 1) (> vvvv 15))
                      (error 'vec-encode-instr

@@ -64,18 +64,52 @@
 
   ;; EVEX. Four bytes, and five of the register-extension bits in them are
   ;; stored INVERTED, which is the single most common way to get this wrong.
-  (define (evex-bytes r r2 x b w vvvv v2 ll pp mp)
-    (list #x62
-          (bitwise-ior (bitwise-arithmetic-shift-left (- 1 r) 7)
-                       (bitwise-arithmetic-shift-left (- 1 x) 6)
-                       (bitwise-arithmetic-shift-left (- 1 b) 5)
-                       (bitwise-arithmetic-shift-left (- 1 r2) 4)
-                       mp)
-          (bitwise-ior (bitwise-arithmetic-shift-left w 7)
-                       (bitwise-arithmetic-shift-left
-                        (bitwise-and (bitwise-not vvvv) #xf) 3)
-                       #b100
-                       pp)
-          (bitwise-ior (bitwise-arithmetic-shift-left ll 5)
-                       (bitwise-arithmetic-shift-left (- 1 v2) 3))))
+  ;;
+  ;; The fourth byte is the one that carries masking:
+  ;;
+  ;;     bit 7    z     zeroing, rather than merging, the masked-off lanes
+  ;;     6..5     L'L   vector length
+  ;;     bit 4    b     broadcast / rounding control -- not used here
+  ;;     bit 3    V'    the fifth vvvv bit, INVERTED like the others
+  ;;     2..0     aaa   which of k1..k7 predicates this instruction
+  ;;
+  ;; `aaa` = 0 means k0, and k0 IS THE UNMASKED ENCODING rather than a register
+  ;; that happens to read all ones. There is no way to write "predicate this on
+  ;; k0"; the assembler rejects `{k0}` on a masked form for that reason, and it
+  ;; is why a mask allocator may not hand out k0. regs.ss keeps it out of the
+  ;; pool and says so there.
+  ;;
+  ;; The four-argument call is the unmasked one and stays exactly as it was:
+  ;; every existing caller means aaa = 0, z = 0, and spelling that out at each
+  ;; site would be noise that hides the sites that do mask.
+  (define evex-bytes
+    (case-lambda
+      ((r r2 x b w vvvv v2 ll pp mp)
+       (evex-bytes r r2 x b w vvvv v2 ll pp mp 0 0))
+      ((r r2 x b w vvvv v2 ll pp mp aaa z)
+       (unless (and (exact? aaa) (<= 0 aaa 7))
+         (error 'evex-bytes "the mask selector is three bits" aaa))
+       (unless (memv z '(0 1))
+         (error 'evex-bytes "the zeroing bit is one bit" z))
+       (when (and (= z 1) (= aaa 0))
+         ;; Zeroing with no mask register zeroes every lane, which is a
+         ;; constant, and no assembler will write it -- `{z}` without `{k}` is
+         ;; a syntax error. Emitting it would produce bytes gas cannot read
+         ;; back, so the differential test could never cover them.
+         (error 'evex-bytes "zeroing needs a mask register; {z} without {k} is not an encoding" z))
+       (list #x62
+             (bitwise-ior (bitwise-arithmetic-shift-left (- 1 r) 7)
+                          (bitwise-arithmetic-shift-left (- 1 x) 6)
+                          (bitwise-arithmetic-shift-left (- 1 b) 5)
+                          (bitwise-arithmetic-shift-left (- 1 r2) 4)
+                          mp)
+             (bitwise-ior (bitwise-arithmetic-shift-left w 7)
+                          (bitwise-arithmetic-shift-left
+                           (bitwise-and (bitwise-not vvvv) #xf) 3)
+                          #b100
+                          pp)
+             (bitwise-ior (bitwise-arithmetic-shift-left z 7)
+                          (bitwise-arithmetic-shift-left ll 5)
+                          (bitwise-arithmetic-shift-left (- 1 v2) 3)
+                          aaa)))))
   )

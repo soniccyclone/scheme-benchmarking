@@ -22,7 +22,7 @@
 (import (chezscheme) (nanopass) (rnrs io simple)
         (sonic lang) (sonic fixtures) (sonic elide) (sonic alias)
         (sonic loops) (sonic veclegal) (sonic differential)
-        (sonic vec-x86-64))
+        (sonic vec-x86-64) (sonic vex) (sonic regs))
 
 (define failures 0) (define checks 0)
 
@@ -355,7 +355,10 @@
 (define (ptr-keyword i)
   (if (ends-with-sd? (car i))
       "QWORD PTR "
-      (let ((r (let scan ((os (cdr i)))
+      (let ((r (let scan ((os (map (lambda (o)
+                                     (if (and (pair? o) (memq (car o) '(mask maskz)))
+                                         (cadr o) o))
+                                   (cdr i))))
                  (cond ((null? os) (error 'ptr-keyword "no vector register" i))
                        ((vec-reg? (car os)) (car os))
                        (else (scan (cdr os)))))))
@@ -371,8 +374,28 @@
                                         "*" (number->string s)) "")
                    " + " (number->string d) "]")))
 
+;; A masked destination. gas writes the mask register in braces after the
+;; register, and the zeroing modifier as a second brace group -- `ymm3{k1}` and
+;; `ymm3{k1}{z}`. There is no `{k0}`: aaa=0 IS the unmasked encoding, so gas
+;; rejects it, which is the assembler agreeing with vex.ss's refusal.
+(define (gas-masked x)
+  (string-append (symbol->string (cadr x))
+                 "{" (symbol->string (caddr x)) "}"
+                 (if (eq? (car x) 'maskz) "{z}" "")))
+
+;; `kmovw` names its GPR operand at 32 bits. Our listings have one register
+;; vocabulary and it is the 64-bit one; W=0 is what makes the operand 32 bits,
+;; so the BYTES are identical and only the printed name differs. Translating
+;; here keeps the encoder from carrying a second naming scheme for one
+;; instruction.
+(define gpr32
+  '((rax . eax) (rcx . ecx) (rdx . edx) (rbx . ebx)
+    (rsp . esp) (rbp . ebp) (rsi . esi) (rdi . edi)))
+
 (define (gas-op i x)
   (cond ((and (pair? x) (eq? (car x) 'mem)) (gas-mem i x))
+        ((and (pair? x) (memq (car x) '(mask maskz))) (gas-masked x))
+        ((and (eq? (car i) 'kmovw) (assq x gpr32)) => (lambda (p) (symbol->string (cdr p))))
         ((symbol? x) (symbol->string x))
         (else (error 'gas-op "cannot print operand" x))))
 
@@ -472,7 +495,80 @@
     (vmulsd xmm3 xmm1 xmm2)
     (vdivsd xmm7 xmm7 xmm7)
     (vsqrtsd xmm3 xmm1 xmm2)
-    (vfmadd231sd xmm0 xmm1 xmm2)))
+    (vfmadd231sd xmm0 xmm1 xmm2)
+    ;; --- masking, which is what (x,y,z,pad) needs ---------------------------
+    ;;
+    ;; A mask forces EVEX at every width, including 128, because there is no
+    ;; VEX field to put `aaa` in. So these also exercise a four-byte prefix on
+    ;; instructions that would otherwise take the two-byte one.
+    (vaddpd (mask ymm3 k1) ymm1 ymm2)
+    (vaddpd (maskz ymm3 k1) ymm1 ymm2)
+    (vaddpd (mask xmm3 k7) xmm1 xmm2)           ; 128-bit, EVEX only because masked
+    (vmulpd (mask ymm0 k2) ymm1 ymm2)
+    (vsubpd (maskz zmm10 k3) zmm20 zmm30)       ; masked AND high registers
+    (vdivpd (mask ymm13 k4) ymm11 ymm12)
+    (vsqrtpd (mask ymm5 k5) ymm6)               ; the rm form, which has no vvvv
+    (vaddpd (mask ymm3 k6) ymm1 (mem r8 rcx 8 32))   ; masked with a memory source
+    (vmovupd (mask ymm7 k1) (mem r9 rcx 8 32))       ; a masked LOAD
+    (vfmadd231pd (mask zmm5 k1) zmm6 zmm7)
+    ;; --- kmovw, which is how a mask gets its value --------------------------
+    (kmovw k1 rax)
+    (kmovw k7 rdi)
+    (kmovw rax k1)
+    (kmovw rdx k5)
+    (kmovw k2 k3)))
+
+;; --- what masking must REFUSE ----------------------------------------------
+;;
+;; Each of these is a shape that assembles to something plausible if it is not
+;; caught, which is the only kind of refusal worth testing.
+
+(display "\n-- masking, and what it refuses --\n")
+
+(ck! "k0 as a mask is refused: aaa=0 is the UNMASKED encoding"
+     (raises-naming? (lambda () (vec-encode-instr '(vaddpd (mask ymm3 k0) ymm1 ymm2)))
+                     "unmasked"))
+(ck! "a mask on a SOURCE operand is refused: the ISA has no field for it"
+     (raises-naming? (lambda () (vec-encode-instr '(vaddpd ymm3 (mask ymm1 k1) ymm2)))
+                     "destination"))
+(ck! "kmovw with a high GPR is refused rather than encoding rax"
+     (raises-naming? (lambda () (vec-encode-instr '(kmovw k1 r9)))
+                     "three-byte"))
+(ck! "kmovw between two GPRs is not a kmovw"
+     (raises? (lambda () (vec-encode-instr '(kmovw rax rcx)))))
+(ck! "zeroing with no mask register is refused at the prefix"
+     (raises-naming? (lambda () (evex-bytes 0 0 0 0 1 0 0 1 1 1 0 1))
+                     "zeroing"))
+(ck! "a mask selector wider than three bits is refused"
+     (raises? (lambda () (evex-bytes 0 0 0 0 1 0 0 1 1 1 8 0))))
+
+;; A mask forces EVEX even at 128 bits, because VEX has nowhere to put `aaa`.
+;; Asserted on the byte rather than inferred: the first prefix byte is 0x62 for
+;; EVEX and 0xC5/0xC4 for VEX.
+(check! "a masked 128-bit operation takes the four-byte EVEX prefix"
+        (car (vec-encode-instr '(vaddpd (mask xmm3 k7) xmm1 xmm2)))
+        #x62)
+(check! "and the same operation unmasked takes the two-byte VEX one"
+        (car (vec-encode-instr '(vaddpd xmm3 xmm1 xmm2)))
+        #xC5)
+
+;; The register partition. k1..k7 are a fourth file and no storage class
+;; reaches them -- see regs.ss on why that is the intended answer and not a
+;; gap. k0 is not in the pool at all.
+(check! "mask registers are their own partition class"
+        (map (lambda (r) (reg-class arch-x86-64 r)) '(k1 k4 k7))
+        '(mask mask mask))
+(check! "k0 is not in the allocatable mask pool"
+        (memq 'k0 (arch-mask arch-x86-64))
+        #f)
+(ck! "no storage class may be assigned to a mask register"
+     (not (exists (lambda (sc) (assignment-ok? arch-x86-64 sc 'k1))
+                  '(tagged raw-word raw-f64))))
+(ck! "and the mask file is disjoint from the other three"
+     (not (exists (lambda (r) (or (memq r (arch-value arch-x86-64))
+                                  (memq r (arch-raw arch-x86-64))
+                                  (memq r (arch-float arch-x86-64))))
+                  (arch-mask arch-x86-64))))
 
 (display "\n-- differential against gcc/objdump --\n")
 (for-each differential! instruction-corpus)

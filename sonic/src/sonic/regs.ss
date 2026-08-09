@@ -12,6 +12,7 @@
 
 (library (sonic regs)
   (export make-arch arch? arch-name arch-value arch-raw arch-float arch-structural
+          arch-mask mask-count
           arch-register-for arch-float-scratch arch-int-scratch float-register?
           arch-scratch
           arch-x86-64 arch-rv64 arch-by-name
@@ -34,8 +35,51 @@
   ;; RAW register is transiently holding a TAGGED value during a calling
   ;; sequence and must be scavenged. This is about a register being unavailable
   ;; to the allocator. Two different concepts that both wanted the word.
-  (define-record-type (arch make-arch arch?)
-    (fields name value raw float structural scratch))
+  ;; --- the mask file ---------------------------------------------------------
+  ;;
+  ;; AVX-512 k0..k7 are a FOURTH register file, and under D21 a fourth file
+  ;; needs its own partition answer rather than a place in an existing pool. A
+  ;; mask holds one predicate bit per lane. It is never a Scheme value, never a
+  ;; pointer, and the collector must never scan it -- so it is disjoint from
+  ;; `value`, and folding it into `raw` would be wrong for a different reason:
+  ;; no `mov` reaches it, only `kmovw`, so an allocator that handed a raw word a
+  ;; k register would emit an instruction that does not exist.
+  ;;
+  ;; NO STORAGE CLASS MAPS TO IT. `assignment-ok?` answers #f for every Lrepr
+  ;; class against a mask register, and that is the whole point: a mask is
+  ;; produced and consumed inside one instruction sequence that the vector
+  ;; emitter writes, and nothing in Lrepr ever names one. If a mask ever has to
+  ;; live across a region the allocator sees, it needs a storage class of its
+  ;; own and this comment is where to start.
+  ;;
+  ;; k0 IS ABSENT FROM THE POOL AND THAT IS AN ENCODING FACT, not a convention.
+  ;; The EVEX `aaa` field is three bits and `aaa = 0` MEANS UNMASKED, so there
+  ;; is no bit pattern that predicates an instruction on k0. gas rejects `{k0}`.
+  ;; An allocator that handed out k0 would silently emit an unmasked
+  ;; instruction, which computes every lane including the padding one.
+  (define-record-type (arch make-arch* arch?)
+    (fields name value raw float structural scratch mask))
+
+  ;; Six arguments was the shape before the mask file existed, and the callers
+  ;; that use it build a NARROWED arch -- the same partition minus the
+  ;; registers some pins claimed (callconv.ss). They narrow the three
+  ;; allocatable pools and copy the rest across, and the mask file is not
+  ;; something they narrow, so the six-argument form fills it in from the
+  ;; target rather than making every site say `(arch-mask a)` and one of them
+  ;; forget. A narrowing that DID have to touch masks would use the long form
+  ;; and be visible.
+  (define make-arch
+    (case-lambda
+      ((n v r f st sc) (make-arch* n v r f st sc (masks-for n)))
+      ((n v r f st sc mk) (make-arch* n v r f st sc mk))))
+
+  ;; k1..k7. k0 is deliberately absent -- see the note above.
+  (define (masks-for target)
+    (case target
+      ((x86-64) '(k1 k2 k3 k4 k5 k6 k7))
+      (else '())))            ; RV64's vector extension masks in v0, not a file
+
+
 
   ;; --- x86-64 (System V) ----------------------------------------------------
   ;; Current CPU and current thread live behind the GS base rather than burning
@@ -137,6 +181,7 @@
   (define (value-count a) (length (arch-value a)))
   (define (raw-count a)   (length (arch-raw a)))
   (define (float-count a) (length (arch-float a)))
+  (define (mask-count a)  (length (arch-mask a)))
 
   ;; The register holding a structural role: `nil`, `current-thread`,
   ;; `current-cpu`, `frame`, `stack`. Selection needs `nil` by name -- the empty
@@ -180,6 +225,7 @@
           ((memq r (arch-value a)) 'value)
           ((memq r (arch-raw a)) 'raw)
           ((memq r (arch-float a)) 'float)
+          ((memq r (arch-mask a)) 'mask)
           ((assq r (arch-structural a)) 'structural)
           (else #f)))
 
@@ -190,6 +236,11 @@
   ;; Neither may go to a value register: putting a raw word there would make the
   ;; collector scavenge a non-pointer, which is corruption in the other
   ;; direction and just as fatal.
+  ;; A mask register is reachable from NO storage class. `reg-class` answers
+  ;; `mask` for k1..k7 and every case below then answers #f, which is the
+  ;; intended reading rather than an omission: nothing in Lrepr names a lane
+  ;; predicate, so an allocator being asked to put a value in one means
+  ;; something upstream is confused.
   (define (assignment-ok? a sc r)
     (let ((cls (reg-class a r)))
       (case sc
