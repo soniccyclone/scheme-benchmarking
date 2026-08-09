@@ -345,6 +345,42 @@ a lucky outlier reads as success.
 Instruction and op counts have none of this: they are exact and repeat to the digit. Steer
 on those, and use cycles only to confirm direction, over enough trials to see the tail.
 
+**Second addendum, 2026-08-09: most of that spread was N, not the machine.**
+
+The addendum above read `min 1.003 median 1.142 max 1.207` as run-to-run clock variation on
+this APU and prescribed more trials. More trials was the right answer to the wrong
+diagnosis. Those readings came from a two-point slope between **N=1000 and N=3000**, and at
+that size the slope is measuring process startup:
+
+    c-native, seven samples of cycles/step, N=1000 -> N=3000
+    -118.3  163.7  174.7  177.1  192.1  231.1  236.8
+
+A negative slope means the 3000-step run retired fewer cycles than the 1000-step run. The
+difference being measured is 2000 steps at ~190 cycles, about 380k cycles, against a process
+startup in the same range --- so the subtraction is noise minus noise. `measure.sh`'s own
+default has been `N1=1000000` since it was written, for exactly this reason. The ad-hoc
+scripts that produced the unstable numbers did not use it.
+
+At N=1e6 -> 3e6, seven repetitions, the same machine and the same binaries:
+
+|            | cycles/step | spread | instructions/step | spread |
+|------------|------------:|-------:|------------------:|-------:|
+| c-native   |      168.59 |  0.24% |               333 |  0.00% |
+| SonicScheme|      189.01 |  1.49% |             717.5 |  0.00% |
+
+Ratio **1.121**, and the two ratios previously quoted from the small-N measurements --- 1.07
+and 1.13 --- were indistinguishable rather than different. The APU's clock does move, and
+1.5% is what it actually contributes here; it was never the 20% the small-N spread showed.
+
+**So: state the N with the ratio.** The median-of-seven-with-spread rule stands and did its
+job --- a spread that wide is the instrument reporting its own inadequacy, and reading it as
+a property of the hardware is what cost the extra measurements. `harness/measure-sonic.sh`
+now does this one, because a number produced by whatever shell was convenient is a number
+nobody can reproduce, and this project had two of them.
+
+SonicScheme retires **2.15x** c-native's instructions and takes **1.12x** its cycles, which
+is D34's whole thesis in one line.
+
 Where the remaining ~14% lives is not a mystery. FP is 420 ops/step against c-native's 297,
 and the difference is almost entirely fused multiply-add: gcc emits `vfmadd` and `vfnmadd`
 throughout and each replaces two of ours. That is D24's contraction permission, off by
