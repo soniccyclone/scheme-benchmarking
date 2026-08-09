@@ -22,7 +22,7 @@
 (import (chezscheme) (nanopass) (rnrs io simple)
         (sonic lang) (sonic fixtures) (sonic elide) (sonic alias)
         (sonic loops) (sonic veclegal) (sonic differential)
-        (sonic vec-x86-64) (sonic vex) (sonic regs))
+        (sonic vec-x86-64) (sonic vex) (sonic regs) (sonic runtime))
 
 (define failures 0) (define checks 0)
 
@@ -439,9 +439,14 @@
 
 (define verified 0)
 
+;; A three-lane mnemonic is not something gas has ever heard of. It is our
+;; name for a masked 256-bit form, so the instruction ENCODED is the v3 one and
+;; the instruction ASSEMBLED is what it claims to rewrite to -- which is the
+;; whole content of the claim, and the only way to test it against a toolchain.
 (define (differential! i)
   (set! checks (+ checks 1))
-  (let* ((line (instr->gas i))
+  (let* ((shown (if (three-lane-entry (car i)) (three-lane-rewrite i) i))
+         (line (instr->gas shown))
          (mine (vec-encode-instr i))
          (theirs (guard (e (#t 'error)) (gas-bytes line))))
     (cond
@@ -538,7 +543,21 @@
     ;; emitted image hands this encoder now that object.ss delegates to it.
     (vmovupd xmm7 (mem rip #f 1 0))
     (vaddpd ymm3 ymm1 (mem rip #f 1 64))
-    (vmulpd zmm20 zmm21 (mem rip #f 1 -128))))
+    (vmulpd zmm20 zmm21 (mem rip #f 1 -128))
+    ;; --- the three-lane forms, (x, y, z, pad) -------------------------------
+    ;;
+    ;; Written with XMM operands because that is what the allocator produces and
+    ;; what the listing carries; the width is the mnemonic's, not the operand's.
+    (v3addpd xmm3 xmm1 xmm2)
+    (v3subpd xmm0 xmm5 xmm7)
+    (v3mulpd xmm9 xmm11 xmm13)
+    (v3divpd xmm2 xmm2 xmm2)
+    (v3sqrtpd xmm5 xmm6)
+    (v3xorpd xmm4 xmm4 xmm6)
+    (v3movupd xmm7 (mem r8 rcx 8 16))            ; a masked LOAD, disp32
+    (v3movupd xmm7 (mem r8 rcx 8 32))            ; disp8 of 1, times 32
+    (v3movupd (mem r9 rcx 8 32) xmm7)            ; a masked STORE
+    (v3addpd xmm3 xmm1 (mem r8 rcx 8 64))))
 
 ;; --- what masking must REFUSE ----------------------------------------------
 ;;
@@ -595,6 +614,25 @@
                                   (memq r (arch-raw arch-x86-64))
                                   (memq r (arch-float arch-x86-64))))
                   (arch-mask arch-x86-64))))
+
+;; --- the mask is established once, for the whole image ----------------------
+;;
+;; Three-lane forms predicate on k1 and never set it, so something has to. It
+;; is the runtime's entry, and the invariant that makes one setup sound is a
+;; property of the whole image rather than of a function: nothing we emit
+;; writes a k register except this instruction, because we produce a static
+;; binary and call no external code. No ABI convention can take k1 away, which
+;; is not true of any caller-saved GPR.
+(let ((rt (runtime-listing 'x86-64 'main)))
+  (ck! "the runtime sets the lane mask at _start"
+       (exists (lambda (i) (equal? i '(kmovw k1 rax))) rt))
+  (ck! "and it is 0b0111: lanes x, y, z active and the padding lane off"
+       (exists (lambda (i) (equal? i '(mov rax (imm 7)))) rt))
+  (ck! "nothing else in the runtime writes a mask register"
+       (= 1 (length (filter (lambda (i)
+                              (and (pair? i) (eq? (car i) 'kmovw)
+                                   (mask-reg? (cadr i))))
+                            rt)))))
 
 (display "\n-- differential against gcc/objdump --\n")
 (for-each differential! instruction-corpus)

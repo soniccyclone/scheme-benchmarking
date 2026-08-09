@@ -104,6 +104,9 @@
   ;;   raw-f64 arguments    xmm0 ...
   ;;   returns              rax, or xmm0 for a double
   ;;   r15                  nil
+  ;; Lanes 0, 1 and 2 active; lane 3 is the padding a body does not have.
+  (define three-lane-mask #b0111)
+
   (define (x86-64-listing entry)
     `(;; ---- entry ----
       ;;
@@ -111,6 +114,21 @@
       ;; header on why `command-line` returns the empty list.
       _start
       (mov r15 (imm ,sonic-null))
+      ;; THE LANE MASK, set once for the whole image.
+      ;;
+      ;; Three-lane work over (x, y, z, pad) predicates every operation on
+      ;; k1 = 0b0111. One value, one register, and it is established here rather
+      ;; than in each function's prologue because the invariant that makes that
+      ;; sound is a property of the whole image: nothing we emit writes a k
+      ;; register except this instruction. We produce a static binary and call
+      ;; no external code, so no ABI convention can take k1 away from us --
+      ;; which is not true of the caller-saved GPRs and is why THIS register
+      ;; can be treated as a constant when none of those can.
+      ;;
+      ;; `kmovw` cannot take an immediate, so the constant goes through a GPR.
+      ;; rax is the integer scratch and holds nothing at entry.
+      (mov rax (imm ,three-lane-mask))
+      (kmovw k1 rax)
       (mov rax (imm ,heap-base-address))
       (mov ,(abs-mem heap-pointer-cell) rax)
       (call (label ,entry))

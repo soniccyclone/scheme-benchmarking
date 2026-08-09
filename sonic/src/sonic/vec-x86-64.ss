@@ -64,6 +64,7 @@
           vec-reg? vec-reg-width vec-reg-number vec-reg-name
           vec-lane-reg vec-scalar-reg
           mask-reg? mask-reg-number masked? masked-operand masked-k masked-zeroing?
+          three-lane-entry three-lane-rewrite
           ;; encoding
           vec-encode-instr vec-encode-instrs vec-instr-length
           vec-mnemonics vec-supports? vec-fused-mnemonic?
@@ -240,11 +241,72 @@
       (vmovsd       1 (#x10 . #x11) 3 0 1 mov)
       (vfmadd231sd  2 #xB9 1 1 1 rvm)))
 
+  ;; --- three-lane forms: (x, y, z, pad) ---------------------------------------
+  ;;
+  ;; A body is three consecutive doubles, so every operation on one is two
+  ;; instructions today -- a 128-bit packed one for x and y, and a scalar one
+  ;; for z. One masked 256-bit operation replaces both.
+  ;;
+  ;; THE WIDTH RIDES ON THE MNEMONIC, NOT ON THE OPERAND, and that is the whole
+  ;; design decision here. The allocator gives a raw-f64 vreg an XMM register
+  ;; and finalize's `rewrite-operand` turns the vreg into `xmm3`; a four-lane
+  ;; operation needs `ymm3`, which is the SAME PHYSICAL REGISTER under a
+  ;; different name. Carrying the width on the operand -- `(ymm v)`, or a
+  ;; mask wrapper holding the register -- means every pass between selection
+  ;; and encoding has to see through it, and those passes are not optional:
+  ;; `listing-writes` reads a destination as `(cadr i)` and would stop seeing
+  ;; one, which under-reports what a call clobbers. That is the class of bug
+  ;; this compiler spent today fixing.
+  ;;
+  ;; So the instruction SHAPE is unchanged -- destination still `(cadr i)`,
+  ;; still a plain symbol, still spelled `xmm3` -- and only the mnemonic
+  ;; differs. encode-x86-64.ss predicted exactly this: "a 256-bit form would be
+  ;; a different mnemonic and a different lane count, which is why the width is
+  ;; not a parameter here."
+  ;;
+  ;; The mask register is fixed at k1 rather than allocated. There is one mask
+  ;; in the whole scheme, it holds one value (0b0111), and pinning it here is
+  ;; what lets regs.ss keep the mask file out of every storage class. THE
+  ;; INVARIANT IT DEPENDS ON: nothing in the emitted image writes a k register
+  ;; except the one setup. We emit the whole static image and call no external
+  ;; code, so that is checkable rather than hoped for.
+  ;;
+  ;; Each entry is (three-lane-mnemonic base-mnemonic width mask). Encoding
+  ;; rewrites to the base form and recurses, so these share every byte of the
+  ;; path already verified against gas rather than getting a second one.
+  (define three-lane-table
+    '((v3addpd   vaddpd   256 k1)
+      (v3subpd   vsubpd   256 k1)
+      (v3mulpd   vmulpd   256 k1)
+      (v3divpd   vdivpd   256 k1)
+      (v3sqrtpd  vsqrtpd  256 k1)
+      (v3xorpd   vxorpd   256 k1)
+      (v3movupd  vmovupd  256 k1)))
+
+  (define (three-lane-entry m) (assq m three-lane-table))
+
+  ;; The mask is `merge` on a register destination and simply "these lanes are
+  ;; not written" on a memory one. Merging rather than zeroing is deliberate:
+  ;; the fourth lane is never read, so zeroing would be an instruction's worth
+  ;; of work to produce a value nothing consumes -- and `{z}` is not even legal
+  ;; on the store, where suppressing the write IS the requirement.
+  (define (widen-operand o width)
+    (cond ((vec-reg? o) (vec-reg-name width (vec-reg-number o)))
+          (else o)))
+
+  (define (three-lane-rewrite i)
+    (let* ((e (three-lane-entry (car i)))
+           (base (cadr e)) (width (caddr e)) (k (cadddr e))
+           (ops (map (lambda (o) (widen-operand o width)) (cdr i))))
+      (cons base (cons (list 'mask (car ops) k) (cdr ops)))))
+
   (define (vec-entry m) (assq m vec-table))
   ;; `kmovw` is encoded by hand rather than from the table, so membership in
   ;; the table is no longer the whole answer to "can this encoder emit it".
-  (define (vec-supports? m) (or (eq? m 'kmovw) (and (vec-entry m) #t)))
-  (define (vec-mnemonics) (cons 'kmovw (map car vec-table)))
+  (define (vec-supports? m)
+    (or (eq? m 'kmovw) (and (three-lane-entry m) #t) (and (vec-entry m) #t)))
+  (define (vec-mnemonics)
+    (cons 'kmovw (append (map car three-lane-table) (map car vec-table))))
 
   (define (entry-map e) (list-ref e 1))
   (define (entry-op e) (list-ref e 2))
@@ -450,9 +512,10 @@
   (define (vec-encode-instr i)
     (unless (and (pair? i) (symbol? (car i)))
       (error 'vec-encode-instr "not an instruction" i))
-    (if (eq? (car i) 'kmovw)
-        (kmov-bytes i)
-        (vec-encode-vector-instr i)))
+    (cond
+     ((eq? (car i) 'kmovw) (kmov-bytes i))
+     ((three-lane-entry (car i)) (vec-encode-vector-instr (three-lane-rewrite i)))
+     (else (vec-encode-vector-instr i))))
 
   (define (vec-encode-vector-instr i)
     (let* ((m (car i))
