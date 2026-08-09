@@ -147,6 +147,65 @@
       (add rax (imm ,(+ heap-header-bytes heap-tag)))
       (ret)
 
+      ;; ---- (make-vector count fill) ----
+      ;; count in rcx and fill in rdx -- raw-word arguments 0 and 1. Returns a
+      ;; tagged pointer.
+      ;;
+      ;; THE FILL'S REGISTER DEPENDS ON ITS CLASS, and that is a real limit
+      ;; rather than a convention this routine gets to choose. repr.ss assigns a
+      ;; storage class to a primitive's RESULT and says nothing about its
+      ;; ARGUMENTS, so the class of the fill is whatever the fill's own value
+      ;; has: a fixnum literal is raw-word and arrives in rdx, while a heap
+      ;; object would be tagged and arrive in r8. A runtime routine has one
+      ;; calling convention and cannot serve both.
+      ;;
+      ;; So this serves the raw-word case, which is what `(make-vector n 0)`
+      ;; is, and a tagged fill would read rdx and store garbage. See the bead:
+      ;; the fix is for the compiler to declare argument classes, not for this
+      ;; file to guess.
+      ;;
+      ;; The same shape as `%make-flvector` with two differences, and both are
+      ;; the difference between the two storage kinds rather than incidental.
+      ;; The type word says `heap-type-vector`, so the collector SCANS these
+      ;; elements where it skips an flvector's; and the fill is copied with
+      ;; `mov` from a value register, not `movsd` from a float one, because what
+      ;; is being stored is a Scheme object and not eight raw bytes.
+      ;;
+      ;; It did not exist until fannkuch-redux needed it. nbody uses only
+      ;; flvectors, so `make-vector` lowered to a call to a label nothing
+      ;; defined and the failure surfaced as `resolve-labels: undefined label
+      ;; %make-vector` -- loudly, and at link time, which is the right place.
+      %make-vector
+      (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      ;; THE TYPE GOES THROUGH rdi, NOT rdx. rdx holds the FILL for the whole
+      ;; routine, and %make-flvector's shape -- which this one is copied from --
+      ;; stages the type word through rdx because its fill is in xmm0 and rdx is
+      ;; free. Here it is not. Writing the type to rdx destroys the fill, and it
+      ;; reads correctly anyway whenever the fill is 0, because heap-type-vector
+      ;; IS 0: a bug that hides on exactly the call every program makes first.
+      ;; rdi is free until the `lea` below sets it.
+      (mov rdi (imm ,heap-type-vector))
+      (mov (mem rax #f 1 0) rdi)                 ; [raw+0] = type
+      (mov (mem rax #f 1 8) rcx)                 ; [raw+8] = length, a raw count
+      ;; bump: heap_ptr = raw + 16 + 8*count
+      (mov rsi rcx)
+      (shl rsi (imm 3))
+      (add rsi (imm ,heap-header-bytes))
+      (add rsi rax)
+      (mov ,(abs-mem heap-pointer-cell) rsi)
+      ;; fill the elements
+      (lea rdi (mem rax #f 1 ,heap-header-bytes))
+      (mov rsi (imm 0))
+      %mkv-loop
+      (cmp rsi rcx)
+      (jge (label %mkv-done))
+      (mov (mem rdi rsi 8 0) rdx)
+      (add rsi (imm 1))
+      (jmp (label %mkv-loop))
+      %mkv-done
+      (add rax (imm ,(+ heap-header-bytes heap-tag)))
+      (ret)
+
       ;; ---- box a flonum ----
       ;;
       ;; The double arrives in xmm0 -- the first raw-f64 argument register --
