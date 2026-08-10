@@ -29,7 +29,10 @@
 
 (define tmp "/tmp/sonic-run-test")
 
-(define (compile-and-run source externs)
+;; `argv` is optional and is appended to the command line, so a test can check
+;; that an emitted program READS one. Everything else passes nothing and behaves
+;; as it always did.
+(define (compile-and-run source externs . argv)
   (let ((src (string-append tmp ".sps")) (exe (string-append tmp ".bin")))
     (let ((p (open-file-output-port src (file-options no-fail)
                                     (buffer-mode block) (native-transcoder))))
@@ -60,8 +63,11 @@
     ;; whole suite with no output rather than failing this one check. The
     ;; default SIGTERM works; an emitted binary installs no handlers and cannot
     ;; decline it.
-    (let ((code (system (string-append "timeout 20 "
-                                       exe " > " tmp ".out 2>/dev/null"))))
+    (let ((code (system (string-append "timeout 20 " exe
+                                       (if (pair? argv)
+                                           (string-append " " (car argv))
+                                           "")
+                                       " > " tmp ".out 2>/dev/null"))))
       (values code (read-doubles (string-append tmp ".out"))))))
 
 ;; `display` writes a double's eight raw bytes -- see runtime.ss on why that is
@@ -923,6 +929,42 @@
   (unless (and (zero? code) (equal? out '(3.0 0.0 20.0 10.0)))
     (display "       exit=") (display code)
     (display " got=") (write out) (newline)))
+
+;; A COMMAND LINE, END TO END.
+;;
+;; `command-line` returned the empty list and `length` returned 1, which
+;; together took nbody's default branch and were the whole reason N could not
+;; be passed. argv is now decoded into real strings at _start -- which needed
+;; pairs, an 8-bit store, and a byte-packed string layout -- and
+;; `string->number` reads one.
+;;
+;; Asserted through nbody rather than a toy, because the interesting part is
+;; the chain: command-line builds a list of strings, `length` counts it, `cadr`
+;; takes the second, `string->number` parses it, and the result drives the loop.
+;; A toy would exercise the routines and not the chain.
+;;
+;; The values are Chez's on the same source at the same N, and the second one
+;; MOVES with N -- which is what says the argument was read rather than
+;; defaulted.
+(let ((nb (call-with-input-file "../bench/nbody/config-sonic.sps"
+            (lambda (p)
+              (let loop ((acc '()))
+                (let ((l (get-line p)))
+                  (if (eof-object? l)
+                      (apply string-append (reverse acc))
+                      (loop (cons (string-append l "\n") acc)))))))))
+  (let-values (((code out) (compile-and-run nb nbody-externs "2000")))
+    (ck! "an argument on the command line reaches string->number and drives the loop"
+         (and (zero? code)
+              (equal? out '(-0.16907516382852447 -0.16907160686959147))))
+    (unless (and (zero? code)
+                 (equal? out '(-0.16907516382852447 -0.16907160686959147)))
+      (display "       exit=") (display code)
+      (display " got=") (write out) (newline)))
+  (let-values (((code out) (compile-and-run nb nbody-externs)))
+    (ck! "and with no argument it still takes the default, N=1000"
+         (and (zero? code)
+              (equal? out '(-0.16907516382852447 -0.16908760523460614))))))
 
 ;; THE BENCHMARK ITSELF, as far as it currently gets.
 ;;

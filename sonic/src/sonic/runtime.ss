@@ -47,7 +47,7 @@
   (export runtime-listing runtime-labels
           heap-base-address heap-size
           runtime-data-size
-          heap-pointer-cell out-buffer-cell
+          heap-pointer-cell out-buffer-cell command-line-cell
           globals-base globals-span assign-global-cells)
   (import (chezscheme)
           (sonic numeric))
@@ -61,6 +61,11 @@
   (define data-base      #x600000)
   (define heap-pointer-cell data-base)              ; 8 bytes: the bump pointer
   (define out-buffer-cell   (+ data-base 8))        ; 8 bytes: one double
+  ;; The argument list, built at _start and handed back by `command-line`. It
+  ;; is a Scheme object -- a list of strings -- so it is a GC root the day a
+  ;; collector exists, which is why it lives in a named cell rather than being
+  ;; rebuilt on each call.
+  (define command-line-cell (+ data-base 16))      ; 8 bytes: a tagged list
   ;; The top-level bindings' cells sit between the runtime's own words and the
   ;; heap. Reserving a fixed span rather than sizing it to the program keeps the
   ;; heap's base a constant, which the entry code stores without arithmetic.
@@ -135,6 +140,33 @@
       (kmovw k1 rax)
       (mov rax (imm ,heap-base-address))
       (mov ,(abs-mem heap-pointer-cell) rax)
+      ;; THE ARGUMENT LIST, built before anything else runs.
+      ;;
+      ;; The kernel leaves argc at [rsp] and the argv pointers directly after
+      ;; it. Nothing has pushed yet -- the entry code above only moves -- so rsp
+      ;; still points at argc here, and it is copied to a base register because
+      ;; the addressing forms want one.
+      ;;
+      ;; Walked BACKWARD, from argc-1 down to 0, so that consing produces the
+      ;; list in argv order. Element 0 is the program name, as every Scheme's
+      ;; `command-line` has it, which is why nbody reads its argument with
+      ;; `cadr` rather than `car`.
+      (mov rbx rsp)
+      (mov r12 (mem rbx #f 1 0))                 ; argc
+      (mov r13 r15)                              ; the list, starting empty
+      %cl-loop
+      (cmp r12 (imm 0))
+      (jle (label %cl-done))
+      (sub r12 (imm 1))
+      (mov rsi (mem rbx r12 8 8))                ; argv[r12]
+      (call (label %cstr->string))
+      (mov r8 rax)
+      (mov r9 r13)
+      (call (label %cons))
+      (mov r13 rax)
+      (jmp (label %cl-loop))
+      %cl-done
+      (mov ,(abs-mem command-line-cell) r13)
       (call (label ,entry))
       (mov rdi (imm ,exit-ok))
       (mov rax (imm ,sys-exit))
@@ -225,6 +257,50 @@
       (add rsi (imm 1))
       (jmp (label %mkv-loop))
       %mkv-done
+      (add rax (imm ,(+ heap-header-bytes heap-tag)))
+      (ret)
+
+      ;; ---- (a C string) -> a Scheme string ----
+      ;;
+      ;; rsi is a NUL-terminated byte pointer; the tagged string comes back in
+      ;; rax. Layout is every other heap object's: type, length, payload -- and
+      ;; the length is a BYTE COUNT, so the payload is packed bytes rather than
+      ;; one character per word. That distinction is why this waited for an
+      ;; 8-bit store; see the encoder.
+      ;;
+      ;; The heap pointer is bumped by the payload ROUNDED UP TO EIGHT, so the
+      ;; next object still starts word-aligned. Every other allocator here
+      ;; bumps by a multiple of eight for free; this is the first that can ask
+      ;; for a fraction of a word.
+      %cstr->string
+      (mov rcx (imm 0))
+      %c2s-len
+      (movzx rdx (mem rsi rcx 1 0))
+      (cmp rdx (imm 0))
+      (je (label %c2s-alloc))
+      (add rcx (imm 1))
+      (jmp (label %c2s-len))
+      %c2s-alloc
+      (mov rax ,(abs-mem heap-pointer-cell))
+      (mov rdi (imm ,heap-type-string))
+      (mov (mem rax #f 1 0) rdi)                 ; [raw+0] = type
+      (mov (mem rax #f 1 8) rcx)                 ; [raw+8] = byte count
+      (mov rdi (imm 0))
+      %c2s-copy
+      (cmp rdi rcx)
+      (jge (label %c2s-bump))
+      (movzx rdx (mem rsi rdi 1 0))
+      (movb (mem rax rdi 1 ,heap-header-bytes) rdx)
+      (add rdi (imm 1))
+      (jmp (label %c2s-copy))
+      %c2s-bump
+      (mov rdi rcx)
+      (add rdi (imm 7))
+      (shr rdi (imm 3))
+      (shl rdi (imm 3))
+      (add rdi (imm ,heap-header-bytes))
+      (add rdi rax)
+      (mov ,(abs-mem heap-pointer-cell) rdi)
       (add rax (imm ,(+ heap-header-bytes heap-tag)))
       (ret)
 
@@ -532,8 +608,11 @@
       ;; ---- startup arguments ----
       ;; The empty list and a length of 1 together take nbody's default branch,
       ;; N = 1000, which is the case the oracle publishes values for.
+      ;; ---- (command-line) ----
+      ;; The list built at _start. It used to return the empty list, which took
+      ;; nbody's default branch and was the whole reason N could not be passed.
       command-line
-      (mov rax r15)
+      (mov rax ,(abs-mem command-line-cell))
       (ret)
 
       ;; ---- (length lst) ----
@@ -576,13 +655,35 @@
       (mov rax (mem rax #f 1 ,(- heap-tag)))
       (ret)
 
-      ;; Still on the dead branch: it needs strings, which nothing here builds
-      ;; yet. It exists so the label resolves and it traps so that reaching it
-      ;; is loud rather than silently wrong.
+      ;; ---- (string->number s) ----
+      ;;
+      ;; A DECIMAL FIXNUM AND NOTHING ELSE. No sign, no radix, no flonum, no
+      ;; validation: every digit is taken as a digit and anything else is
+      ;; arithmetic on rubbish. That is the whole of what a benchmark's N needs
+      ;; and it is the honest size of this routine -- a real `string->number` is
+      ;; a parser and belongs in Scheme, compiled, not here.
+      ;;
+      ;; The result is a RAW WORD, which repr.ss declares in
+      ;; `extern-result-classes`: it is a machine integer, and calling it tagged
+      ;; is what made nbody's N a tagged fixnum consumed as one.
+      ;;
+      ;; Offsets are the string's: the length sits at ptr-9 and the bytes start
+      ;; at ptr-1, the same displacements every heap object uses.
       string->number
-      (mov rdi (imm ,exit-unimplemented))
-      (mov rax (imm ,sys-exit))
-      (syscall)
+      (mov rcx (mem r8 #f 1 ,(- -8 heap-tag)))   ; byte count
+      (mov rax (imm 0))
+      (mov rdi (imm 0))
+      %s2n-loop
+      (cmp rdi rcx)
+      (jge (label %s2n-done))
+      (movzx rdx (mem r8 rdi 1 ,(- heap-tag)))
+      (sub rdx (imm 48))                         ; '0'
+      (imul rax rax (imm 10))
+      (add rax rdx)
+      (add rdi (imm 1))
+      (jmp (label %s2n-loop))
+      %s2n-done
+      (ret)
 
       ;; ---- traps ----
       ;; The traps write the value that failed before exiting. A trap that only
