@@ -1089,3 +1089,51 @@ calibrated to this microarchitecture and these two programs, both of which are
 small-working-set integer or FP kernels with predictable branches. A program
 that misses cache or mispredicts would report a different exchange rate, and
 the first such benchmark added here should be expected to overturn this.
+
+## D47 -- fannkuch's gap decomposed, and we are not the one mispredicting
+
+Milestone 5 recorded that even granting D43's whole 8.4%, 1.196x of fannkuch
+remains unexplained. Following D46's own advice -- ask about control flow, not
+work -- the counters say what it is made of.
+
+    n=11            cycles    instructions   branches   mispredicts  miss%  IPC
+    gcc -O3          8.281G      11.129G      2.209G      164.5M     7.45   1.34
+    sonic           10.880G      27.161G      5.652G      144.2M     2.55   2.50
+    sonic unrolled   9.901G      24.812G      5.257G      144.9M     2.76   2.51
+
+THE FIRST SURPRISE IS THAT WE MISPREDICT LESS THAN GCC, in absolute terms:
+144M against 164M. Our rate is lower too, but the rate is the uninteresting
+half -- it is diluted by the two and a half times more branches we execute,
+nearly all of them checks that predict perfectly. The count is what costs
+cycles, and ours is smaller.
+
+THE SECOND IS THAT GCC IS THE ONE THAT IS MISPREDICT-BOUND. IPC 1.34 on a part
+this wide is not issue width. At a ~15-cycle penalty, 164M misses is about
+2.5G cycles -- some 30% of gcc's 8.28G. fannkuch's inner loop is a
+data-dependent permutation walk and those branches are not predictable by
+anybody; gcc is paying the algorithm's own price with very little else in
+flight to hide it behind.
+
+DECOMPOSED, on that penalty assumption and stating it because the conclusion
+depends on it:
+
+                   mispredict cost    everything else
+    gcc               ~2.5G               ~5.8G
+    sonic             ~2.2G               ~8.7G        1.50x
+
+So the residual gap is not branch behaviour and never was. It is that we do
+half again as much real work per unit of progress, at an IPC that is already
+1.9x gcc's. The machine is doing us a favour and we are still behind.
+
+WHAT THIS CHANGES. D46 said price in control flow rather than instructions, and
+that stands -- the unroll removed 7% of branches for 9% of cycles, which is the
+only clean conversion measured here. But it would be a misreading to conclude
+that branch COUNT is the target: our branches are cheap and well predicted, and
+the mispredicts are the algorithm's, not the compiler's. The target is the work
+underneath, which no instruction-count argument has been able to price because
+the machine absorbs so much of it.
+
+A caveat on the arithmetic: the ~15-cycle penalty is a book figure, not
+measured on this part. The qualitative conclusion survives a wide range of it,
+because our mispredict count is LOWER than gcc's -- any penalty makes gcc's
+share larger than ours, and the residual work gap larger, not smaller.
