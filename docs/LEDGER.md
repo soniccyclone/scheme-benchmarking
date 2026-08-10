@@ -801,3 +801,37 @@ does not match gcc. At IPC 3.57 against gcc's 1.35 this machine is absorbing
 our extra instructions, which is the same thing D37 said about nbody from the
 other direction: on neither benchmark does the instruction count predict the
 cycles, and on neither is the fix the one the instruction count suggests.
+
+### D41 addendum -- the unroller needs qaq.13, and that revalues qaq.13
+
+Reading gcc's chain again settles where its bound comes from, and the answer
+changes what qaq.13 is for.
+
+`flip-prefix` runs `i` up from 0 and `j` down from `k`, exiting at `i >= j`,
+and `k` is `(vector-ref perm 0)` -- a RUNTIME value in both languages. gcc has
+no more idea what perm[0] holds than we do. Yet its unrolled chain of eleven
+swaps has NO BACK EDGE: the only `jne 1180` in that region is count-flips' own
+loop, and the swap chain falls straight out the bottom into it. gcc therefore
+proved the reversal runs at most N times.
+
+The only justification available is that `k` indexes `int perm[N]`, so any
+`k >= N` is out of bounds and gcc is entitled to assume it does not happen.
+That is C's get-out. We do not have it and should not want it: out of range
+here is a bounds check that fires, which is a defined outcome we are obliged
+to produce.
+
+WHICH MEANS THE BOUND HAS TO BE PROVED. To unroll `flip-prefix` we need
+`(vector-ref perm 0) < n`, and that is exactly the element-range invariant
+filed as qaq.13 and closed with "recommendation: keep open, do not start" on
+the grounds that it buys 2.8% of cycles in check elimination.
+
+That valuation was of the wrong product. Check elimination is the SMALL use of
+an element-range invariant. The large one is supplying a trip-count bound to a
+transformation that cannot run without it -- and that transformation covers
+77.3% of fannkuch's cycles. The 2.8% number stands; what was wrong was reading
+it as the invariant's whole worth.
+
+The two issues are therefore ordered, not independent: qaq.13 is a prerequisite
+for the unroller, and neither is worth pricing alone. The pair still has to be
+argued against the 1.28x floor above, which no amount of instruction removal in
+that loop has been shown to break.
