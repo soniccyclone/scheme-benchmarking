@@ -1179,3 +1179,44 @@ have bought far more than 1.1%. Either the constraint is elsewhere -- the
 allocator's own choices rather than the size of the pool -- or the 1.1% was
 measured on a total where the hot loops are a small share. Worth resolving
 before either issue is acted on, and it is one dynamic measurement away.
+
+### D47 second addendum -- the dynamic count corrects the static one
+
+The addendum above read 24% of hot-loop instructions touching `%rsp` and
+concluded the surplus is substantially spill traffic. It said a dynamic count
+had not been taken and should be first. Taken:
+
+    n=11              loads      stores    instructions
+    gcc              6.097G      5.047G      11.129G
+    sonic            9.850G      5.906G      27.161G       1.62x  1.17x  2.44x
+    sonic unrolled   8.698G      5.320G      24.812G
+
+MEMORY TRAFFIC GROWS LESS THAN INSTRUCTION COUNT, not more. Loads are 1.62x
+gcc's and stores 1.17x, against 2.44x the instructions. If spill and reload
+were the dominant surplus, memory would grow at least as fast as the
+instruction count; it grows at two thirds the rate. So the excess is dominated
+by NON-memory instructions -- register shuffling, compares, control -- and the
+static `%rsp` share overstated the case.
+
+That correction also relieves the tension the addendum raised with qaq.7.23. A
+wider register partition buying only 1.1% is perfectly consistent with spill
+traffic not being the main cost. The 1.1% stands and nothing about it needs
+re-explaining.
+
+STILL TRUE from the static read: no shifts in these loops, so the tagged
+representation is not the cost; and the unroll moves memory and instructions
+together (-12% loads, -10% stores, -9% cycles), which is what D46 predicts for
+a transformation that removes a loop.
+
+METHOD, since this is the second time in two entries: a static mix is a
+statement about the code and a dynamic count is a statement about the
+execution, and the two answer different questions. The static number was not
+wrong -- a quarter of that code does touch the stack -- it simply does not
+support the conclusion drawn from it. Take the dynamic count before drawing
+one.
+
+A caveat on the counters themselves: gcc's loads plus stores come to almost
+exactly its instruction count, which cannot mean one memory op per
+instruction, so `ls_dispatch` is not counting what its name suggests. Only the
+RATIOS between the two binaries are used here, and those are sound because both
+were measured the same way.
