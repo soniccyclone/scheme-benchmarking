@@ -895,6 +895,35 @@
     (display "       exit=") (display code)
     (display " got=") (write out) (newline)))
 
+;; LISTS: `length` and `cadr` over real pairs, and the empty list literal.
+;;
+;; Both were stubs. `length` returned the constant 1, which was enough for the
+;; one expression in nbody -- `(fx> (length args) 1)` against an empty argument
+;; list -- and wrong for every other question; `cadr` trapped, deliberately,
+;; because it sat on a branch nothing took. Pairs exist now, so both can be
+;; what they say they are.
+;;
+;; `(quote ())` is here because it crashed the COMPILER, not the program:
+;; fold.ss asked `exact?` before `integer?` and `exact?` raises on a
+;; non-number, so any program building a list died with "() is not a number".
+;;
+;; `length` returns a RAW WORD, which is why the result goes through fx->fl
+;; rather than being displayed directly -- see repr.ss's extern-result-classes.
+(let-values (((code out)
+              (compile-and-run
+               (string-append
+                "(define l (cons 10 (cons 20 (cons 30 (quote ())))))\n"
+                "(display (fx->fl (length l))) (newline)\n"
+                "(display (fx->fl (length (quote ())))) (newline)\n"
+                "(display (fx->fl (cadr l))) (newline)\n"
+                "(display (fx->fl (car l))) (newline)\n")
+               '(command-line length cadr string->number display newline))))
+  (ck! "length and cadr walk a real list, and the empty list compiles"
+       (and (zero? code) (equal? out '(3.0 0.0 20.0 10.0))))
+  (unless (and (zero? code) (equal? out '(3.0 0.0 20.0 10.0)))
+    (display "       exit=") (display code)
+    (display " got=") (write out) (newline)))
+
 ;; THE BENCHMARK ITSELF, as far as it currently gets.
 ;;
 ;; nbody's initial energy is the first oracle check in docs/METHOD.md, and it

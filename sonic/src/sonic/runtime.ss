@@ -536,13 +536,49 @@
       (mov rax r15)
       (ret)
 
+      ;; ---- (length lst) ----
+      ;;
+      ;; Walks the cdr chain to `sonic-null`, counting. The count is a RAW
+      ;; WORD, which repr.ss declares in `extern-result-classes`: this returns
+      ;; an element count and not a Scheme object, and calling it tagged is
+      ;; what made nbody's N a tagged fixnum consumed as a machine word.
+      ;;
+      ;; It used to return the constant 1, which was enough for the one
+      ;; expression in the benchmark -- `(fx> (length args) 1)` against an empty
+      ;; argument list -- and answered every other question wrongly. The empty
+      ;; list now answers 0, and that expression takes the same branch it
+      ;; always did.
       length
-      (mov rax (imm 1))
+      (mov rax (imm 0))
+      (mov rsi r8)
+      %len-loop
+      (cmp rsi (imm ,sonic-null))
+      (je (label %len-done))
+      (add rax (imm 1))
+      (mov rsi (mem rsi #f 1 ,(- 8 heap-tag)))   ; rsi = (cdr rsi)
+      (jmp (label %len-loop))
+      %len-done
       (ret)
 
-      ;; On the dead branch. They exist so the label resolves and they trap so
-      ;; that taking the branch is loud rather than silently wrong.
+      ;; ---- (cadr lst) ----
+      ;;
+      ;; `(car (cdr lst))`, which is two loads at constant displacements: a
+      ;; pair's fields sit at -heap-tag and 8-heap-tag from the tagged pointer,
+      ;; the same offsets %car and %cdr use.
+      ;;
+      ;; NO TYPE CHECK, for the same reason %car has none: `cadr` is reached
+      ;; through the extern list rather than through lang.ss's primitive table,
+      ;; so no `chk` is emitted before it. A caller handing this a non-pair gets
+      ;; a wild load rather than a trap, which is worth saying out loud and is
+      ;; the same exposure every extern here carries.
       cadr
+      (mov rax (mem r8 #f 1 ,(- 8 heap-tag)))
+      (mov rax (mem rax #f 1 ,(- heap-tag)))
+      (ret)
+
+      ;; Still on the dead branch: it needs strings, which nothing here builds
+      ;; yet. It exists so the label resolves and it traps so that reaching it
+      ;; is loud rather than silently wrong.
       string->number
       (mov rdi (imm ,exit-unimplemented))
       (mov rax (imm ,sys-exit))

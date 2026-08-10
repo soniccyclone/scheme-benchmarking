@@ -87,9 +87,14 @@
   ;; numeric.ss: 61-bit fixnums, so [-2^60, 2^60-1].
   (define fx-greatest (- (expt 2 60) 1))
   (define fx-least (- (expt 2 60)))
-  (define (fixnum-range? n) (and (exact? n) (integer? n) (<= fx-least n fx-greatest)))
+  ;; `integer?` FIRST, and the order is load-bearing rather than stylistic:
+  ;; `exact?` is a numeric predicate and RAISES on a non-number. Asking it about
+  ;; the empty list -- which is what `(quote ())` is, and which any program
+  ;; building a list writes -- crashed the compiler in this pass with
+  ;; "exact?: () is not a number".
+  (define (fixnum-range? n) (and (integer? n) (exact? n) (<= fx-least n fx-greatest)))
 
-  (define (int? d) (and (exact? d) (integer? d)))
+  (define (int? d) (and (integer? d) (exact? d)))   ; see fixnum-range? above
 
   ;; The primitives whose folded 0/1 is a TRUTH VALUE rather than a number.
   (define (boolean-prim? pr) (and (memq pr '(fx< fx<= fx= fx>= fx>)) #t))
