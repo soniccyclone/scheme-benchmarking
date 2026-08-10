@@ -144,7 +144,30 @@
   ;; The other checks have no tag to compare -- there is no such thing as the
   ;; expected tag of a bounds check -- and pass 0, which is why the mach-op
   ;; spelling that could not distinguish "no tag" from "tag 0" had to go (D27).
-  (define (expected-tag name) (if (eq? name 'type-check) heap-tag 0))
+  ;; WHICH TAG A TYPE CHECK EXPECTS, which is not the same question for every
+  ;; primitive that has one.
+  ;;
+  ;; `check-operands` gives a type check operand 1, and operand 1 is a heap
+  ;; object for most of them -- the vector of a `vector-ref`, the pair of a
+  ;; `car`. For `make-vector` and `make-flvector` it is the COUNT, which is a
+  ;; fixnum and is never a heap object, so asking for `heap-tag` there is
+  ;; asking a question no correct program answers.
+  ;;
+  ;; It never fired because the count was always `raw-word` and the elision
+  ;; analysis discharged the check. `(make-vector (car p) 5)` is the short way
+  ;; to write a count the analysis cannot prove anything about: the check
+  ;; survived into the emitted code and trapped on a perfectly good 3.
+  ;;
+  ;; The fixnum tag is 000, so the expected value is 0 -- the same number a
+  ;; check with no tag passes. That is only expressible because D27 gave `chk`
+  ;; a separate field for it: the NAME says whether the tag means anything, and
+  ;; only `type-check` reads it.
+  (define fixnum-checked-prims '(make-vector make-flvector))
+
+  (define (expected-tag name pr)
+    (cond ((not (eq? name 'type-check)) 0)
+          ((memq pr fixnum-checked-prims) 0)   ; fixnum tag 000
+          (else heap-tag)))
 
   ;; A literal's storage class follows its TYPE, and hardcoding raw-word was a
   ;; real bug: (define days-per-year 365.24) lowered to (const t raw-word
@@ -186,7 +209,14 @@
       (fx>= raw-word raw-word) (fx> raw-word raw-word)
       (fx->fl raw-word)
       (vector-ref #f raw-word) (flvector-ref #f raw-word)
-      (vector-set! #f raw-word #f) (flvector-set! #f raw-word #f)))
+      (vector-set! #f raw-word #f) (flvector-set! #f raw-word #f)
+      ;; THE COUNT, and only the count. Both allocators read it as a raw
+      ;; element count -- it is what the length word holds and what the fill
+      ;; loop compares against -- so a tagged fixnum arriving here asks for
+      ;; eight times the elements. The FILL is `#f` on purpose: its class is
+      ;; whatever the vector holds, and for `make-vector` it decides which
+      ;; routine `routed` calls.
+      (make-vector raw-word #f) (make-flvector raw-word #f)))
 
   (define (op-for pr)
     (let ((p (assq pr prim->op)))
@@ -240,11 +270,25 @@
   ;; So a bounds check emits a `vlen` first to materialise the limit, then
   ;; compares the index against it. A type check wants only the value. Overflow
   ;; and division checks want the operands they guard.
-  (define (check-operands name srcs)
+  ;; `srcs` are the operands as the OP will read them -- untagged where a
+  ;; machine word is needed. `srcs0` are the originals.
+  ;;
+  ;; A TYPE CHECK READS THE ORIGINAL, and that is the whole reason both lists
+  ;; are threaded here. It asks what an operand IS, and after `untag-args` the
+  ;; rewritten one is a raw machine word whose low bits are the value's, not a
+  ;; tag: checking `(make-vector (car p) 5)`'s count against the fixnum tag saw
+  ;; 3 and its low bits 011, and trapped on a perfectly good three. The untag
+  ;; defines a FRESH vreg and leaves the original alone, so reading the original
+  ;; costs nothing and does not depend on where the shift was placed.
+  ;;
+  ;; A BOUNDS CHECK reads the rewritten one, and must: it compares the index
+  ;; against the vector's raw length, so a tagged index would be eight times
+  ;; too large.
+  (define (check-operands name srcs srcs0)
     (case name
       ;; (vector-ref v i) / (vector-set! v i x): index is operand 2, vector is 1
       ((bounds-check) (list (cadr srcs) (car srcs)))
-      ((type-check)   (list (car srcs)))
+      ((type-check)   (list (car srcs0)))
       ;; (fxquotient a b): the DIVISOR is operand 2, and it is the only one the
       ;; check reads. Without this case the `else` below handed both operands
       ;; to a rule that takes one, and both targets refused with "division
@@ -267,7 +311,7 @@
   ;; This is safe in a way a late bounds check would not be: a wrapped add has
   ;; produced a wrong number but has not touched memory, so trapping one
   ;; instruction later observes nothing that has escaped.
-  (define (checks->instrs controls srcs dst stats)
+  (define (checks->instrs pr controls srcs srcs0 dst stats)
     (let loop ((cs controls) (out '()) (post '()))
       (if (null? cs)
           (values (reverse out) (reverse post))
@@ -302,7 +346,7 @@
                ;; The expected tag rides on the instruction. Only type-check
                ;; uses it; everything else passes 0, because there is no
                ;; constant a bounds or overflow check compares against.
-               (let ((ops (check-operands name srcs)))
+               (let ((ops (check-operands name srcs srcs0)))
                  (cond
                   ;; A permission, not an instruction.
                   ((eq? name 'fp-contract) (loop (cdr cs) out post))
@@ -315,12 +359,12 @@
                            post)))
                   ((eq? name 'overflow-check)
                    (loop (cdr cs) out
-                         (cons `(chk overflow-check checked ,(expected-tag name)
+                         (cons `(chk overflow-check checked ,(expected-tag name pr)
                                      ,@ops ,dst)
                                post)))
                   (else
                    (loop (cdr cs)
-                         (cons `(chk ,name checked ,(expected-tag name) ,@ops)
+                         (cons `(chk ,name checked ,(expected-tag name pr) ,@ops)
                                out)
                          post)))))
               (else (error 'lower "unknown control" ctl)))))))
@@ -812,7 +856,7 @@
            ;; check compares the index against the vector's RAW length, so it
            ;; has to see the machine word too.
            (let*-values (((untags srcs) (untag-args pr srcs0))
-                         ((pre post) (checks->instrs controls srcs dst stats)))
+                         ((pre post) (checks->instrs pr controls srcs srcs0 dst stats)))
              (values (append untags pre
                              (list (cond
                                     ((eq? op 'call)

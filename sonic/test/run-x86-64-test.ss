@@ -801,6 +801,50 @@
     (display "       exit=") (display code)
     (display " got=") (write out) (newline)))
 
+;; AN ALLOCATOR COUNT THAT ARRIVES TAGGED.
+;;
+;; `(make-vector (car p) 5)` traps unless two separate things are right, and
+;; each was wrong on its own.
+;;
+;; The count reaches the allocator as a raw element count, so it has to be
+;; untagged at the use like every other raw-word argument. And the `type-check`
+;; that guards it has to ask for the FIXNUM tag: `expected-tag` answered
+;; `heap-tag` for every type check, which is right for the pair of a `car` and
+;; wrong for a count, and no representation of the number three passes it.
+;;
+;; The last two lines are the ones that keep the checks honest -- a coarse tag
+;; test is still a real test, and making a count pass must not make a bad
+;; pointer or an out-of-range index pass.
+(let-values (((code out)
+              (compile-and-run
+               (string-append
+                "(define p (cons 3 0))\n"
+                "(define v (make-vector (car p) 5))\n"
+                "(define f (make-flvector (car p) 1.5))\n"
+                "(display (fx->fl (vector-length v))) (newline)\n"
+                "(display (fx->fl (vector-ref v 1))) (newline)\n"
+                "(display (fx->fl (flvector-length f))) (newline)\n"
+                "(display (flvector-ref f 1)) (newline)\n")
+               '(display newline))))
+  (ck! "an allocator count arriving tagged is untagged and type-checked as a fixnum"
+       (and (zero? code) (equal? out '(3.0 5.0 3.0 1.5))))
+  (unless (and (zero? code) (equal? out '(3.0 5.0 3.0 1.5)))
+    (display "       exit=") (display code)
+    (display " got=") (write out) (newline)))
+
+;; And the checks still fire. 101 is the type trap, 102 the bounds trap.
+(let-values (((code out) (compile-and-run "(display (fx->fl (car 5))) (newline)\n"
+                                          '(display newline))))
+  (ck! "a type check still traps: (car 5) exits 101" (= 101 code)))
+(let-values (((code out)
+              (compile-and-run
+               (string-append "(define v (make-vector 2 0))\n"
+                              "(define p (cons 5 0))\n"
+                              "(display (fx->fl (vector-ref v (car p)))) (newline)\n")
+               '(display newline))))
+  (ck! "a bounds check still traps on a tagged index that is out of range"
+       (= 102 code)))
+
 ;; THE BENCHMARK ITSELF, as far as it currently gets.
 ;;
 ;; nbody's initial energy is the first oracle check in docs/METHOD.md, and it
