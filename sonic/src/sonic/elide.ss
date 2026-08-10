@@ -52,6 +52,7 @@
 (library (sonic elide)
   (export elide elide-program elide-facts?
           elide-stats? elide-stats-sites elide-stats-argivs
+          elide-stats-elemwrites
           elide-proved elide-kept elide-unchecked
           elide-proved-by elide-report
           elide-site? elide-site-prim elide-site-check
@@ -81,7 +82,16 @@
             ;; its parameters arrive with no facts. Reporting the intervals the
             ;; caller already knew lets the driver feed them back in as
             ;; premises and run the whole thing again.
-            (mutable argivs)))
+            (mutable argivs)
+            ;; Every `vector-set!`'s (vector . interval-of-the-value-stored).
+            ;;
+            ;; The same trick as argivs, for the same reason. An element range
+            ;; cannot be computed before this pass, because the values written
+            ;; are induction variables whose intervals ARE this pass's output;
+            ;; and it cannot be computed by this pass alone, because reading a
+            ;; range requires the range. So it is reported and fed back, and the
+            ;; driver's existing widen/narrow settles it.
+            (mutable elemwrites)))
 
   (define (count-verdict st v)
     (length (filter (lambda (s) (eq? (elide-site-verdict s) v)) (elide-stats-sites st))))
@@ -155,32 +165,49 @@
             lens     ; name -> exact length
             proved   ; obligations discharged by a dominating check
             nonnan   ; names premised not to be NaN
+            ;; A TRACKED VECTOR'S ELEMENT RANGE. Keyed by the vector's name,
+            ;; not by a value -- it is a fact about the whole program, supplied
+            ;; by the driver's fixpoint and never refined on a path, because a
+            ;; write anywhere invalidates it everywhere. It rides in the
+            ;; environment rather than in module state so that it travels the
+            ;; same route as every other premise and cannot be left bound
+            ;; around the wrong phase (the mistake repr.ss made with
+            ;; vector-element-class).
+            elems    ; name -> interval over its elements
             graph))  ; the ABCD inequality graph, built once over the whole term
 
   (define (iv-of env x) (let ([p (assq x (eenv-ivs env))]) (if p (cdr p) iv-top)))
   (define (kind-of env x) (let ([p (assq x (eenv-kinds env))]) (and p (cdr p))))
   (define (len-of env x) (let ([p (assq x (eenv-lens env))]) (and p (cdr p))))
   (define (nonnan-of env x) (and (memq x (eenv-nonnan env)) #t))
+  (define (elems-of env x) (let ([p (assq x (eenv-elems env))]) (and p (cdr p))))
   (define (holds? env ob) (and (member ob (eenv-proved env)) #t))
 
   (define (with-iv env x v)
     (make-eenv (cons (cons x v) (eenv-ivs env)) (eenv-kinds env) (eenv-lens env)
-               (eenv-proved env) (eenv-nonnan env) (eenv-graph env)))
+               (eenv-proved env) (eenv-nonnan env) (eenv-elems env) (eenv-graph env)))
   (define (with-kind env x k)
     (if (not k) env
         (make-eenv (eenv-ivs env) (cons (cons x k) (eenv-kinds env)) (eenv-lens env)
-                   (eenv-proved env) (eenv-nonnan env) (eenv-graph env))))
+                   (eenv-proved env) (eenv-nonnan env) (eenv-elems env) (eenv-graph env))))
   (define (with-len env x n)
     (if (not n) env
         (make-eenv (eenv-ivs env) (eenv-kinds env) (cons (cons x n) (eenv-lens env))
-                   (eenv-proved env) (eenv-nonnan env) (eenv-graph env))))
+                   (eenv-proved env) (eenv-nonnan env) (eenv-elems env) (eenv-graph env))))
   (define (with-nonnan env x)
     (make-eenv (eenv-ivs env) (eenv-kinds env) (eenv-lens env)
-               (eenv-proved env) (cons x (eenv-nonnan env)) (eenv-graph env)))
+               (eenv-proved env) (cons x (eenv-nonnan env)) (eenv-elems env)
+               (eenv-graph env)))
   (define (with-obligations env obs)
     (if (null? obs) env
         (make-eenv (eenv-ivs env) (eenv-kinds env) (eenv-lens env)
-                   (append obs (eenv-proved env)) (eenv-nonnan env) (eenv-graph env))))
+                   (append obs (eenv-proved env)) (eenv-nonnan env)
+                   (eenv-elems env) (eenv-graph env))))
+  (define (with-elems env x iv)
+    (if (not iv) env
+        (make-eenv (eenv-ivs env) (eenv-kinds env) (eenv-lens env)
+                   (eenv-proved env) (eenv-nonnan env)
+                   (cons (cons x iv) (eenv-elems env)) (eenv-graph env))))
 
   ;; x0 is the same value as x1, so everything known about x1 is known about
   ;; x0, obligations included. This is what makes a check that dominates a
@@ -257,8 +284,11 @@
             [(pair) (with-kind env x 'pair)]
             [(interval) (with-iv env x (make-interval (car rest) (cadr rest)))]
             [(non-nan) (with-nonnan env x)]
+            ;; (v elements LO HI) -- see elemrange.ss for which vectors may
+            ;; carry one, and driver.ss for where the range is computed.
+            [(elements) (with-elems env x (make-interval (car rest) (cadr rest)))]
             [else env])))
-      (make-eenv '() '() '() '() '() g)
+      (make-eenv '() '() '() '() '() '() g)
       facts))
 
   ;; --- the discharge rules --------------------------------------------------
@@ -369,6 +399,14 @@
            [(fx-) (if (= n 2) (iv-sub (a 0) (a 1)) iv-top)]
            [(fx*) (if (= n 2) (iv-mul (a 0) (a 1)) iv-top)]
            [(fxneg) (if (= n 1) (iv-neg (a 0)) iv-top)]
+           ;; THE READ THAT MAKES THE WHOLE ANALYSIS WORTH HAVING. Without a
+           ;; fact here `(vector-ref perm 0)` is top, so `k` is top, so every
+           ;; index derived from k keeps its check and no loop k bounds has a
+           ;; trip count. The element range is the premise; this is where it is
+           ;; spent.
+           [(vector-ref)
+            (let ([e (and (= n 2) (elems-of env (car x*)))])
+              (if e e iv-top))]
            [(flvector-length vector-length)
             (let ([l (and (= n 1) (len-of env (car x*)))])
               ;; A length is never negative even when it is not known.
@@ -426,6 +464,10 @@
                       (elide-stats-argivs stats)))
          (values `(call ,x1 ,x* ...) '())]
         [(primcall ,pr ([,pn* ,c*] ...) ,x* ...)
+         (when (and (eq? pr 'vector-set!) (= (length x*) 3))
+           (elide-stats-elemwrites-set!
+            stats (cons (cons (car x*) (iv-of env (caddr x*)))
+                        (elide-stats-elemwrites stats))))
          (let ([c^* (map (lambda (pn c) (decide-one pr pn c x* env stats)) pn* c*)])
            (values `(primcall ,pr ([,pn* ,c^*] ...) ,x* ...)
                    (established pr pn* c^* x*)))]
@@ -555,7 +597,7 @@
       [(e facts)
        (let* ([g (build-inequality-graph e (fact-lengths facts))]
               [env (facts->env facts g)]
-              [stats (make-elide-stats '() '())])
+              [stats (make-elide-stats '() '() '())])
          (let-values ([(e^ _) (rw e env stats)])
            (elide-stats-sites-set! stats (reverse (elide-stats-sites stats)))
            (values e^ stats)))]))
@@ -577,13 +619,16 @@
       [(p facts)
        (nanopass-case (Lssa Program) p
          [(top ([,x* ,e*] ...) (,x2* ...) ,body)
-          (let ([all (make-elide-stats '() '())])
+          (let ([all (make-elide-stats '() '() '())])
             (define (one e)
               (let-values ([(e^ st) (elide e facts)])
                 (elide-stats-sites-set!
                  all (append (elide-stats-sites all) (elide-stats-sites st)))
                 (elide-stats-argivs-set!
                  all (append (elide-stats-argivs all) (elide-stats-argivs st)))
+                (elide-stats-elemwrites-set!
+                 all (append (elide-stats-elemwrites all)
+                             (elide-stats-elemwrites st)))
                 e^))
             (with-output-language (Lssa Program)
               (let* ([v* (map one e*)]

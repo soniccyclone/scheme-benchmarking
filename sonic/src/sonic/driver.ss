@@ -41,7 +41,7 @@
           (sonic anf) (sonic assign) (sonic inline) (sonic unroll)
           (sonic essa) (sonic elide)
           (sonic repr) (sonic lift) (sonic convert) (sonic lower) (sonic globals)
-          (sonic shapes) (sonic interval) (sonic cse) (sonic dce) (sonic contract) (sonic fold) (sonic specialize) (sonic addrfold) (sonic slp)
+          (sonic shapes) (sonic elemrange) (sonic interval) (sonic cse) (sonic dce) (sonic contract) (sonic fold) (sonic specialize) (sonic addrfold) (sonic slp)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
           (sonic order)
@@ -228,7 +228,11 @@
   (define (elide-to-fixpoint ssa)
     (let* ((datum (unparse-Lssa ssa))
            (base (shape-facts datum))
-           (params (procedure-params datum)))
+           (params (procedure-params datum))
+           ;; Which vectors may carry an element range at all, and what they
+           ;; hold before the program writes one. The escape rule that makes
+           ;; this sound is in elemrange.ss.
+           (tracked (trackable-vectors datum)))
       ;; WIDENING, without which this does not terminate.
       ;;
       ;; A parameter bounded by its loop guard settles fast -- `i < n-bodies`
@@ -257,16 +261,75 @@
       ;; unbounded. Dropping is sound and useless; widening is the operator that
       ;; is both.
       (define ascent-rounds 4)
-      (define (combine op prev cand)
+      (define (combine* tag op prev cand)
         (map (lambda (f)
                (let ((old (assq (car f) prev)))
                  (if (not old)
                      f
                      (let ((iv (op (make-interval (caddr old) (cadddr old))
                                    (make-interval (caddr f) (cadddr f)))))
-                       (list (car f) 'interval (interval-lo iv) (interval-hi iv))))))
+                       (list (car f) tag (interval-lo iv) (interval-hi iv))))))
              cand))
-      (let loop ((facts base) (round 0))
+      (define (combine op prev cand) (combine* 'interval op prev cand))
+
+      ;; A tracked vector's element range is the join of its allocation fill
+      ;; with every value stored into it, and the writes are what the round
+      ;; just reported.
+      ;;
+      ;; SEEDED FROM THE FILL AND ASCENDING FROM THERE, which is what makes the
+      ;; intermediate rounds' optimism harmless: round 0 claims `[0,0]` because
+      ;; nothing has been observed yet, and that claim is only ever USED to
+      ;; compute round 1's writes. What is returned is the program elided under
+      ;; the SETTLED facts, and settled means joining the writes observed under
+      ;; those facts reproduces them -- a post-fixpoint, which is the soundness
+      ;; condition. A round's output is never shipped on its own.
+      (define (element-facts writes)
+        (map (lambda (t)
+               (let* ((v (car t))
+                      (iv (fold-left
+                           (lambda (acc w)
+                             (if (eq? (car w) v) (iv-join acc (cdr w)) acc))
+                           (iv-const (cdr t))
+                           writes)))
+                 (list v 'elements (interval-lo iv) (interval-hi iv))))
+             tracked))
+      ;; --- WHY THIS IS TWO ASCENTS AND NOT ONE ------------------------------
+      ;;
+      ;; The first version interleaved them and produced `perm elements
+      ;; neginf 6` on fannkuch -- the right upper bound and a useless lower one.
+      ;; The cause is that an element range's own reads feed its own writes.
+      ;; Every write of perm1 except `init`'s stores a value READ from perm1, so
+      ;; the equation is X = fill ⊔ init ⊔ X, and any over-approximation that
+      ;; ever enters X is a fixpoint of it. On round 1 `init`'s parameter has
+      ;; not converged yet and is still top, so X went to top there and stayed:
+      ;; narrowing walked the upper bound back because the guard reimposes it,
+      ;; and nothing reimposes a lower bound on a value that is only ever
+      ;; copied. Transient imprecision became permanent.
+      ;;
+      ;; So the two ascents are separated. The interval ascent runs first with
+      ;; NO element facts -- elements read as top, which is sound and merely
+      ;; imprecise -- and settles the parameter ranges. The element ascent then
+      ;; runs from the allocation fill with those ranges frozen, so `init`'s
+      ;; write is [0,6] the first time it is seen and nothing pollutes the join.
+      ;; A final interval ascent spends the result, which is the entire point:
+      ;; `k` is what bounds flip-prefix.
+      ;;
+      ;; Each ascent is a Kleene iteration from bottom that stops when a round
+      ;; reproduces its input, so each result is a post-fixpoint of its own
+      ;; equation under premises that are themselves sound. Stopping early
+      ;; would not be.
+      (define (element-ascent facts0)
+        (let loop ((ef (element-facts '())) (round 0))
+          (let-values (((p1 st) (elide-program ssa (append facts0 ef))))
+            (let* ((cand (element-facts (elide-stats-elemwrites st)))
+                   (nxt (cond ((< round ascent-rounds) cand)
+                              ((= round ascent-rounds)
+                               (combine* 'elements iv-widen ef cand))
+                              (else (combine* 'elements iv-narrow ef cand)))))
+              (if (or (> round 12) (equal? nxt ef)) nxt (loop nxt (+ round 1)))))))
+
+      (define (interval-ascent efacts)
+        (let loop ((facts (append base efacts)) (round 0))
         (let-values (((p1 st) (elide-program ssa facts)))
           (let* ((argivs (elide-stats-argivs st))
                  (raw (interval-facts-from argivs params))
@@ -274,7 +337,7 @@
                  (more (cond ((< round ascent-rounds) raw)
                              ((= round ascent-rounds) (combine iv-widen prev raw))
                              (else (combine iv-narrow prev raw))))
-                 (next (append base more)))
+                 (next (append base efacts more)))
             (cond
              ((or (> round 12) (equal? next facts))
               ;; The ascent ignored unbounded sites to get moving, so the result
@@ -282,10 +345,19 @@
               ;; and the analysis re-run without it.
               (let ((bad (facts-cover? facts argivs params)))
                 (if (null? bad)
-                    (values p1 st)
+                    (values p1 st facts)
                     (let ((kept (filter (lambda (f) (not (memq (car f) bad))) facts)))
-                      (elide-program ssa kept)))))
-             (else (loop next (+ round 1)))))))))
+                      (let-values (((p2 st2) (elide-program ssa kept)))
+                        (values p2 st2 kept))))))
+             (else (loop next (+ round 1))))))))
+
+      (define (drop3 p st facts) (values p st))
+
+      (if (null? tracked)
+          (call-with-values (lambda () (interval-ascent '())) drop3)
+          (let*-values (((p0 st0 settled) (interval-ascent '()))
+                        ((efacts) (element-ascent settled)))
+            (call-with-values (lambda () (interval-ascent efacts)) drop3)))))
 
   (define (listing-size listing)
     (let loop ((xs listing) (pc 0))

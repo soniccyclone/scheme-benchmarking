@@ -554,25 +554,28 @@
 (ck! "nbody emits NO bounds check at all"
      (= 0 (surviving-bounds-checks "../bench/nbody/config-sonic.sps" nbody-externs)))
 
-;; fannkuch-redux keeps exactly four, all in `flip-prefix`, and they are the
-;; four an interval domain cannot discharge: the loop is `(fx< i j)` where
-;; `j` came from `(vector-ref perm 0)`. Bounding it needs "every element of
-;; perm is less than n", which is a statement about the array's CONTENTS --
-;; not about any scalar the domain tracks. SPEC.md picked this program for
-;; exactly that shape. The other six went with the equality-edge refinement.
-;; EIGHT, BEING FOUR IN EACH OF TWO COPIES of that loop, and the doubling is
-;; not a lost elision. `flip-prefix` is named by exactly one call, so inline.ss
-;; splices it into `count-flips` (rule 2'); `unroll-program` then runs on the
-;; larger body and duplicates it. Each copy keeps the same four checks it kept
-;; when there was one copy, which is the number that says the analysis did not
-;; get worse.
+;; fannkuch-redux now emits none either, and the fact that removed the last
+;; ones is the one this test used to exist to document.
 ;;
-;; Attributed rather than assumed: the checks land 4 in `loop%2` and 4 in
-;; `loop%2.14`, which are the two unrolled copies of the flip loop and nothing
-;; else. If a future change puts a check anywhere but there, this number moves
-;; and the reason is not this one.
-(ck! "fannkuch-redux keeps four per copy of flip-prefix's loop, and it has two"
-     (= 8 (surviving-bounds-checks "../bench/fannkuch/config-sonic.sps"
+;; It kept four per copy of `flip-prefix`'s loop -- eight, the loop having been
+;; spliced by inline.ss and then duplicated by unroll-program. The loop is
+;; `(fx< i j)` with `j` from `(vector-ref perm 0)`, so bounding it needs "every
+;; element of perm is below n", which is a statement about the array's CONTENTS
+;; and not about any scalar the interval domain tracks. SPEC.md picked this
+;; program for exactly that shape.
+;;
+;; elemrange.ss supplies it. perm's elements join to [0, n-1] because `init`
+;; writes an induction variable bounded by the loop guard and every other write
+;; stores a value read back out of perm or perm1 -- so the range is closed
+;; under the program's own permuting. See LEDGER D42 for why that ascent has to
+;; run separately from the interval one.
+;;
+;; ZERO IS THE CLAIM, not "fewer". A count that merely dropped would leave open
+;; which checks went, and the whole point is that the contents fact discharges
+;; the entire family: once `k` is bounded, so are `i` and `j`, so are both
+;; copies, and nothing in flip-prefix is left to check.
+(ck! "fannkuch-redux emits no bounds check either, once perm's contents are bounded"
+     (= 0 (surviving-bounds-checks "../bench/fannkuch/config-sonic.sps"
                                    '(display newline))))
 
 ;; A TAGGED FALSE IS sonic-false, NOT ZERO.
