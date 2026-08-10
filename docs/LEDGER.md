@@ -1479,3 +1479,30 @@ measured on the workload its collector was designed for.
 So the honest reading of the current standing -- fannkuch 1.198x, nbody 1.118x
 -- is that it covers the half of the language that does not allocate. That is
 not a small half, and it is not the whole one.
+
+### D52 addendum -- verified, and it is a segfault rather than a limitation
+
+The paragraph above was inferred from an import graph, which is not evidence.
+Bead 6cm.5, "Precise generational copying collector", is CLOSED, so the
+inference and the tracker disagreed and one of them had to be wrong. Measured
+instead, with a loop consing one pair per iteration and keeping none:
+
+    30,000 pairs      exit 0, correct answer      (~480 KB)
+    60,000 pairs      exit 139, SIGSEGV           (~960 KB)
+     3,000,000 pairs  exit 139, SIGSEGV
+
+The inference was right and the consequence is worse than "the collector is not
+lowered". A program that allocates past the nursery does not get a collection,
+and does not get a diagnosis either -- it gets a segmentation fault. The usable
+heap is under a megabyte.
+
+What was closed as 6cm.5 is the MODEL. gc.ss says so in its own header. The
+tracker cannot currently tell a reader that emitted programs are unable to
+allocate, and that is worth more than a relabelling: it is the only
+correctness-shaped defect in a tree otherwise entirely about speed.
+
+Filed as a P1 with a minimum useful fix that is much smaller than the lowering:
+make nursery exhaustion fail loudly. A program out of heap should say so and
+exit non-zero, the way a failed bounds check does. That converts a segfault
+into a diagnosis, which is the difference between "the compiler is broken" and
+"this program needs more heap than this runtime has".
