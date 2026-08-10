@@ -17,7 +17,8 @@
         (sonic anf) (sonic assign) (sonic inline) (sonic essa) (sonic elide)
         (sonic repr) (sonic lower) (sonic select) (sonic regs) (sonic regalloc)
         (sonic finalize) (sonic litpool) (sonic object) (sonic runtime)
-        (sonic elfexec) (sonic globals) (sonic target-x86-64) (sonic driver) (sonic pipeline))
+        (sonic elfexec) (sonic globals) (sonic target-x86-64) (sonic driver) (sonic pipeline)
+        (sonic specialize))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -577,6 +578,30 @@
 (ck! "fannkuch-redux emits no bounds check either, once perm's contents are bounded"
      (= 0 (surviving-bounds-checks "../bench/fannkuch/config-sonic.sps"
                                    '(display newline))))
+
+;; AN EMPTY INDEX INTERVAL DISCHARGES ITS CHECK, and the fixture is the one
+;; that found it.
+;;
+;; Bottom is not "an index we know nothing about" -- that is top. It is the
+;; meet of disjoint constraints, so no value reaches the access and the check
+;; can never fire. Every other rule in `bounds-ok?` asks a question about a
+;; value that does not exist and gets #f, so before this the site fell through
+;; to `kept`.
+;;
+;; MEASURED WHERE IT MATTERS, which is under specialization -- the pass is off
+;; by default, and turning it on used to take fannkuch from 0 surviving checks
+;; to 79 and nbody from 0 to 97. The empty-interval rule takes nbody's back to
+;; ZERO and fannkuch's to 34, so it removes the whole of one benchmark's
+;; regression and over half of the other's. That regression is the only thing
+;; between qaq.23 and a measured 8.4% of fannkuch's cycles.
+;;
+;; The probe is checked at 0 rather than "fewer": it is twenty lines built to
+;; isolate exactly this, and a number that merely drops would not say the site
+;; went for the right reason.
+(ck! "an unreachable access needs no bounds check, even in a specialized copy"
+     (= 0 (parameterize ([specialize-enabled? #t])
+            (surviving-bounds-checks "../bench/probe-specialize-elision.sps"
+                                     '(display newline)))))
 
 ;; A TAGGED FALSE IS sonic-false, NOT ZERO.
 ;;

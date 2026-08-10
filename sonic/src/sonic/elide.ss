@@ -309,6 +309,22 @@
         (values #f #f)
         (let* ([v (car args)] [i (cadr args)] [n (len-of env v)])
           (cond
+            ;; AN EMPTY INTERVAL MEANS NO VALUE REACHES HERE.
+            ;;
+            ;; Bottom is not "an index we know nothing about" -- that is top.
+            ;; It is the meet of disjoint constraints, so the path carrying
+            ;; this access cannot be taken, and a check on it can never fire.
+            ;; Discharging is sound for the same reason unreachable code may be
+            ;; deleted, and it is sound in the SAFE direction if the emptiness
+            ;; were ever spurious: the worst case is a check removed from code
+            ;; that does not run.
+            ;;
+            ;; Found while diagnosing qaq.23, where a specialized copy carried
+            ;; a site with an empty index interval and kept its check because
+            ;; every rule below asks a question about a value that does not
+            ;; exist -- `iv-within?` on bottom is false, and so is ABCD's
+            ;; query, so the site fell through to `kept`.
+            [(iv-bot? (iv-of env i)) (values #t 'unreachable)]
             [(holds? env (list 'bounds v i)) (values #t 'dominating-check)]
             [(and n (iv-within? (iv-of env i) (iv-const n))) (values #t 'interval)]
             [(abcd-in-bounds? (eenv-graph env) i (or n (abcd-length-vertex v)))

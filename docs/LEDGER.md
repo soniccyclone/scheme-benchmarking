@@ -955,3 +955,51 @@ So `mov $imm` next to its only apparent use is not evidence of waste. The
 register may be read somewhere the eye does not travel -- here, the epilogue --
 and the peephole's "all uses or none" test knows it even when the reader of the
 disassembly does not. 8.4% is the whole prize, not a prize through a waste.
+
+## D44 -- bottom is not top, and the whole elision collapse was partly that
+
+qaq.23 has been blocked since it was filed on a regression with a simple name
+and no diagnosis: turning full unrolling on takes fannkuch from 0 surviving
+bounds checks to 79 and nbody from 0 to 97. Nine hypotheses died on it in one
+session -- out-of-range copies, lost `declare` premises, missing parameter
+status, a broken refinement chain, edge polarity, a missing call site, and
+three variants of "the trip count". Two of them were published here and
+retracted.
+
+The answer was in the domain, not the program.
+
+`bounds-ok?` had rules for a dominating check, the interval domain and ABCD.
+Every one of them asks a question about the index's VALUE. When the index's
+interval is EMPTY -- bottom, the meet of disjoint constraints -- there is no
+value to ask about, `iv-within?` is false, ABCD's query is false, and the site
+falls through to `kept`. Bottom was being treated as though it were top.
+
+It is the opposite of top. Top is "this index could be anything". Bottom is
+"no value reaches here at all", so the access cannot execute and its check can
+never fire. Discharging it is sound for the same reason unreachable code may be
+deleted -- and sound in the safe direction even if the emptiness were spurious,
+because the worst case is a check removed from code that does not run.
+
+One clause. Measured on the emitted labels, not on elide's verdicts:
+
+    specialization ON      before   after
+    nbody                     97       0
+    fannkuch                  79      34
+    the 20-line probe          3       0
+
+Zero regression on nbody, better than half of fannkuch's, and no change to
+either benchmark with the pass off, where both were already at zero.
+
+TWO THINGS TO CARRY.
+
+First, the obvious one: a lattice's bottom needs its own case in any rule that
+consults a value, and "no rule matched" is the wrong default for it. Worth
+checking `type-ok?` and the overflow rules for the same gap; this fixed only
+`bounds-ok?` because that is where it was measured.
+
+Second, and it is the reason nine hypotheses died: every one of them was about
+the PROGRAM -- which pass copied what, which procedure was live, which edge a
+sigma was on. The defect was in the analysis's own algebra and would have been
+found by asking what each rule does at each lattice point, which is a question
+about twenty lines of `elide.ss` and no program at all. When a fact is missing
+from an abstract interpretation, interrogate the domain before the input.
