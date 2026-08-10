@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # fannkuch-redux under SonicScheme against gcc -O3 -march=native.
 #
-# WHY THIS EXISTS SEPARATELY FROM measure-sonic.sh. That script measures nbody
-# by a SLOPE between two N, because nbody's work is linear in its step count and
-# a slope cancels process startup. fannkuch is n!, so there is no slope to take:
+# WHY THIS EXISTS SEPARATELY FROM harness/measure.sh. That script measures by a
+# SLOPE between two N, because nbody's work is linear in its step count and a
+# slope cancels process startup. fannkuch is n!, so there is no slope to take:
 # n=10 and n=11 are not two points on a line, they are two different programs
 # with an order of magnitude between them. This measures TOTAL cycles at one n
 # instead, which is honest here precisely because the run is long enough that
@@ -16,6 +16,13 @@
 # ratio is 1.4-ish and the gap is instructions, which is the opposite of nbody's
 # diagnosis (D37) and the reason both benchmarks have to be measured rather than
 # one of them generalised.
+#
+# AND THIS ONE IS STILL AD HOC, which is worth saying rather than leaving to be
+# found. configs.sh is nbody-only -- one BENCH directory, one CONFIGS list -- so
+# fannkuch has no configuration table to be driven from, and this script
+# hard-codes the two builds it compares. The right fix is a second table, not a
+# third harness: `sonic` became an ordinary configuration the moment argv could
+# be read, and fannkuch could too.
 #
 # N IS BAKED IN TWO PLACES AND THEY MUST MOVE TOGETHER. `(define n 7)` sets the
 # permutation size and `(make-vector 7 0)` sizes the three arrays. Changing only
