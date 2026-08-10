@@ -447,7 +447,34 @@
              ;; The instructions accumulated so far end THIS block, under the
              ;; label the caller is building, so the predecessor's edge into it
              ;; is preserved.
-             (emit-block! lbl acc (list 'branch-if test then-lbl else-lbl))
+             ;; A TAGGED CONDITION IS FALSE ONLY WHEN IT IS sonic-false.
+             ;;
+             ;; `branch-if` lowers to `cmp r, 0` and a non-zero jump, which is
+             ;; exactly right for a raw-word boolean -- the fixnum comparisons
+             ;; produce 0 or 1 -- and WRONG for a tagged one, because Scheme's
+             ;; false is the immediate numeric.ss calls sonic-false, which is 7.
+             ;; Comparing it against 0 makes `#f` read as TRUE:
+             ;;
+             ;;     (if #f 7 9)  =>  7
+             ;;
+             ;; That is a wrong answer on ordinary Scheme, not a conformance
+             ;; nicety, and it was reachable the moment a boolean literal became
+             ;; selectable at all.
+             ;;
+             ;; So a tagged test is compared against sonic-false first, and the
+             ;; ARMS ARE SWAPPED because the comparison asks the opposite
+             ;; question: `is-false` is 1 exactly when the branch should go to
+             ;; the else arm. No new mach-op and no selector change -- `cmp-eq`
+             ;; already yields the raw-word 0/1 `branch-if` wants.
+             (let ((tc (vreg-class-of test)))
+               (if (eq? tc 'tagged)
+                   (let ((kf (fresh! "kf")) (isf (fresh! "isf")))
+                     (emit-block!
+                      lbl
+                      (cons `(cmp-eq ,isf raw-word ,test ,kf)
+                            (cons `(const ,kf tagged ,sonic-false) acc))
+                      (list 'branch-if isf else-lbl then-lbl)))
+                   (emit-block! lbl acc (list 'branch-if test then-lbl else-lbl))))
              ;; emit-block! takes its instructions REVERSED (it is fed the
              ;; walk's accumulator). Handing it an ordered list reverses the
              ;; block, which puts every use before its def -- so every vreg

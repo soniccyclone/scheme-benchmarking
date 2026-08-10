@@ -543,6 +543,31 @@
      (= 4 (surviving-bounds-checks "../bench/fannkuch/config-sonic.sps"
                                    '(display newline))))
 
+;; A TAGGED FALSE IS sonic-false, NOT ZERO.
+;;
+;; `branch-if` lowers to `cmp r, 0` and a non-zero jump, which is right for a
+;; raw-word boolean -- the fixnum comparisons produce 0 or 1 -- and wrong for a
+;; tagged one, because Scheme's `#f` is the immediate numeric.ss calls
+;; sonic-false, which is 7. Comparing it against 0 made `#f` read as TRUE, so
+;; `(if #f 7 9)` evaluated to 7. A wrong answer on ordinary Scheme.
+(run! "a literal #f takes the else arm" 
+      "(define (main) (begin (display (fx->fl (if #f 7 9))) (newline)))\n(main)\n"
+      '(9.0))
+;; The same through a vector, so the #f survives to run time rather than being
+;; a compile-time shape -- this is the one that exercises the emitted compare.
+(run! "and so does a #f that reaches the branch at run time"
+      (string-append
+       "(define v (make-vector 4 0))\n"
+       "(define (main) (begin (vector-set! v 0 #f)\n"
+       "  (display (fx->fl (if (vector-ref v 0) 7 9))) (newline)))\n(main)\n")
+      '(9.0))
+(run! "while a #t takes the then arm, which is not true by accident"
+      (string-append
+       "(define v (make-vector 4 0))\n"
+       "(define (main) (begin (vector-set! v 0 #t)\n"
+       "  (display (fx->fl (if (vector-ref v 0) 7 9))) (newline)))\n(main)\n")
+      '(7.0))
+
 ;; INTEGER DIVISION, which no program could use at all: the selector refused
 ;; `div` with "integer division needs the rdx:rax pair idiv hardwires, which the
 ;; register partition does not model".
