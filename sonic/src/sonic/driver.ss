@@ -201,14 +201,28 @@
   ;; size and copy budgets, and this stops as soon as a round substitutes
   ;; nothing -- which is what happens the moment every remaining loop has a
   ;; guard that will not fold or an argument that is not a literal.
+  ;; The size bound belongs HERE and not inside specialize.ss, which is called
+  ;; fresh each round and so can only bound one round's growth. Bounding each
+  ;; round at 4x and running 400 of them is not a bound at all -- measured, it
+  ;; took nbody to 27,628 instructions with the per-round check in place.
+  (define (program-size p)
+    (nanopass-case (Lanf Program) p
+      [(top ([,x* ,e*] ...) (,x2* ...) ,body)
+       (fold-left (lambda (a e) (+ a (expr-size e))) (expr-size body) e*)]
+      [else 0]))
+
   (define (unroll-fully p)
-    (let loop ((p p) (round 0))
-      (if (> round (unroll-fully-rounds))
-          p
+    (let* ((start (program-size p))
+           (cap (* (specialize-growth-budget) start)))
+      (let loop ((p p) (round 0))
+        (cond
+         ((> round (unroll-fully-rounds)) p)
+         ((> (program-size p) cap) p)
+         (else
           (let-values (((p1 st) (specialize-program/report p)))
             (if (zero? (specialize-stats-specialized st))
                 p
-                (loop (fold-program p1) (+ round 1)))))))
+                (loop (fold-program p1) (+ round 1)))))))))
 
   (define (elide-to-fixpoint ssa)
     (let* ((datum (unparse-Lssa ssa))

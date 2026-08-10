@@ -42,6 +42,33 @@
 ;;; unroll a million copies before the guard turned. It is a size cap rather
 ;;; than an iteration count because the thing worth bounding is the program.
 ;;;
+;;; ## WHAT IT CANNOT REACH, WHICH IS THE LOOP THAT MATTERS
+;;;
+;;; Only `(tailcall f x*)`. A loop entered from a NON-TAIL position is
+;;; `(let ([r (call f x*)]) body)`, and substituting there means splicing a
+;;; body whose value has to reach `r` -- which inline.ss's `splice` does only
+;;; when the body has exactly ONE tail position (its rule 5). A loop body is an
+;;; `if` with two arms, so it never does.
+;;;
+;;; That is not a corner case, it is nbody's pair nest. Measured on the Lanf
+;;; this pass is handed, one line per letrec-bound loop and how its name is
+;;; used:
+;;;
+;;;     loop%12   tailcall tailcall
+;;;     outer%22  CALL     tailcall
+;;;     inner%24  CALL     tailcall
+;;;     loop%35   tailcall tailcall
+;;;
+;;; So this pass unrolls `loop%12` and `loop%35` -- the position updates, where
+;;; there is no index arithmetic worth folding -- and cannot touch `outer%22`
+;;; or `inner%24`, which is the entire reason full unrolling was worth wanting.
+;;; It unrolls precisely the wrong loops.
+;;;
+;;; Fixing it needs a JOIN: each of the body's tail positions assigns the
+;;; result and jumps to a common continuation. The IR already has that shape --
+;;; `join.286` in nbody is one -- so it is real work rather than impossible
+;;; work, and it belongs to inline.ss's rule 5 rather than here.
+;;;
 ;;; ## What it will not touch
 ;;;
 ;;; A procedure that is not self-tail-recursive: that is inlining, inline.ss
@@ -54,7 +81,7 @@
 
 (library (sonic specialize)
   (export specialize-program specialize-program/report specialize-size-budget
-          specialize-enabled?
+          specialize-enabled? specialize-growth-budget
           specialize-stats specialize-stats? specialize-stats-specialized
           specialize-stats-names)
   (import (chezscheme) (nanopass) (sonic lang)
@@ -98,11 +125,17 @@
   ;; one whose unrolled form nobody wants to read or compile.
   (define specialize-size-budget (make-parameter 400))
 
-  ;; The most copies one loop may become. A loop whose guard never folds -- a
-  ;; counter compared against something this compiler cannot evaluate -- would
-  ;; otherwise substitute until memory ran out, and the guard not folding is
-  ;; exactly the case where unrolling buys nothing anyway.
-  (define specialize-copy-budget (make-parameter 24))
+  ;; HOW MUCH THE WHOLE PROGRAM MAY GROW, as a multiple of what it started at.
+  ;;
+  ;; It was a per-name copy count and that bounded NOTHING. `freshen` renames
+  ;; the letrec-bound loop in every copy, so each copy is a brand-new name with
+  ;; a brand-new budget -- a counter over names minted per copy. The only real
+  ;; bound was the driver's round limit, which is why raising that from 24 to
+  ;; 400 took nbody from 810 instructions to 27,628.
+  ;;
+  ;; Program size is the thing actually worth bounding, and unlike a name it
+  ;; cannot be reset by renaming.
+  (define specialize-growth-budget (make-parameter 4))
 
   (define (self-tail-recursive? f body)
     (let walk ((e body))
@@ -129,8 +162,8 @@
           ;; lambda. Lanf is alpha-converted, so one table over the whole
           ;; program cannot confuse two bindings of one name.
           (loops (make-eq-hashtable))
-          ;; how many copies each loop has produced, against the copy budget
-          (copies (make-eq-hashtable))
+          ;; What the program measured before this round, for the growth budget.
+          (start-size 0)
           ;; var -> datum, for let-bound literals. Same rule as fold.ss.
           (lits (make-eq-hashtable)))
 
@@ -172,13 +205,19 @@
       ;; literal itself -- fold.ss makes it one, and the driver runs the two
       ;; alternately. Substituting again here would loop forever on an argument
       ;; that has not been folded.
+      ;; A running estimate of what this round has added, checked per
+      ;; substitution so one round cannot blow the budget by the number of
+      ;; eligible sites.
+      (define grown 0)
+
       (define (eligible? f x*)
         (let ((p (hashtable-ref loops f #f)))
           (and p
                (= (length (car p)) (length x*))
                (specialize-enabled?)
                (for-all literal? x*)
-               (< (hashtable-ref copies f 0) (specialize-copy-budget)))))
+               (<= (+ grown (expr-size (cdr p)))
+                   (* (- (specialize-growth-budget) 1) start-size)))))
 
       (define (Expr e)
         (with-output-language (Lanf Expr)
@@ -186,7 +225,7 @@
             [(tailcall ,x ,x* ...)
              (if (eligible? x x*)
                  (let ((p (hashtable-ref loops x #f)))
-                   (hashtable-set! copies x (+ 1 (hashtable-ref copies x 0)))
+                   (set! grown (+ grown (expr-size (cdr p))))
                    (specialize-stats-specialized-set!
                     stats (+ 1 (specialize-stats-specialized stats)))
                    (unless (memq x (specialize-stats-names stats))
@@ -219,6 +258,8 @@
       ;; had that defect; this is not the seventh.
       (nanopass-case (Lanf Program) prog
         [(top ([,x* ,e*] ...) (,x2* ...) ,body)
+         (set! start-size
+               (fold-left (lambda (a e) (+ a (expr-size e))) (expr-size body) e*))
          (for-each (lambda (x e)
                      (nanopass-case (Lanf Expr) e
                        [(quote ,d) (hashtable-set! lits x (list d))]
