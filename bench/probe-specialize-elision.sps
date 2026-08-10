@@ -32,6 +32,37 @@
 ;;; elide-site-why on the PROVED site in the baseline; it names the rule, and
 ;;; that names what the copies lose.
 
+;;; --- WHAT THE why FIELD SAYS, AND WHAT IT DOES NOT -----------------------
+;;;
+;;; Instrumented on the REAL driver path, not a rebuilt front end -- a hand-made
+;;; approximation of the pipeline reported six kept checks where the compiler
+;;; emits none, so it was measuring its own inaccuracy.
+;;;
+;;; BASELINE: every bounds check here is proved, why=interval, including the
+;;; else branch's write indexed by r. WITH SPECIALIZATION: the same writes come
+;;; back as kept, why=#f, one per copy, and their index is a per-copy freshened
+;;; name -- r%1.320, r%1.334, r%1.348, one for each.
+;;;
+;;; TWO HYPOTHESES DIED HERE. Recorded so they are not re-run.
+;;;
+;;;   1. "The bad copies are the ones past the trip count, indexing out of
+;;;      range." No. Change the else branch to a literal index and the copies
+;;;      come out clean at the SAME copy count; the in-range copies fail
+;;;      identically.
+;;;
+;;;   2. "The freshened index is not a parameter, so interval-facts-from can
+;;;      never derive a fact for it." The kept indices do have neither a fact
+;;;      nor parameter status -- and so do SEVENTEEN PROVED sites in the
+;;;      baseline. An index normally takes its interval from the dataflow
+;;;      through its binding's right-hand side, not from a fact of its own, so
+;;;      parameter-ness does not discriminate.
+;;;
+;;; SO THE OPEN QUESTION IS NARROWER THAN IT LOOKS: for one specific binding --
+;;; the copy's r -- the interval that flows through its right-hand side is
+;;; present before specialization and absent after. The next step is to print
+;;; that binding's right-hand side in both runs and compare. Not to theorise
+;;; about which pass is responsible; two theories have already been wrong.
+
 (define v (make-vector 8 0))
 (define (rot r)
   (let ((p0 (vector-ref v 0)))
