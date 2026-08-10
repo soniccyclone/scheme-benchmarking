@@ -835,3 +835,58 @@ The two issues are therefore ordered, not independent: qaq.13 is a prerequisite
 for the unroller, and neither is worth pricing alone. The pair still has to be
 argued against the 1.28x floor above, which no amount of instruction removal in
 that loop has been shown to break.
+
+## D42 -- a vector's contents, and the ascent that has to run alone
+
+fannkuch's last eight bounds checks are gone, and the interesting part is not
+that they went. It is what removing them did not buy, and what the fix had to
+avoid to work at all.
+
+THE FACT. The loop is `(fx< i j)` with `j` from `(vector-ref perm 0)`, so
+bounding it needs every element of `perm` to be below `n` -- a statement about
+the array's CONTENTS, which no scalar domain tracks. SPEC.md chose the program
+for that shape and the test that asserted the eight checks said so.
+
+WHICH VECTORS MAY CARRY ONE. Only a vector whose every occurrence is the vector
+operand of `vector-ref`, `vector-set!` or `vector-length`. Anything else drops
+it, because a vector passed as an argument is written through a parameter under
+a name this analysis never connects to the global, and the join would then miss
+that write and claim a range the program violates -- silent, and only on
+programs whose vectors are shared. The rule counts occurrences rather than
+reasoning about them, so no use can be examined and wrongly excused.
+
+WHY TWO ASCENTS. This is the part worth carrying. An element range's own reads
+feed its own writes: every write of `perm1` except `init`'s stores a value read
+back out of `perm1`, so the equation is X = fill ⊔ init ⊔ X, and EVERY
+over-approximation is a fixpoint of it, not just the least one. Interleaving
+the element ascent with the interval ascent caught `init`'s parameter still at
+top on round 1, X went to top there, and it never came back: narrowing walks an
+upper bound back because the loop guard reimposes it, and nothing reimposes a
+lower bound on a value that is only ever copied. The result was `perm elements
+neginf 6` -- the right bound and a useless one, from a transient that became
+permanent.
+
+Separated, each ascent is a Kleene iteration from bottom under premises that
+are already settled: intervals first with elements read as top, then elements
+from the allocation fill with the intervals frozen, then intervals again to
+spend the result. `perm` and `perm1` land at [0, n-1]; `cnt` stays unbounded
+below, which is correct, it is a counter.
+
+THE MEASUREMENT, AND WHAT IT KILLS. n=11, bit-exact:
+
+    instructions   35.005G -> 27.161G    -22.4%
+    cycles         10.880G -> 10.885G    unchanged
+
+The stored note "fannkuch is instruction-bound, so instruction reduction
+converts almost directly into cycles" is FALSE and is now corrected. IPC went
+3.22 -> 2.50 across this change: the machine was absorbing all eight checks and
+the bound is somewhere else entirely. That was foreseeable -- qaq.13 measured
+this exact ceiling before the work started and recorded 2.8% -- and the honest
+reading is that the ceiling measurement was right and the mental model beside
+it was wrong.
+
+So D34, D37 and now D42 all say the same thing from three different programs
+and two different directions: on this machine the instruction count has not
+once predicted the cycles. Anything proposed on an instruction-count argument
+alone should be assumed not to move the clock until it is measured on the
+clock.
