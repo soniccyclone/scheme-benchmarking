@@ -155,6 +155,28 @@
   ;; that is not goes in the target-specific selector, not here.
   (define mach-ops
     '(add sub mul div neg sqrt abs                  ; arithmetic
+      ;; --- D24 CONTRACTION -----------------------------------------------
+      ;;
+      ;; `fma` is a*b+c with ONE rounding; `fnma` is c-a*b, likewise. That
+      ;; single rounding is the whole difference from `mul` then `add`, and it
+      ;; is why contraction is a named permission rather than an optimisation:
+      ;; the result is not the same number.
+      ;;
+      ;; The `-c` forms are the SAME OPERATIONS, marked as standing inside a
+      ;; granted `fp-contract` scope. They compute exactly what `mul`, `add`
+      ;; and `sub` compute and select to the same instructions; the mark exists
+      ;; so contract.ss can tell an expression it may fuse from one it may not,
+      ;; after lower.ss has consumed the control and thrown the policy away.
+      ;;
+      ;; Marking BOTH halves is deliberate. Fusing needs the permission over
+      ;; the whole expression, and a product computed under a permission can be
+      ;; read by an addition outside one -- a helper called from two scopes is
+      ;; enough. Requiring the mark on both is the cheap way to be right about
+      ;; that, and costs only a fusion nobody asked for.
+      ;; `fma`/`fnma` put the ADDEND in the destination (x86-64's 231 ordering);
+      ;; `fma132`/`fnma132` put a FACTOR there. Same arithmetic, different
+      ;; coalescing -- contract.ss picks by which operand dies at the copy.
+      fma fnma fma132 fnma132 mul-c add-c sub-c
       ;; Comparison is split by OPERAND type, not result type. The `sc` a
       ;; selection rule receives is the class of the boolean RESULT, so a single
       ;; cmp-lt cannot tell whether it is comparing two fixnums or two flonums,

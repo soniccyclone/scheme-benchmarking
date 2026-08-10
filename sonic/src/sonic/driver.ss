@@ -41,7 +41,7 @@
           (sonic anf) (sonic assign) (sonic inline) (sonic unroll)
           (sonic essa) (sonic elide)
           (sonic repr) (sonic lift) (sonic convert) (sonic lower) (sonic globals)
-          (sonic shapes) (sonic interval) (sonic cse) (sonic dce) (sonic addrfold) (sonic slp)
+          (sonic shapes) (sonic interval) (sonic cse) (sonic dce) (sonic contract) (sonic addrfold) (sonic slp)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
           (sonic order)
@@ -114,7 +114,12 @@
                ;; values are ordinary raw-f64 vregs -- a 128-bit pair lives in
                ;; one float register -- so nothing downstream changes.
                ((dprog dce-st) (dce-program aprog))
-               ((prog slp-st) (slp-program dprog classes)))
+               ;; D24 CONTRACTION, after DCE and before SLP. After DCE because
+               ;; fusing a product whose only reader is dead work would be work
+               ;; too; before SLP because a fused multiply-add is one
+               ;; instruction and the packer counts instructions.
+               ((kprog contract-st) (contract-program dprog))
+               ((prog slp-st) (slp-program kprog classes)))
           (let* ((entry (caddr prog))
                  ;; SORTED: this list decides each global's ADDRESS, so an
                  ;; unstable order moved every global between runs.

@@ -137,6 +137,35 @@
       (unless p (error 'lower "primitive has no machine op" pr))
       (cdr p)))
 
+  ;; --- D24: carrying the contraction permission past this pass ---------------
+  ;;
+  ;; `fp-contract` is a permission, not a check, so `checks->instrs` consumes it
+  ;; and emits nothing -- correctly, since there is no branch to emit. But it
+  ;; then threw it away, and the back end that has to ACT on it runs later. The
+  ;; permission was parsed, scoped, counted and dropped, and no program ever got
+  ;; a fused multiply-add out of granting it.
+  ;;
+  ;; So a flonum add, subtract or multiply standing in a granted scope lowers to
+  ;; the `-c` spelling of its op. Those compute exactly what the unmarked ones
+  ;; compute and select to the same instructions; the mark is what lets
+  ;; contract.ss tell an expression it may fuse from one it may not.
+  ;;
+  ;; `unchecked` is the granted control. `checked` is D24's default -- round
+  ;; twice, do not fuse -- and `proved` never reaches here.
+  (define contractible-op '((add . add-c) (sub . sub-c) (mul . mul-c)))
+
+  (define (contraction-granted? controls)
+    (exists (lambda (c)
+              (and (pair? c) (eq? (car c) 'fp-contract) (eq? (cadr c) 'unchecked)))
+            controls))
+
+  (define (op-for/controls pr sc controls)
+    (let ((op (op-for pr)))
+      (if (and (eq? sc 'raw-f64) (contraction-granted? controls))
+          (let ((m (assq op contractible-op)))
+            (if m (cdr m) op))
+          op)))
+
   (define counter 0)
   (define (fresh! prefix)
     (set! counter (+ counter 1))
@@ -631,7 +660,7 @@
          (let* ((pr (cadr se))
                 (controls (caddr se))
                 (srcs (cdddr se))
-                (op (op-for pr)))
+                (op (op-for/controls pr sc controls)))
            (let-values (((pre post) (checks->instrs controls srcs dst stats)))
              (values (append pre
                              (list (cond

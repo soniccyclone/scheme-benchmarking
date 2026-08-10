@@ -507,6 +507,10 @@
     (vdivsd xmm7 xmm7 xmm7)
     (vsqrtsd xmm3 xmm1 xmm2)
     (vfmadd231sd xmm0 xmm1 xmm2)
+    (vfnmadd231sd xmm3 xmm4 xmm5)
+    (vfnmadd231sd xmm0 xmm15 xmm7)
+    (vfmadd132sd xmm2 xmm3 xmm4)
+    (vfnmadd132sd xmm9 xmm10 xmm11)
     ;; --- masking, which is what (x,y,z,pad) needs ---------------------------
     ;;
     ;; A mask forces EVEX at every width, including 128, because there is no

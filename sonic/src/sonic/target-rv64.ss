@@ -514,6 +514,32 @@
      (cons 'cmp-eq r:cmp-eq)
      (cons 'cmp-ge r:cmp-ge)
      (cons 'cmp-gt r:cmp-gt)
+          ;; D24 contraction. RV64 has three-address fused forms natively:
+     ;; `fmadd.d rd, rs1, rs2, rs3` is rs1*rs2 + rs3 and `fnmsub.d` is
+     ;; rs3 - rs1*rs2, so unlike x86-64 neither needs the addend moved into the
+     ;; destination first.
+     (cons 'fma
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 3)
+               (error 'rv64-selector "fma expects a, b and the addend" srcs))
+             `((fmadd.d ,dst ,(car srcs) ,(cadr srcs) ,(caddr srcs)))))
+     (cons 'fnma
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 3)
+               (error 'rv64-selector "fnma expects a, b and the addend" srcs))
+             `((fnmsub.d ,dst ,(car srcs) ,(cadr srcs) ,(caddr srcs)))))
+     ;; RV64's fused forms are three-address, so the destination is free and
+     ;; the 132/231 distinction does not exist. Both spellings lower the same.
+     (cons 'fma132
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'rv64-selector "fma132 expects the other factor and the addend" srcs))
+             `((fmadd.d ,dst ,dst ,(car srcs) ,(cadr srcs)))))
+     (cons 'fnma132
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'rv64-selector "fnma132 expects the other factor and the addend" srcs))
+             `((fnmsub.d ,dst ,dst ,(car srcs) ,(cadr srcs)))))
      (cons 'vlen   r:vlen)
      (cons 'load     r:load)
      (cons 'store    r:store)

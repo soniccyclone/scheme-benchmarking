@@ -442,6 +442,49 @@
              (unless (= (length srcs) 1)
                (error 'x86-64-selector "p2hi expects one source" srcs))
              `((vunpckhpd ,dst ,(car srcs) ,(car srcs)))))
+     ;; --- D24 contraction ----------------------------------------------------
+     ;;
+     ;; `vfmadd231sd d, a, b` computes d = a*b + d with ONE rounding, so the
+     ;; destination IS the addend -- which is why contract.ss emits an Lmach
+     ;; `move` to put it there rather than leaving it to a rule. A rule's copy
+     ;; would land after allocation, where `move-hints` cannot coalesce it, and
+     ;; that measured 26 cycles WORSE than not fusing at all.
+     ;;
+     ;; 231 rather than 132 or 213 because it is the ordering whose destination
+     ;; is the ADDEND rather than one of the factors, which is the shape an
+     ;; accumulator wants: `acc = dx*mag + acc` leaves acc in place.
+     (cons 'fma
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 3)
+               (error 'x86-64-selector "fma expects a, b and the addend" srcs))
+             (unless (eq? (caddr srcs) dst)
+               (error 'x86-64-selector
+                      "fma's addend must be its destination; contract.ss emits the move"
+                      dst srcs))
+             `((vfmadd231sd ,dst ,(car srcs) ,(cadr srcs)))))
+     ;; c - a*b, again with the addend in the destination.
+     (cons 'fnma
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 3)
+               (error 'x86-64-selector "fnma expects a, b and the addend" srcs))
+             (unless (eq? (caddr srcs) dst)
+               (error 'x86-64-selector
+                      "fnma's addend must be its destination; contract.ss emits the move"
+                      dst srcs))
+             `((vfnmadd231sd ,dst ,(car srcs) ,(cadr srcs)))))
+
+     ;; v = v * other + addend, the ordering whose destination is a FACTOR.
+     (cons 'fma132
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'x86-64-selector "fma132 expects the other factor and the addend" srcs))
+             `((vfmadd132sd ,dst ,(cadr srcs) ,(car srcs)))))
+     (cons 'fnma132
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'x86-64-selector "fnma132 expects the other factor and the addend" srcs))
+             `((vfnmadd132sd ,dst ,(cadr srcs) ,(car srcs)))))
+
      (cons 'p2add (packed 'vaddpd))
      (cons 'p2sub (packed 'vsubpd))
      (cons 'p2mul (packed 'vmulpd))

@@ -261,7 +261,19 @@
       (vdivsd       1 #x5E 3 0 1 rvm)
       (vsqrtsd      1 #x51 3 0 1 rvm)
       (vmovsd       1 (#x10 . #x11) 3 0 1 mov)
-      (vfmadd231sd  2 #xB9 1 1 1 rvm)))
+      (vfmadd231sd  2 #xB9 1 1 1 rvm)
+      ;; c - a*b, the other half of what an accumulator wants. `vfnmadd` negates
+      ;; the PRODUCT, not the addend, which is why it lowers `(fl- c (fl* a b))`
+      ;; and `(fl- (fl* a b) c)` is a different instruction.
+      (vfnmadd231sd 2 #xBD 1 1 1 rvm)
+      ;; THE 132 ORDERING, whose destination is a FACTOR rather than the addend:
+      ;; `vfmadd132sd d, s2, s3` is d = d*s3 + s2. That matters for coalescing
+      ;; and not for arithmetic -- see contract.ss. A loop-carried accumulator
+      ;; is live across the back edge so its interval never ends at the copy,
+      ;; and 231 asks for exactly that copy; a factor usually dies at the
+      ;; multiply, which is what makes it free.
+      (vfmadd132sd  2 #x99 1 1 1 rvm)
+      (vfnmadd132sd 2 #x9D 1 1 1 rvm)))
 
   ;; --- three-lane forms: (x, y, z, pad) ---------------------------------------
   ;;
