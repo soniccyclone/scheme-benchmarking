@@ -583,6 +583,95 @@ optimisations, and each now has a measured ceiling small enough that none should
 be started for a benchmark number.
 
 
+### D39 --- four gaps holding each other up: the tagged fixnum was half-implemented
+
+`(fixnum? 5)` answered FALSE about the number five, and fixing it took one change
+in four files because each gap was propping up the others.
+
+numeric.ss has always specified a fixnum's tagged form as the value shifted left
+three, tag 000. What the compiler did:
+
+| | |
+|---|---|
+| a COMPUTED value joined up to `tagged` | shifted, correctly, by `retag fixnum` |
+| a LITERAL classified `tagged` | **not** shifted; convert.ss exempted literals |
+| a value stored into a tagged-element vector | **not** tagged |
+| a tagged fixnum reaching `fx+`, `fx<`, `fx->fl` | **not** shifted back |
+
+Nothing noticed because nothing read a tag. Fixnum arithmetic is `raw-word` and
+consumes the machine word directly, so the two encodings coincided everywhere
+they met. The predicates are the first code in this compiler's history whose
+answer depends on the tag actually being there.
+
+**AND THE DEPENDENCY IS CIRCULAR**, which is why three staged attempts failed and
+each looked like a regression:
+
+    untag on read     needs  tagging on store
+    tagging on store  needs  literals encoded
+    literals encoded  needs  untag on read
+
+Enabling any one alone breaks a balance the others were holding. The fix landed
+as one commit across convert.ss, lower.ss, repr.ss and runtime.ss, with nbody and
+fannkuch unchanged to the instruction.
+
+**THE PLACEMENT ASYMMETRY IS THE REUSABLE PART.** D31 says a representation
+conversion lands at the DEFINITION, and that is general only for the direction a
+requirement can be propagated in. repr.ss pushes a `tagged` requirement BACKWARD,
+so convert.ss can retag where the value is made. A `raw-word` requirement cannot
+travel backward at all: the join only ever moves a class UP toward `tagged`, so
+asking a tagged value to become a machine word changes nothing and the program
+compiles with the mismatch intact. It is therefore read at the CONSUMER and the
+shift lands at the USE.
+
+**AND A HAZARD DEFERRED ON A BAD ARGUMENT.** `%make-vector`'s fill was left raw
+because "every program here fills with 0, which is the same word either way".
+Every program in the SUITE did. The first one that did not was three lines long,
+and it read back 0 instead of 7. Deferring on "no test covers it" rather than on
+"no program can hit it" is the mistake; the three-line program should have been
+written before the decision, not after it.
+
+### D40 --- the divider prize is real, the route to it is not
+
+D37 priced nbody's remaining gap at the FP divider: 7.601 cycles a sqrt+div lane
+scalar against 4.220 two-wide and 2.109 four-wide, ten of them a step against a
+188-cycle step. That measurement stands. What does not is the assumption that the
+chains are sitting side by side waiting to be packed.
+
+**THERE IS ONE HOT DIVIDER CHAIN.** The ten pair interactions are ten EXECUTIONS
+of one site, not ten sites. Four routes to putting two in one block were built and
+measured:
+
+| route | result |
+|---|---|
+| stage the divides through memory | 274.89 cycles against 189.59 --- the split recomputes distances |
+| full unrolling (qaq.7.19) | fixed so it compiles, bit-exact, still a net loss at 204.00 against 190.50, and 25 sqrt sites in 25 blocks |
+| inline once-called procedures (qaq.7.24) | landed, worth -6.9% instructions, merged three chains --- all cold |
+| unroll with a remainder | works, and costs **25.4 cycles** before any packing |
+
+The last is the one that matters. A hand-written source-level remainder form does
+put two chains in one block --- validated, `L.then348` holds two `sqrtsd` --- and
+it costs 25.4 cycles and 401 instructions a step, because the pair body appears
+three times instead of once. Against a two-wide packing prize of about 29 cycles.
+Buys 29, costs 25.
+
+**FOUR LANES IS WORSE, NOT BETTER**, which is the part worth carrying forward. It
+saves more per lane, but needs four chains in a block and pays the duplication
+twice over. The thing that creates the packing opportunity is the same thing that
+costs the instructions, so the trade moves the wrong way as the width grows.
+
+What would change the answer is a way to get two chains into one block WITHOUT
+duplicating the body --- closer to software pipelining than to unrolling. The
+prize is still there if one appears.
+
+**AND THE PROBE FOUND A WRONG ANSWER.** The variant written to validate the shape
+also miscompiled: slp.ss seeded a store pack by scanning the block from the top,
+so with two groups accumulating into the same three elements the second group's
+seed reached BACKWARD into the first and packed one value from one computation
+with two from the other. One group per block had always been fine, which is every
+program this compiler had seen. Had the transform been built first, this would
+have read as "the transform is wrong".
+
+
 ### D35 --- a call destroys what its callee writes, not the whole register file
 
 regalloc.ss spilled every value live across a call, and said why:
