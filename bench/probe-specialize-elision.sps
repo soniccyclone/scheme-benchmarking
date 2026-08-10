@@ -211,6 +211,40 @@
 ;;; the time the facts are gathered, or that it is not in the procedure table
 ;;; the pass consults.
 
+;;; --- WHY THE FACT IS MISSING: A KNOWN PROCEDURE WITH NO CALLER ----------
+;;;
+;;; Printed from the fixpoint, baseline run:
+;;;
+;;;   procedures (the params table)  shift%3.3.54 drive rot shift%3.97 shift%3.11
+;;;   callees    (the call sites)    display newline shift%3.97 shift%3.11
+;;;                                  shift%3.3.54 drive
+;;;
+;;; `rot` is in the first list and NOT in the second. It is a procedure the
+;;; analysis knows the parameters of and has no call site for, because its call
+;;; was inlined into `drive` and only the dead binding remains. interval-facts-
+;;; from derives a parameter's range by joining what the call sites pass, so a
+;;; procedure with no call sites gets nothing, and `r` stays [-inf,+inf]
+;;; forever. That is the missing lower bound, in one line.
+;;;
+;;; AND IT IS HARMLESS IN THE BASELINE, which is why this was so hard to see.
+;;; The emitted functions there are
+;;;
+;;;   main.entry1  shift%3.11  shift%3.3.54  drive
+;;;
+;;; with no `rot` among them. Its unprovable checks are kept by elide and then
+;;; never reach the binary, so the baseline reports zero. Specialisation is
+;;; what puts equivalent code into functions that DO get emitted.
+;;;
+;;; SO THE SHAPE OF THE BUG IS: a dead procedure is analysed as if reachable,
+;;; its parameters get no facts because nothing calls it, and everything
+;;; derived inside it is unprovable. Normally that costs nothing. It starts
+;;; costing when a later pass copies out of it.
+;;;
+;;; STILL OPEN, and it is the last link: which LIVE procedure holds the copies
+;;; that carry the emitted checks, and why does its own r lack a bound. Do not
+;;; assume it is a copy of rot's body just because the names share a lineage --
+;;; that assumption is exactly the kind that has died five times on this issue.
+
 (define v (make-vector 8 0))
 (define (rot r)
   (let ((p0 (vector-ref v 0)))
