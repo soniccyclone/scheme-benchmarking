@@ -1302,3 +1302,48 @@ the non-tail splice refuses it. So rule 5's ceiling is 0 before the unroll and
 
 Total available from the two source-level transformations measured so far:
 1.310x to 1.176x, of which the unroll is 10.7 points and the call 2.2.
+
+## D49 -- the elision regression is a function of the copy budget, and peeling needs no trip count
+
+Two things about qaq.23 that were wrong in the framing rather than in any
+measurement.
+
+FIRST, THE BLOCKER IS NOT "SPECIALISATION BREAKS ELISION". Measured after
+qaq.25, with the pass enabled and only the growth budget varying:
+
+    growth budget   1      2      3      4
+    surviving       0      4     18     34
+    functions      16     30     44     60
+
+At budget 1 there is NO regression at all. The checks appear as the budget lets
+copies run past what the program can execute -- copies at i = 11, 12, 13 into an
+eleven-element vector, whose checks are correctly kept because if reached they
+must trap. So the blocker is copies generated beyond the reachable range, and
+it is governed by a knob that already exists.
+
+SECOND, AND IT DISSOLVES THE ORDERING PROBLEM: PEELING NEEDS NO TRIP COUNT.
+This issue has been stated as needing a proved bound, which lives in elide's
+interval domain, which runs after the pass that would consume it -- an ordering
+knot with no cheap answer. But peeling K iterations at the loop's ENTRY and
+falling into the original loop at i = K is sound unconditionally, for any K,
+with no bound required. The peeled copies have literal indices because they are
+the first K iterations counted from entry; the residual handles everything
+else. If K happens to exceed the real trip count the residual never runs, which
+is D43's structure exactly, and if it does not the program is still correct.
+
+A trip count is needed only to DELETE the residual loop. That is worth having
+and it is not on the critical path.
+
+WHAT THIS DOES NOT DELIVER, and the honest part: enabling the pass at budget 1
+today is answer-preserving and check-free, and buys nothing measurable.
+
+    n=11             cycles      instructions
+    off             10.878G        27.161G
+    budget 1        10.787G        26.939G      -0.84%, -0.8%
+    budget 2        10.825G        26.981G
+
+The 0.84% sits inside the roughly 1% run-to-run band measured repeatedly here,
+so it is not a result. Budget 1 makes two copies of the cheap loops and never
+reaches the reversal, which is where D43's 8.4% lives. The point is not that
+this is shippable; it is that the path to the 8.4% is no longer blocked on an
+unsolved ordering problem, only on peeling the right loop to the right depth.
