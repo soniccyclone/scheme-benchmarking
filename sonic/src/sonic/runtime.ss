@@ -386,6 +386,41 @@
       (mov rax (imm ,sys-exit))
       (syscall)
 
+      ;; ---- (make-vector count fill), TAGGED FILL ----
+      ;; count in rcx (raw-word argument 0), fill in r8 (TAGGED argument 0).
+      ;;
+      ;; A SECOND ROUTINE RATHER THAN A FLAG, because the register the fill
+      ;; arrives in is decided by its storage class, and the class is decided
+      ;; by the program. `vector-element-class` is program-wide, so exactly one
+      ;; of these two is reachable in any given image and lower.ss picks it.
+      ;;
+      ;; The one above assumes a raw fill and says so, and that was harmless
+      ;; while nothing untagged what it read back: a raw 7 went in and a raw 7
+      ;; came out. Once reads of a tagged-element vector shift, the same 7 comes
+      ;; back as 0 -- which it did, for exactly one commit -- so the fill has to
+      ;; be a real object like every other field the collector scans.
+      %make-vector-tagged
+      (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      (mov rdi (imm ,heap-type-vector))
+      (mov (mem rax #f 1 0) rdi)                 ; [raw+0] = type
+      (mov (mem rax #f 1 8) rcx)                 ; [raw+8] = length, a raw count
+      (mov rsi rcx)
+      (shl rsi (imm 3))
+      (add rsi (imm ,heap-header-bytes))
+      (add rsi rax)
+      (mov ,(abs-mem heap-pointer-cell) rsi)
+      (lea rdi (mem rax #f 1 ,heap-header-bytes))
+      (mov rsi (imm 0))
+      %mkvt-loop
+      (cmp rsi rcx)
+      (jge (label %mkvt-done))
+      (mov (mem rdi rsi 8 0) r8)
+      (add rsi (imm 1))
+      (jmp (label %mkvt-loop))
+      %mkvt-done
+      (add rax (imm ,(+ heap-header-bytes heap-tag)))
+      (ret)
+
       ;; ---- box a flonum ----
       ;;
       ;; The double arrives in xmm0 -- the first raw-f64 argument register --

@@ -92,12 +92,34 @@
   ;; source namespace.
   (define prim->runtime
     '((make-flvector . %make-flvector) (make-vector . %make-vector)
+      (make-vector-tagged . %make-vector-tagged)
       (cons . %cons) (car . %car) (cdr . %cdr) (error . %error)
       (null? . %null?) (pair? . %pair?) (eq? . %eq?)
       (fxquotient . %fxquotient) (fxremainder . %fxremainder)
       (fxmodulo . %fxmodulo)
       (fixnum? . %fixnum?) (flonum? . %flonum?)
       (vector? . %vector?) (flvector? . %flvector?)))
+
+  ;; WHICH `make-vector`, decided from the FILL'S OWN CLASS.
+  ;;
+  ;; The fill's storage class decides which register it arrives in, and the two
+  ;; routines read different ones -- rdx for the raw fill, r8 for the tagged
+  ;; one -- so a disagreement fills every element with whatever the other
+  ;; register happened to hold.
+  ;;
+  ;; NOT read from `vector-element-class`, which is the obvious spelling and is
+  ;; wrong: that parameter is bound only around repr.ss's own fixpoint, so by
+  ;; the time lowering runs it has reverted to its DEFAULT of `tagged`. Every
+  ;; program then routed to the tagged routine while repr had classified the
+  ;; fill raw, and a vector of 7s read back as 0. The class of the argument in
+  ;; hand cannot drift from the argument.
+  (define (routed pr srcs)
+    (if (and (eq? pr 'make-vector)
+             (>= (length srcs) 2)
+             (symbol? (cadr srcs))
+             (eq? (hashtable-ref vreg-classes (cadr srcs) #f) 'tagged))
+        'make-vector-tagged
+        pr))
 
   (define (runtime-entry pr)
     (let ((p (assq pr prim->runtime)))
@@ -794,7 +816,9 @@
              (values (append untags pre
                              (list (cond
                                     ((eq? op 'call)
-                                     `(call ,dst ,sc ,(runtime-entry pr) ,@srcs))
+                                     `(call ,dst ,sc
+                                            ,(runtime-entry (routed pr srcs))
+                                            ,@srcs))
                                     ;; A STORE's storage class must describe the
                                     ;; VALUE, not the result. `flvector-set!`
                                     ;; and `vector-set!` have no useful result

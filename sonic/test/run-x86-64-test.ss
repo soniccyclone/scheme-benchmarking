@@ -774,6 +774,33 @@
     (display "       exit=") (display code)
     (display " got=") (write out) (newline)))
 
+;; A GENERAL VECTOR WHOSE ELEMENTS ARE SCHEME OBJECTS.
+;;
+;; The regression the previous commit shipped, kept as a test. When anything
+;; stores an object into a general vector, `vector-element-class` lifts to
+;; `tagged` and reads of that vector are untagged -- so the FILL has to be
+;; tagged too, or a vector of 7s reads back as 0. It did, for one commit.
+;;
+;; Both halves are asserted: the fill (elements 1 and 2, never written) and a
+;; stored object (element 0, whose `pair?` must still be true after the round
+;; trip through the vector).
+(let-values (((code out)
+              (compile-and-run
+               (string-append
+                "(define v (make-vector 3 7))\n"
+                "(define p (cons 1 2))\n"
+                "(vector-set! v 0 p)\n"
+                "(display (fx->fl (vector-ref v 1))) (newline)\n"
+                "(display (fx->fl (vector-ref v 2))) (newline)\n"
+                "(display (if (pair? (vector-ref v 0)) 1.0 0.0)) (newline)\n"
+                "(display (fx->fl (car (vector-ref v 0)))) (newline)\n")
+               '(display newline))))
+  (ck! "a tagged-element vector keeps its fill, and round-trips an object"
+       (and (zero? code) (equal? out '(7.0 7.0 1.0 1.0))))
+  (unless (and (zero? code) (equal? out '(7.0 7.0 1.0 1.0)))
+    (display "       exit=") (display code)
+    (display " got=") (write out) (newline)))
+
 ;; THE BENCHMARK ITSELF, as far as it currently gets.
 ;;
 ;; nbody's initial energy is the first oracle check in docs/METHOD.md, and it
