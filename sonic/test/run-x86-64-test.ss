@@ -345,6 +345,30 @@
        "(main)\n")
       '(5.0))
 
+;; A PROCEDURE NOTHING CALLS MUST NOT REFUSE THE PROGRAM.
+;;
+;; A parameter's class comes from the call sites (repr.ss), so a procedure with
+;; none leaves its parameters unclassified -- and lower.ss then reaches an `if`
+;; in its body and cannot say how to copy either arm into the join destination.
+;; The compile ABORTS, over code that cannot run.
+;;
+;; `rotate` here is exactly the shape: a parameter, an inner loop, a join. It
+;; is never called. Found while shrinking fannkuch-redux to test `count-flips`
+;; on its own, which is when a program acquires dead procedures -- so the case
+;; that breaks it is the case you hit while debugging.
+(run! "a procedure nothing calls does not refuse the program"
+      (string-append
+       "(define v (make-vector 4 0))\n"
+       "(define (rotate r)\n"
+       "  (let ((p0 (vector-ref v 0)))\n"
+       "    (let shift ((i 0))\n"
+       "      (if (fx< i r)\n"
+       "          (begin (vector-set! v i (vector-ref v (fx+ i 1))) (shift (fx+ i 1)))\n"
+       "          (vector-set! v r p0)))))\n"
+       "(define (live x) (fx+ x 1))\n"
+       "(define (main) (begin (display (fx->fl (live 6))) (newline)))\n(main)\n")
+      '(7.0))
+
 ;; FANNKUCH-REDUX, END TO END, against the oracle in bench/fannkuch/SPEC.md.
 ;;
 ;; The second benchmark in the matrix and the first one that is integer work in
