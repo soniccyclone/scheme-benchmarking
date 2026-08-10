@@ -97,7 +97,8 @@
                                       (repr-report-naturals rp)
                                       (repr-report-booleans rp))))
         (let*-values (((prog0 lower-st) (lower-toplevel converted 'main
-                                                        (repr-report-classes rp))))
+                                                        (repr-report-classes rp)
+                                                        (repr-report-booleans rp))))
           (let*-values
               (((classes) (lowered-classes))
                ((cells) (global-cells lifted))

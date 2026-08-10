@@ -473,21 +473,36 @@
        "  (vector-set! v 1 (if (fx> 1 2) 7 9))\n"
        "  (display (fx->fl (fx+ (vector-ref v 0) (vector-ref v 1)))) (newline)))\n(main)\n")
       '(16.0))
-;; A FIXNUM THAT HAPPENS TO BE 0 IS NOT A FOLDED COMPARISON, so the branch
-;; STAYS -- compare and all -- and whatever the compiler decides `(if 0 ...)`
-;; means at run time is unchanged by this pass. That is the property worth
-;; pinning: folding must not quietly acquire an opinion about truth values it
-;; did not have.
+;; A FIXNUM THAT HAPPENS TO BE 0 IS NOT A FALSE. R6RS: every object but `#f`
+;; is true, so `(if 0 a b)` evaluates `a`.
 ;;
-;; (Separately: this compiler treats a raw-word 0 as FALSE, where R6RS says
-;; every object but `#f` is true. That predates folding and is filed.)
-(ck! "a literal 0 is NOT treated as a folded comparison: its branch survives"
+;; This check used to assert the opposite -- that the branch SURVIVED -- which
+;; pinned the behaviour rather than the semantics, and the behaviour was wrong:
+;; 0 and the raw-word boolean false share a representation, and `cmp r, 0`
+;; could not tell them apart. repr.ss's `booleans` table always knew the
+;; difference; it simply did not reach lower.ss.
+;;
+;; The branch is now GONE, and for the right reason: a raw word that is not a
+;; truth value is always true, so there is nothing to test.
+(run! "a literal 0 is TRUE, per R6RS" 
+      (string-append
+       "(define (main) (let ((z 0))\n"
+       "  (begin (display (fx->fl (if z 7 9))) (newline))))\n(main)\n")
+      '(7.0))
+(ck! "and its branch is gone entirely: a non-boolean raw word cannot be false"
+     (let ((l (emitted (string-append
+                        "(define (main) (let ((z 0))\n"
+                        "  (begin (display (fx->fl (if z 7 9))) (newline))))\n"
+                        "(main)\n"))))
+       (= 0 (length (filter (lambda (i) (eq? (car i) 'cmp)) l)))))
+;; A COMPARISON still branches, which is the case that must not be swept up
+;; with it. The operand comes from a vector so nothing folds.
+(ck! "a real comparison still emits its branch"
      (let ((l (emitted (string-append
                         "(define v (make-vector 4 0))\n"
-                        "(define (main) (let ((z 0))\n"
-                        "  (begin (vector-set! v 0 (if z 7 9))\n"
-                        "         (display (fx->fl (vector-ref v 0))) (newline))))\n"
-                        "(main)\n"))))
+                        "(define (main) (begin (vector-set! v 0 2)\n"
+                        "  (display (fx->fl (if (fx< 1 (vector-ref v 0)) 7 9)))\n"
+                        "  (newline)))\n(main)\n"))))
        (> (length (filter (lambda (i) (eq? (car i) 'cmp)) l)) 0)))
 
 ;; A BOOLEAN LITERAL IS A SCHEME OBJECT, and the selector used to refuse one:

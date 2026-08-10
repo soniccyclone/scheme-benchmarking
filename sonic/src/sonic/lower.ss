@@ -304,6 +304,19 @@
   ;; class repr.ss computed, and every Lmach instruction carries it in slot 3.
   (define vreg-classes (make-eq-hashtable))
   (define (reset-classes!) (set! vreg-classes (make-eq-hashtable)))
+
+  ;; repr.ss's record of which raw words hold a 0/1 TRUTH VALUE rather than a
+  ;; number. Module state for the same reason `vreg-classes` is: the branch that
+  ;; needs it is built deep in the Expr walk, not in `lower-toplevel`.
+  ;;
+  ;; #f means "not supplied", and it must mean "assume every raw word is a
+  ;; boolean" -- the behaviour before this table was passed at all. An empty
+  ;; table would mean the opposite and would turn every raw-word branch into an
+  ;; unconditional jump.
+  (define vreg-booleans #f)
+  (define (set-booleans! t) (set! vreg-booleans t))
+  (define (raw-word-truth-value? v)
+    (or (not vreg-booleans) (and (hashtable-ref vreg-booleans v #f) #t)))
   (define (note-class! v sc)
     (when (and (symbol? v) (memq sc '(tagged raw-word raw-f64)))
       (hashtable-set! vreg-classes v sc)))
@@ -466,7 +479,22 @@
              ;; question: `is-false` is 1 exactly when the branch should go to
              ;; the else arm. No new mach-op and no selector change -- `cmp-eq`
              ;; already yields the raw-word 0/1 `branch-if` wants.
+             ;; A RAW WORD THAT IS NOT A BOOLEAN IS ALWAYS TRUE.
+             ;;
+             ;; R6RS: every object but `#f` is true, so `(if 0 a b)` evaluates
+             ;; `a`. Here 0 and the raw-word false share a representation, and
+             ;; `cmp r, 0` cannot tell a fixnum from a truth value -- so a
+             ;; fixnum 0 took the else arm. repr.ss already knows the
+             ;; difference: `booleans` records exactly which raw words hold 0/1
+             ;; as a TRUTH VALUE, and the table simply never reached here.
+             ;;
+             ;; Where it says the test is not a boolean, the branch is not a
+             ;; branch: control always goes to the then arm, and the else arm is
+             ;; unreachable. `partition-into-functions` gathers unreachable
+             ;; blocks and finalize drops them, so the dead arm costs nothing.
              (let ((tc (vreg-class-of test)))
+               (if (and (eq? tc 'raw-word) (not (raw-word-truth-value? test)))
+                   (emit-block! lbl acc (list 'jump then-lbl))
                (if (eq? tc 'tagged)
                    (let ((kf (fresh! "kf")) (isf (fresh! "isf")))
                      (emit-block!
@@ -474,7 +502,7 @@
                       (cons `(cmp-eq ,isf raw-word ,test ,kf)
                             (cons `(const ,kf tagged ,sonic-false) acc))
                       (list 'branch-if isf else-lbl then-lbl)))
-                   (emit-block! lbl acc (list 'branch-if test then-lbl else-lbl))))
+                   (emit-block! lbl acc (list 'branch-if test then-lbl else-lbl)))))
              ;; emit-block! takes its instructions REVERSED (it is fed the
              ;; walk's accumulator). Handing it an ordered list reverses the
              ;; block, which puts every use before its def -- so every vreg
@@ -766,10 +794,15 @@
     ;; and the second silently wins.
     (let ((stats (make-lower-stats 0 0 0))
           (known (and (pair? opt) (car opt)))
+          ;; repr.ss's record of which raw words hold a 0/1 TRUTH VALUE rather
+          ;; than a number. Optional, and its absence means "assume every raw
+          ;; word is a boolean", which is what this pass did before it was
+          ;; passed at all -- so an old caller gets the old behaviour.
           (entry (fresh! (string-append (symbol->string name) ".entry"))))
       (reset-blocks!)
       (reset-classes!)
       (reset-params!)
+      (set-booleans! (and (pair? opt) (pair? (cdr opt)) (cadr opt)))
       (let* ((form (if (pair? p) p (unparse-Lrepr p))))
         ;; Seed from repr.ss, which owns storage classes. This is where LAMBDA
         ;; PARAMETERS come from: they have no defining instruction here, so
