@@ -507,6 +507,58 @@ ruled out separately: aligning every body to 64 bytes changed nothing, 682.89 ag
 683.88.
 
 
+### D38 --- fannkuch's gap is not the checks, and the ceiling says so before the work starts
+
+qaq.13 proposed a new abstract domain: an invariant over a vector's CONTENTS
+("every element of perm is in [0,n)"), established where the array is filled and
+preserved by every write, to discharge the last four bounds checks. The issue set
+its own condition --- "do not start without a number" --- and the number is
+obtainable without writing any of it, because D5's policy mechanism can suppress
+a check on request and that is exactly the code a perfect proof would produce.
+
+fannkuch-redux n=11, every variant answering 556355/51:
+
+| variant | cycles | instructions | ratio |
+|---|---:|---:|---:|
+| gcc -O3 -march=native | 8.273G | 11.129G | 1.000 |
+| sonic | 11.162G | 37.705G | 1.349 |
+| bounds check off in flip-prefix | 10.969G | 33.783G | 1.326 |
+| overflow check off everywhere | 10.764G | 32.061G | 1.301 |
+| neither | 10.578G | 27.088G | 1.279 |
+
+**The four bounds checks are 10.4% of instructions and 2.8% of cycles.** The
+branches predict perfectly and the length load hits L1, so the machine absorbs
+almost all of them. Removing EVERY check of every kind --- the combined ceiling
+for all check-elimination work this compiler could ever do on this program ---
+deletes 28% of the instructions and buys 5.2% of the cycles.
+
+**AND THE HOT LOOP IS ALREADY RIGHT.** With the checks off, flip-prefix compiles
+to eight instructions a swap, unrolled two-up, with peephole folding both index
+updates into a load-effective-address:
+
+    mov -0x1(%rbx,%rsi,8),%r10 ; mov -0x1(%rbx,%rdi,8),%r11
+    mov %r11,-0x1(%rbx,%rsi,8) ; mov %r10,-0x1(%rbx,%rdi,8)
+    lea 0x1(%rsi),%r10         ; lea -0x1(%rdi),%rsi
+    cmp %rsi,%r10 ; jl
+
+That is what a C compiler emits. The back end is not the problem, the register
+allocator is no longer the problem, and the hottest loop in the benchmark is not
+the problem.
+
+**WHAT IS LEFT IS STRUCTURE.** With no checks at all we still run 27.088G
+instructions against gcc's 11.129G and 5.31G branches against its 2.21G. gcc's
+whole fannkuch `main` is 214 instructions: it inlined the nest and vectorised the
+element copies. Ours are scalar loops --- correct, tight, and one element at a
+time. slp.ss packs add, sub, mul and div on raw-f64; there is no integer packing
+at all, and an eleven-element copy is eleven iterations.
+
+**THE METHOD IS THE POINT.** Two measurements, an afternoon apart, each killed a
+plausible piece of work before it was built: D37 refused an `fp-reciprocal`
+permission because the approximation loses once packed, and this refuses a
+contents domain because its ceiling is 2.8%. Both were reachable with a compiler
+switch and a benchmark. Neither would have been visible from reading the code.
+
+
 ### D35 --- a call destroys what its callee writes, not the whole register file
 
 regalloc.ss spilled every value live across a call, and said why:
