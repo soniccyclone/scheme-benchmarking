@@ -230,14 +230,8 @@
       ;; substitutions performed. That is also what makes the count meaningful
       ;; where a per-name budget was not: `freshen` mints a new name per copy,
       ;; and a key made of the ORIGINAL name and the literals does not move.
-      (define pending '())        ; (key name args) awaiting a binding
-      (define made (make-hashtable equal-hash equal?))   ; key -> new name
-
-      ;; The ORIGINAL name and the literal VALUES, so two call sites with the
-      ;; same arguments share a copy -- and so the key does not move when
-      ;; `freshen` renames things.
-      (define (key-of f x*)
-        (cons f (map (lambda (v) (car (hashtable-ref lits v '(#f)))) x*)))
+      (define pending '())        ; (name original args) awaiting a binding
+      (define copies-made 0)
 
       (define counter 0)
       (define (copy-name f)
@@ -251,9 +245,7 @@
                (= (length (car p)) (length x*))
                (specialize-enabled?)
                (for-all literal? x*)
-               (or (hashtable-ref made (key-of f x*) #f)
-                   (<= (+ (hashtable-size made) 1)
-                       (* (specialize-growth-budget) 8))))))
+               (<= (+ copies-made 1) (* (specialize-growth-budget) 8)))))
 
       ;; THE PARAMETERS ARE BOUND INSIDE THE COPY, to the literal VALUES, and
       ;; that is forced by where the copy lives rather than by taste.
@@ -297,13 +289,22 @@
                         `(let ([,(car ps) (quote ,(car vs))])
                            ,(wrap (cdr ps) (cdr vs))))))))))
 
-      ;; The name to call, making the copy if this is the first request for it.
+      ;; A COPY PER CALL SITE, never shared.
+      ;;
+      ;; Sharing by (name . literals) was for code size and it is WRONG: the key
+      ;; says nothing about the body's FREE VARIABLES. `inner%24` captures `i`
+      ;; from the outer loop, so a copy made under one outer iteration is not
+      ;; interchangeable with one made under another -- reusing it silently
+      ;; rebinds the loop to the wrong `i`.
+      ;;
+      ;; Size is already bounded by the growth budget, so not sharing costs
+      ;; nothing that was not already accounted for.
       (define (copy-for f x*)
-        (let ((k (key-of f x*)))
-          (or (hashtable-ref made k #f)
+        (let ((_ #f))
+          (or _
               (let ((nm (copy-name f)))
-                (hashtable-set! made k nm)
                 (set! pending (cons (list nm f x*) pending))
+                (set! copies-made (+ copies-made 1))
                 (specialize-stats-specialized-set!
                  stats (+ 1 (specialize-stats-specialized stats)))
                 (unless (memq f (specialize-stats-names stats))
