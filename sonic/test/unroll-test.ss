@@ -11,7 +11,7 @@
 ;;; nbody itself.
 
 (import (chezscheme) (nanopass)
-        (sonic lang) (sonic unroll) (sonic inline)
+        (sonic lang) (sonic unroll) (sonic inline) (sonic specialize) (sonic pipeline)
         (sonic read) (sonic expand) (sonic parse) (sonic policy)
         (sonic anf) (sonic assign)
         (sonic driver) (sonic pipeline) (sonic finalize))
@@ -176,6 +176,78 @@
        (= 2 (length inners)))
   (ck! "and the doubled body costs at most one spill"
        (for-all (lambda (f) (<= (length (finalized-spills f)) 1)) inners)))
+
+
+;; --- SPECIALIZATION MUST NOT BUILD A RING --------------------------------
+;;
+;; A specialized copy is one unrolled iteration, so the copies of a loop form a
+;; CHAIN that ends when a guard folds. A cycle among them is not a slow program:
+;; every edge is a tail call, so a ring of them is an infinite loop with no
+;; stack growth to notice it by.
+;;
+;; specialize.ss builds one today. Turning `specialize-enabled?` on and
+;; compiling nbody produces a copy whose body tail-calls itself, and the
+;; compiler used to notice only three passes later, as repr.ss failing to give
+;; a binding a storage class -- because a result class computed round a ring
+;; never resolves. Had the class been computable it would have compiled and
+;; hung.
+;;
+;; So this asserts the GUARD, not the fix: that the pass refuses rather than
+;; emitting the ring. When the underlying bug is fixed this test is what says
+;; so -- it stops passing because the error stops being raised, and that is the
+;; signal to replace it with an assertion about the unrolled output.
+(define (says-tail-calls? msg)
+  (let ((n (string-length msg)))
+    (let scan ((i 0))
+      (cond ((> (+ i 11) n) #f)
+            ((string=? (substring msg i (+ i 11)) "TAIL-CALLS ") #t)
+            (else (scan (+ i 1)))))))
+
+;; N BAKED, because that is what lets folding reach the cycle. With
+;; `(command-line)` in the way N is never a literal, nothing specialises far
+;; enough, and the ring does not form -- so a test against the shipped source
+;; would pass while the bug sat there. measure-sonic.sh rewrites the same four
+;; lines for its own reasons, and asserts the shape the same way: if the
+;; preamble is reworded, this fails loudly rather than silently testing nothing.
+(define baked
+  (let* ((src (call-with-input-file nb
+                (lambda (p)
+                  (let loop ((acc '()))
+                    (let ((l (get-line p)))
+                      (if (eof-object? l)
+                          (apply string-append (reverse acc))
+                          (loop (cons (string-append l "\n") acc))))))))
+         (old (string-append
+               "(let* ((args (command-line))\n"
+               "         (n (if (fx> (length args) 1)\n"
+               "                (string->number (cadr args))\n"
+               "                1000)))"))
+         (nold (string-length old))
+         (at (let scan ((i 0))
+               (cond ((> (+ i nold) (string-length src)) #f)
+                     ((string=? (substring src i (+ i nold)) old) i)
+                     (else (scan (+ i 1))))))
+         (out "/tmp/sonic-unroll-baked.sps"))
+    (unless at
+      (error 'unroll-test
+             "config-sonic.sps no longer opens N with the preamble this rewrites"))
+    (call-with-output-file out
+      (lambda (p)
+        (put-string p (string-append (substring src 0 at)
+                                     "(let* ((n 1000))"
+                                     (substring src (+ at nold) (string-length src)))))
+      'replace)
+    out))
+
+(define specialization-refused?
+  (guard (e (#t (and (message-condition? e)
+                     (says-tail-calls? (condition-message e)))))
+    (parameterize ((specialize-enabled? #t))
+      (compile-sonic baked nbody-externs))
+    #f))
+
+(ck! "specialization refuses to emit a cycle of copies, rather than hanging"
+     specialization-refused?)
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)

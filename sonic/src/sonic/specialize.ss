@@ -357,6 +357,88 @@
              (if (eligible? x x*) `(call ,(copy-for x x*)) se)]
             [else se])))
 
+      ;; --- the copies must form a CHAIN, never a ring ------------------------
+      ;;
+      ;; A specialized copy exists to be the next unrolled iteration, so the
+      ;; copies of one loop form a chain that ends when a guard folds. A CYCLE
+      ;; among them is not a slow program, it is a program that does not
+      ;; terminate: every edge here is a TAIL call, so a ring of them is an
+      ;; infinite loop with no stack growth to notice it by.
+      ;;
+      ;; It happened. Turning this pass on and building nbody produced
+      ;;
+      ;;   loop%66@1.13   -> loop%66@1@2.16
+      ;;   loop%66@1@2.16 -> loop%66@1@1.21
+      ;;   loop%66@1@1.21 -> loop%66@1.13
+      ;;
+      ;; and the compiler noticed only by accident, three passes later, as
+      ;; repr.ss failing to give a binding a storage class -- because a result
+      ;; class computed round a ring never resolves. Had the class been
+      ;; computable the program would have compiled and hung.
+      ;;
+      ;; So the property is asserted here, where it is cheap and where the pass
+      ;; that broke it can be named. `@` is the marker `copy-name` puts in, so
+      ;; the edges considered are exactly the ones this pass creates; ordinary
+      ;; mutual recursion between two source procedures is legal and untouched.
+      (define (copy? nm)
+        (and (symbol? nm)
+             (let ((str (symbol->string nm)))
+               (let loop ((i 0))
+                 (cond ((= i (string-length str)) #f)
+                       ((char=? (string-ref str i) #\@) #t)
+                       (else (loop (+ i 1))))))))
+
+      (define (check-copies-acyclic! datum)
+        (let ((edges (make-eq-hashtable)))
+          ;; name -> the procedure its body tail-calls, for copies only
+          (let walk ((x datum))
+            (when (pair? x)
+              (when (eq? (car x) 'letrec)
+                (for-each
+                 (lambda (b)
+                   (let ((nm (car b)) (v (cadr b)))
+                     (when (and (copy? nm) (pair? v) (eq? (car v) 'lambda))
+                       (let dig ((e (caddr v)))
+                         (when (pair? e)
+                           (case (car e)
+                             ((let seq letrec phi declare declare-distinct policy)
+                              (dig (caddr e)))
+                             ((sigma) (dig (list-ref e 6)))
+                             ((tailcall)
+                              (when (copy? (cadr e))
+                                (hashtable-set! edges nm (cadr e))))
+                             (else (void))))))))
+                 (cadr x)))
+              (for-each walk x)))
+          ;; Any name that reaches itself by following single tail edges.
+          (let-values (((names targets) (hashtable-entries edges)))
+            (vector-for-each
+             (lambda (nm)
+               (let chase ((at nm) (steps 0))
+                 (cond
+                  ((> steps 10000)
+                   (error 'specialize-program
+                          "a cycle of specialized copies, found by step limit" nm))
+                  ((hashtable-ref edges at #f)
+                   => (lambda (next)
+                        (if (eq? next nm)
+                            (error 'specialize-program
+                                   (if (zero? steps)
+                                       (string-append
+                                        "a specialized copy TAIL-CALLS ITSELF, which is an "
+                                        "infinite loop. A copy is one unrolled iteration: "
+                                        "its self call belongs to the ORIGINAL, whose next "
+                                        "call the following round specialises")
+                                       (string-append
+                                        "the specialized copies form a CYCLE, which is an "
+                                        "infinite loop: every edge is a tail call. A copy is "
+                                        "the next unrolled iteration and must chain to a "
+                                        "folded exit, never back to an earlier copy"))
+                                   nm next)
+                            (chase next (+ steps 1)))))
+                  (else (void)))))
+             names))))
+
       ;; D32: the pipeline hands a Program, and a pass matching only Expr falls
       ;; through its `else` and reports success having done nothing. Six passes
       ;; had that defect; this is not the seventh.
@@ -371,10 +453,10 @@
                      (scan-expr e))
                    x* e*)
          (scan-expr body)
-         (values
-          (with-output-language (Lanf Program)
-            (let ((e1* (map Expr e*)))
-              `(top ([,x* ,e1*] ...) (,x2* ...) ,(Expr body))))
-          stats)]
+         (let ((out (with-output-language (Lanf Program)
+                      (let ((e1* (map Expr e*)))
+                        `(top ([,x* ,e1*] ...) (,x2* ...) ,(Expr body))))))
+           (check-copies-acyclic! (unparse-Lanf out))
+           (values out stats))]
         [else (values prog stats)])))
   )
