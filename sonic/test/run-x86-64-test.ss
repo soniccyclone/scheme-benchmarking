@@ -394,6 +394,46 @@
        "(main)\n")
       '(30.0))
 
+;; WHICH BOUNDS CHECKS SURVIVE, counted in the emitted code.
+;;
+;; The elision is what these two benchmarks are in the matrix to exercise, so
+;; the count is asserted rather than left to drift. Both numbers moved when the
+;; interval domain learned the false edge of an equality test, and a change in
+;; either direction is worth failing over: upward means a refinement was lost,
+;; downward means one was added and nobody said so.
+;;
+;; SOUNDNESS IS NOT WHAT THIS CHECKS. differential.ss compiles each program
+;; with every check emitted and with the proved ones removed and compares the
+;; answers; that is the test that an elision was legal. This one only says how
+;; many are left.
+(define (surviving-bounds-checks path externs)
+  (let ((c (compile-sonic path externs)) (n 0))
+    (for-each
+     (lambda (f)
+       (for-each (lambda (i)
+                   (when (and (pair? i) (memq (car i) '(jge jb jae ja))
+                              (pair? (cadr i)) (eq? (car (cadr i)) 'label)
+                              (eq? (cadr (cadr i)) 'sonic-bounds-error))
+                     (set! n (+ n 1))))
+                 (finalized-listing f)))
+     (compiled-functions c))
+    n))
+
+;; nbody's indices are `3i+k` off a vector whose length was proved at its
+;; allocation, so every one of them should go -- and now every one does.
+(ck! "nbody emits NO bounds check at all"
+     (= 0 (surviving-bounds-checks "../bench/nbody/config-sonic.sps" nbody-externs)))
+
+;; fannkuch-redux keeps exactly four, all in `flip-prefix`, and they are the
+;; four an interval domain cannot discharge: the loop is `(fx< i j)` where
+;; `j` came from `(vector-ref perm 0)`. Bounding it needs "every element of
+;; perm is less than n", which is a statement about the array's CONTENTS --
+;; not about any scalar the domain tracks. SPEC.md picked this program for
+;; exactly that shape. The other six went with the equality-edge refinement.
+(ck! "fannkuch-redux keeps four, and only in flip-prefix's loop"
+     (= 4 (surviving-bounds-checks "../bench/fannkuch/config-sonic.sps"
+                                   '(display newline))))
+
 ;; A PROCEDURE NOTHING CALLS MUST NOT REFUSE THE PROGRAM.
 ;;
 ;; A parameter's class comes from the call sites (repr.ss), so a procedure with

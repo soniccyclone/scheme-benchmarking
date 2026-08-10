@@ -213,6 +213,43 @@
   (check-eq! "nbody offset i*7+k is [0,34]" off (iv-range 0 34))
   (check! "nbody bounds check is ELIMINABLE" (iv-within? off (iv-const 35))))
 
+;; --- the false edge of an equality test ------------------------------------
+;;
+;; `a != c` is not an interval, so the general answer is to refine nothing --
+;; which is what `cmp-table` still records, because four passes read
+;; `iv-edge-cmp` and one turns the edge into a trip count.
+;;
+;; The case that MATTERS is expressible, though: when the excluded value is an
+;; ENDPOINT the interval shrinks by one. That is how a loop written against an
+;; equality guard gets bounded at all -- `(if (fx= r n) <stop> ... v[r] ...)`
+;; is fannkuch-redux's `next` and `rotate`, and `ref.c` writes the same
+;; `if (r == N)`.
+
+(check-eq! "false edge of (fx= r 7) with r in [1,7] excludes the top endpoint"
+           (refine-first 'fx= #t (iv-range 1 7) (iv-const 7)) (iv-range 1 6))
+(check-eq! "and the bottom endpoint, from the other side"
+           (refine-first 'fx= #t (iv-range 1 7) (iv-const 1)) (iv-range 2 7))
+(check-eq! "an INTERIOR value refines nothing: an interval cannot say 'not 4'"
+           (refine-first 'fx= #t (iv-range 1 7) (iv-const 4)) (iv-range 1 7))
+(check-eq! "excluding the only value leaves bottom"
+           (refine-first 'fx= #t (iv-const 5) (iv-const 5)) iv-bot)
+(check-eq! "it refines the SECOND operand too, symmetrically"
+           (refine-second 'fx= #t (iv-const 7) (iv-range 1 7)) (iv-range 1 6))
+(check-eq! "an unbounded endpoint excludes nothing"
+           (refine-first 'fx= #t (iv-range 1 'posinf) (iv-const 7)) (iv-range 1 'posinf))
+(check-eq! "a non-constant right operand excludes nothing"
+           (refine-first 'fx= #t (iv-range 1 7) (iv-range 6 7)) (iv-range 1 7))
+
+;; THE TRUE EDGE IS UNCHANGED: both operands meet, which is what equality says.
+(check-eq! "true edge of (fx= r 7) still meets"
+           (refine-first 'fx= #f (iv-range 1 9) (iv-const 7)) (iv-const 7))
+
+;; FLONUMS GET NOTHING, for two reasons at once. Shrinking by one is a claim
+;; about the successor of a value, which reals do not have; and the false edge
+;; of `fl=` is taken by NaN, which no ordering describes.
+(check-eq! "false edge of (fl= x 7.0) refines nothing"
+           (refine-first 'fl= #t (iv-range 1 7) (iv-const 7)) (iv-range 1 7))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))

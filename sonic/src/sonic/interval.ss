@@ -265,7 +265,46 @@
       ((cmp negated? a b) (iv-refine cmp negated? a b #f))
       ((cmp negated? a b non-nan?) (iv-refine* cmp negated? a b non-nan?))))
 
+  ;; a != b, which is the FALSE EDGE OF AN EQUALITY TEST.
+  ;;
+  ;; An interval cannot say "everything except c", so the general answer is to
+  ;; refine nothing -- which is what `cmp-table` records for the negation of
+  ;; `=`, and it stays recorded, because four passes read `iv-edge-cmp` and one
+  ;; of them turns the edge into a trip count.
+  ;;
+  ;; But the case that MATTERS is expressible: when the excluded value sits at
+  ;; an ENDPOINT, the interval simply shrinks by one. That is not a corner case,
+  ;; it is how a loop written against an equality guard is bounded at all:
+  ;;
+  ;;     (define (next r ...) (if (fx= r n) <stop> ... (vector-ref cnt r) ...))
+  ;;
+  ;; The fixpoint already derives r in [1,7] and n = 7, and without this the
+  ;; index can be 7 into a length-7 vector, so the check stays. With it the
+  ;; false edge gives [1,6] and the check goes. fannkuch-redux's `next` and
+  ;; `rotate` are both this shape, and `ref.c` writes the same `if (r == N)`.
+  ;;
+  ;; INTEGERS ONLY. Shrinking by one is a statement about the successor of c,
+  ;; which reals do not have -- and for flonums the false edge of `fl=` is
+  ;; taken by NaN as well, so there is nothing to conclude even with a non-NaN
+  ;; premise. `=` and `fx=` only.
+  (define (iv-exclude a b)
+    (let ((blo (interval-lo b)) (bhi (interval-hi b)))
+      (if (or (iv-bot? a) (iv-bot? b)
+              (neg-inf? blo) (pos-inf? bhi) (not (eqv? blo bhi)))
+          a
+          (let ((c blo) (lo (interval-lo a)) (hi (interval-hi a)))
+            (cond
+             ;; a is exactly {c}, and a != c leaves nothing
+             ((and (eqv? lo c) (eqv? hi c)) iv-bot)
+             ((eqv? lo c) (make-interval (+ c 1) hi))
+             ((eqv? hi c) (make-interval lo (- c 1)))
+             (else a))))))
+
+  (define (integer-equality? cmp) (and (memq cmp '(= fx=)) #t))
+
   (define (iv-refine* cmp negated? a b non-nan?)
+    (if (and negated? (integer-equality? cmp))
+        (values (iv-exclude a b) (iv-exclude b a))
     (let ((c (iv-edge-cmp cmp negated? non-nan?)))
       (cond
        ((not c) (values a b))
@@ -276,7 +315,7 @@
                             (iv-lt-refine b a)))
        ((eq? c '>=) (values (iv-ge-refine a b) (iv-le-refine b a)))
        ((eq? c '=)  (let ((m (iv-meet a b))) (values m m)))
-       (else (values a b)))))
+       (else (values a b))))))
 
   ;; --- the query the whole file exists to answer ---------------------------
   ;; Is every value of `idx` a valid index into a vector of length `len`?
