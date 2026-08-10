@@ -344,14 +344,14 @@
         (assq m vex-arith) (assq m vex-packed) (memq m '(vmovupd vmovddup))
         (assq m jcc-table) (assq m setcc-table)
         (memq m '(mov movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
-                  syscall))
+                  syscall cqo idiv))
         #f))
 
   (define (x86-64-supports? m) (and (mnemonic-known? m) #t))
 
   (define (x86-64-mnemonics)
     (append (map car int-alu) (map car sse-arith) (map car sse-bitwise)
-            (map car vex-arith) (map car vex-packed) '(vmovupd vmovddup)
+            (map car vex-arith) (map car vex-packed) '(vmovupd vmovddup cqo idiv)
             (map car jcc-table) (map car setcc-table)
             '(mov movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
               syscall)))
@@ -528,6 +528,17 @@
        ;; inside the differential test like every other instruction.
        ((eq? m 'syscall) '(#x0F #x05))
        ((eq? m 'neg) (asm 'encode-instr '() 1 '(#xF7) 3 (arg 0) '() #f))
+       ;; SIGNED DIVISION, which needs the rdx:rax pair and so is reachable
+       ;; only from hand-written runtime code -- see runtime.ss. `cqo`
+       ;; sign-extends rax across rdx to build the 128-bit dividend, and `idiv`
+       ;; divides it, leaving the quotient in rax and the remainder in rdx.
+       ;;
+       ;; They are here rather than in a selector rule because no allocator in
+       ;; this compiler can express "these two specific registers, and both are
+       ;; destroyed": regs.ss allocates from disjoint class pools by design.
+       ;; A runtime routine has no allocator to argue with.
+       ((eq? m 'cqo) '(#x48 #x99))
+       ((eq? m 'idiv) (asm 'encode-instr '() 1 '(#xF7) 7 (arg 0) '() #f))
        ((assq m setcc-table)
         (let ((dst (arg 0)))
           (unless (gpr? dst) (error 'encode-instr "setcc destination must be a GPR" i))

@@ -275,6 +275,8 @@
     (cond
      ((eq? m 'ret) "ret")
      ((eq? m 'syscall) "syscall")
+     ;; `cqo` takes no operands: it sign-extends rax across rdx, both implicit.
+     ((eq? m 'cqo) "cqo")
      ((memq m '(jmp call))
       (string-append (name) " .+" (number->string (+ 5 (cadr (car ops))))))
      ((memq m jcc-mnemonics)
@@ -287,7 +289,8 @@
      ((eq? m 'lea)
       ;; no size prefix: lea computes an address, it does not access memory
       (string-append "lea " (gas-op (car ops) #f) ", " (gas-op (cadr ops) #f)))
-     ((eq? m 'neg) (string-append "neg " (gas-op (car ops) #t)))
+     ;; one-operand forms; the other operands of `idiv` are rdx:rax, implicit
+     ((memq m '(neg idiv)) (string-append (name) " " (gas-op (car ops) #t)))
      (else
       (let ((sz (if (memq m packed-mnemonics) 'xmmword 'qword)))
         (string-append (name) " " (gas-op (car ops) sz) ", " (gas-op (cadr ops) sz)))))))
@@ -391,6 +394,10 @@
     (lea r10 (mem rax #f 1 8))
     (shl r12 (imm 3))
     (neg r13)
+    ;; signed division: cqo builds the 128-bit dividend, idiv divides it
+    (cqo)
+    (idiv rcx)
+    (idiv r11)
     (neg rax)
     ;; comparison and materialisation
     (cmp rbx r9)

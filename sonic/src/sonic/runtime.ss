@@ -234,6 +234,73 @@
       ;; The length is 1 because the collector's scan walks a header and a field
       ;; count; a flonum's one field is raw, which the TYPE says, and that is
       ;; what keeps eight bytes of mantissa from being followed as a pointer.
+      ;; ---- integer division ----
+      ;;
+      ;; A RUNTIME CALL RATHER THAN AN INSTRUCTION, and the reason is the
+      ;; register file rather than the encoding. `idiv` reads a 128-bit
+      ;; dividend in rdx:rax and writes the quotient to rax and the remainder to
+      ;; rdx -- two specific registers, both destroyed. regs.ss allocates from
+      ;; disjoint class pools and has no way to say that, which is exactly what
+      ;; the selector's refusal said: "integer division needs the rdx:rax pair
+      ;; idiv hardwires, which the register partition does not model".
+      ;;
+      ;; A runtime routine has no allocator to argue with. It costs a call
+      ;; around an instruction that is already 20 to 40 cycles, so the overhead
+      ;; is in the noise, and it is the difference between compiling integer
+      ;; division and refusing it.
+      ;;
+      ;; Arguments arrive raw, not tagged: repr.ss classifies the fixnum
+      ;; primitives raw-word. Dividend in rcx, divisor in rdx (raw-word
+      ;; arguments 0 and 1), result in rax.
+      ;;
+      ;; THE DIVISOR IS MOVED FIRST because `cqo` writes rdx, which is where it
+      ;; arrived. Dividing by the sign extension of the dividend is a plausible
+      ;; wrong answer rather than a crash.
+      %fxquotient
+      (mov rax rcx)
+      (mov r11 rdx)
+      (cqo)
+      (idiv r11)
+      (ret)
+
+      %fxremainder
+      (mov rax rcx)
+      (mov r11 rdx)
+      (cqo)
+      (idiv r11)
+      (mov rax rdx)
+      (ret)
+
+      ;; `modulo` follows the sign of the DIVISOR where `remainder` follows the
+      ;; dividend, so they differ exactly when the two signs disagree and the
+      ;; remainder is not zero. Adding the divisor once is the whole correction.
+      %fxmodulo
+      (mov rax rcx)
+      (mov r11 rdx)
+      (cqo)
+      (idiv r11)
+      (mov rax rdx)
+      ;; Correct exactly when the remainder is non-zero and its sign disagrees
+      ;; with the divisor's. Written as two compares rather than as a sign
+      ;; XOR because the encoder has no `xor` for general-purpose registers --
+      ;; the only bitwise ops it carries are the packed `xorpd`/`andpd` that
+      ;; IEEE negation needs.
+      (cmp rax (imm 0))
+      (je (label %fxmod-done))
+      (jl (label %fxmod-neg))
+      ;; remainder > 0: correct only if the divisor is negative
+      (cmp r11 (imm 0))
+      (jge (label %fxmod-done))
+      (add rax r11)
+      (jmp (label %fxmod-done))
+      %fxmod-neg
+      ;; remainder < 0: correct only if the divisor is positive
+      (cmp r11 (imm 0))
+      (jle (label %fxmod-done))
+      (add rax r11)
+      %fxmod-done
+      (ret)
+
       %box-flonum
       (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
       (mov rdx (imm ,heap-type-flonum))

@@ -43,7 +43,6 @@
   ;; primcall name -> Lmach op. Anything absent is not lowerable and says so.
   (define prim->op
     '((fx+ . add) (fx- . sub) (fx* . mul) (fxneg . neg)
-      (fxquotient . div)
       (fl+ . add) (fl- . sub) (fl* . mul) (fl/ . div)
       (flneg . neg) (flabs . abs) (flsqrt . sqrt)
       (fx< . cmp-lt) (fx<= . cmp-le) (fx= . cmp-eq)
@@ -70,6 +69,11 @@
       ;; one, and neither is expressible as one Lmach instruction: the claim,
       ;; the fill and the restart region are a sequence, and inlining that here
       ;; would duplicate a decision those files already made.
+      ;; INTEGER DIVISION IS A CALL, for the reason runtime.ss gives: idiv
+      ;; hardwires rdx:rax and regs.ss allocates from disjoint class pools, so
+      ;; no selector rule can ask for it. Before this the selector refused
+      ;; `div` outright and no program using fxquotient compiled at all.
+      (fxquotient . call) (fxremainder . call) (fxmodulo . call)
       (make-flvector . call) (make-vector . call)
       (cons . call) (car . call) (cdr . call) (error . call)
       (null? . call) (pair? . call) (eq? . call)
@@ -90,6 +94,8 @@
     '((make-flvector . %make-flvector) (make-vector . %make-vector)
       (cons . %cons) (car . %car) (cdr . %cdr) (error . %error)
       (null? . %null?) (pair? . %pair?) (eq? . %eq?)
+      (fxquotient . %fxquotient) (fxremainder . %fxremainder)
+      (fxmodulo . %fxmodulo)
       (fixnum? . %fixnum?) (flonum? . %flonum?)
       (vector? . %vector?) (flvector? . %flvector?)))
 

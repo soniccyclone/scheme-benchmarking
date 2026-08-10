@@ -68,11 +68,17 @@
 (set! checks (+ checks 1))
 (let ([caught #f])
   (guard (e (#t (set! caught #t)))
-    ;; `cons` used to be the example here and now lowers to a runtime call, so
-    ;; the assertion moved to one that genuinely has no machine op. That is not
-    ;; the test weakening: an unlowerable primitive must still raise rather than
-    ;; being dropped, because a dropped primcall is a silently wrong program.
-    (lower-program '(let ([v raw-word (primcall fxremainder () a b)]) v) 'entry))
+    ;; `cons` was the example, then `fxremainder`, and BOTH now lower to a
+    ;; runtime call. Every primitive in lang.ss's table has a machine op or a
+    ;; runtime entry today, so the example has to be a name that is not a
+    ;; primitive at all.
+    ;;
+    ;; That is a weaker test than it was and it is worth keeping anyway: the
+    ;; property is that an unlowerable primcall RAISES rather than being
+    ;; dropped, because a dropped primcall is a silently wrong program, and
+    ;; the day someone adds a primitive to lang.ss without adding it here is
+    ;; the day it matters again.
+    (lower-program '(let ([v raw-word (primcall fxgcd () a b)]) v) 'entry))
   (if caught
       (display "  ok   a primitive with no machine op RAISES\n")
       (begin (set! failures (+ failures 1))
@@ -119,8 +125,11 @@
                '(let ([q raw-word (primcall fxquotient ([div-check checked]) a b)])
                   q)
                'entry)])
-  (ck! "a division check is emitted"
-       (equal? (ops prog) '(chk div)))
+  ;; `call`, not `div`: integer division is a runtime routine, because idiv
+  ;; hardwires rdx:rax and regs.ss allocates from disjoint class pools. See
+  ;; runtime.ss.
+  (ck! "a division check is emitted, before the call that does the dividing"
+       (equal? (ops prog) '(chk call)))
   (ck! "and it carries ONE operand, the divisor, not the whole operand list"
        (let ((chk (car (cadr (cadr (car (cadr prog)))))))
          (and (eq? (car chk) 'chk)

@@ -543,6 +543,43 @@
      (= 4 (surviving-bounds-checks "../bench/fannkuch/config-sonic.sps"
                                    '(display newline))))
 
+;; INTEGER DIVISION, which no program could use at all: the selector refused
+;; `div` with "integer division needs the rdx:rax pair idiv hardwires, which the
+;; register partition does not model".
+;;
+;; It is a runtime CALL rather than an instruction, and that is the register
+;; file's doing rather than the encoder's -- `idiv` reads a 128-bit dividend in
+;; rdx:rax and writes both, and regs.ss allocates from disjoint class pools with
+;; no way to say so. A runtime routine has no allocator to argue with, and a
+;; call around an instruction that is already 20-40 cycles is noise.
+;;
+;; The divisor is read from a vector so nothing folds it: these must exercise
+;; the routine, not fold.ss.
+(define (div-prog e)
+  (string-append "(define v (make-vector 4 0))\n"
+                 "(define (main) (begin (vector-set! v 0 4)\n"
+                 "  (display (fx->fl " e ")) (newline)))\n(main)\n"))
+(run! "quotient" (div-prog "(fxquotient 20 (vector-ref v 0))") '(5.0))
+(run! "quotient truncates toward zero, so a negative dividend gives -5"
+      (div-prog "(fxquotient -20 (vector-ref v 0))") '(-5.0))
+(run! "remainder follows the DIVIDEND's sign" (div-prog "(fxremainder -23 (vector-ref v 0))")
+      '(-3.0))
+;; modulo and remainder differ exactly when the signs disagree, which is the
+;; only interesting thing about either of them.
+(run! "modulo follows the DIVISOR's sign, so the same operands give 1"
+      (div-prog "(fxmodulo -23 (vector-ref v 0))") '(1.0))
+(run! "and they agree when the signs agree" (div-prog "(fxmodulo 23 (vector-ref v 0))")
+      '(3.0))
+;; The div-check now reaches an operation that exists, so it can finally trap.
+(let-values (((code out)
+              (compile-and-run
+               (string-append
+                "(define v (make-vector 4 0))\n"
+                "(define (main) (begin (vector-set! v 0 0)\n"
+                "  (display (fx->fl (fxquotient 6 (vector-ref v 0))))))\n(main)\n")
+               '(display newline))))
+  (ck! "division by zero traps rather than dividing" (not (zero? code))))
+
 ;; A PROCEDURE NOTHING CALLS IS NOT COMPILED.
 ;;
 ;; `partition-into-functions` gathers blocks no entry reaches under
