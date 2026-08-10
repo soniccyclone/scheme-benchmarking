@@ -1137,3 +1137,45 @@ A caveat on the arithmetic: the ~15-cycle penalty is a book figure, not
 measured on this part. The qualitative conclusion survives a wide range of it,
 because our mispredict count is LOWER than gcc's -- any penalty makes gcc's
 share larger than ours, and the residual work gap larger, not smaller.
+
+### D47 addendum -- the surplus work is stack traffic and register shuffling
+
+D47 left the residual as "1.50x of real work" without saying what the work is.
+Static instruction mix over the functions holding 77% of fannkuch's cycles --
+the two flip loops, count-flips, copy-perm and next -- says:
+
+    mov                143   51.1%   of which  reg->reg shuffle   41  28.7%
+    jmp                 19    6.8%             store to memory    24  16.8%
+    cmp                 16    5.7%
+    add                 16    5.7%
+    call                12    4.3%
+
+    instructions touching %rsp:  67 of 280   23.9%
+
+NEARLY A QUARTER OF THE HOT CODE IS STACK TRAFFIC, and more than a quarter of
+its moves are register-to-register shuffling. gcc's reversal loop touches the
+stack not once; it holds everything in registers and its moves are the memory
+swap the algorithm actually asks for.
+
+And there are NO SHIFTS AT ALL in these loops, which retires a standing
+suspicion: the tagged representation is not costing tag arithmetic here,
+because repr.ss has already given this code raw-word class. Whatever the
+surplus is, it is not tagging.
+
+So the 1.50x is substantially register pressure -- values that will not fit in
+the allocatable set, spilled and reloaded around a loop that gcc runs entirely
+in registers, plus the copies a parallel-copy sequencer leaves behind.
+
+THIS IS A STATIC COUNT AND THE CAVEAT MATTERS: it is the mix of the code, not
+of the executed stream. It is a fair proxy here only because these functions
+are 77% of the profile and are almost entirely loop bodies, so static and
+dynamic mix should track. A dynamic count would settle it and has not been
+taken.
+
+IT ALSO PARTLY REVIVES qaq.7.23, which was priced at 1.1% of instructions and
+reprioritised down. That measurement stands, and it is now in tension with 24%
+stack traffic: if the partition were the binding constraint, widening it should
+have bought far more than 1.1%. Either the constraint is elsewhere -- the
+allocator's own choices rather than the size of the pool -- or the 1.1% was
+measured on a total where the hot loops are a small share. Worth resolving
+before either issue is acted on, and it is one dynamic measurement away.
