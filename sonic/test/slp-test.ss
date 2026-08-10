@@ -206,19 +206,35 @@
 ;; --- nbody ------------------------------------------------------------------
 ;;
 ;; The measurement that justifies the pass. `dx` is read by `dx*dx`, which feeds
-;; the reduction and cannot pack, and by `dx*mj`, which can. Assembling the pair
-;; costs one instruction and buys the two velocity updates, which are three
-;; identical load/mul/sub/store sequences twice over.
+;; the reduction and cannot pack, and by `dx*mj`, which can.
+;;
+;; THREE LANES, NOT TWO. A body is three consecutive doubles, so every
+;; operation on one used to be two instructions -- a 128-bit packed one for x
+;; and y, and a scalar one for z. It is now a single masked 256-bit operation
+;; over (x, y, z, pad). This asserts BOTH: that the force loop packs at all,
+;; and that the packs it makes are triples -- counting only the pair mnemonics
+;; is what this check did, and it went to zero the day triples started working,
+;; which reads as the pass breaking rather than doing its job.
 (let* ((c (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs))
-       (packed (let count ((xs (compiled-listing c)) (n 0))
-                 (cond ((null? xs) n)
-                       ((and (pair? (car xs))
-                             (memq (car (car xs))
-                                   '(vaddpd vsubpd vmulpd vdivpd vunpcklpd
-                                     vmovupd vmovddup)))
-                        (count (cdr xs) (+ n 1)))
-                       (else (count (cdr xs) n))))))
-  (ck! "nbody's pairwise force loop emits packed arithmetic" (> packed 0)))
+       (count-of (lambda (ms)
+                   (let count ((xs (compiled-listing c)) (n 0))
+                     (cond ((null? xs) n)
+                           ((and (pair? (car xs)) (memq (car (car xs)) ms))
+                            (count (cdr xs) (+ n 1)))
+                           (else (count (cdr xs) n))))))
+       (pairs (count-of '(vaddpd vsubpd vmulpd vdivpd vunpcklpd
+                          vmovupd vmovddup vunpckhpd)))
+       (triples (count-of '(v3addpd v3subpd v3mulpd v3divpd
+                            v3movupd v3splat v3lane2))))
+  (ck! "nbody's pairwise force loop emits packed arithmetic"
+       (> (+ pairs triples) 0))
+  ;; THREE LANES ARE OFF, and this asserts that rather than leaving it to a
+  ;; comment. slp.ss's `three-lane-packs?` records the measurement: masked
+  ;; 256-bit packing is bit-exact and saves 92 instructions per step, and costs
+  ;; 675 cycles, because a masked store cannot forward to a later load. Flip
+  ;; that switch and this check is the one that tells you the build changed.
+  (ck! "and they are PAIRS: three-lane packing is off, and measured off"
+       (and (> pairs 0) (= triples 0))))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)

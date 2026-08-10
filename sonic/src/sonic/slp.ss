@@ -62,6 +62,10 @@
   ;; the plumbing costs more than that.
   (define pack-op '((add . p2add) (sub . p2sub) (mul . p2mul) (div . p2div)))
 
+  ;; The same four, as name STEMS, so the arity is a prefix rather than a second
+  ;; table that could disagree with the first.
+  (define pack-op-stem '((add . "add") (sub . "sub") (mul . "mul") (div . "div")))
+
   ;; --- reading a block --------------------------------------------------------
 
   ;; A load, normalised: (base idx offset), or #f.
@@ -200,50 +204,187 @@
                       (hashtable-set! kind ms k)
                       #t))))
 
-      (define (adjacent-loads? a b)
-        (let ((da (and a (load-form a))) (db (and b (load-form b))))
-          (and da db (eq? (car da) (car db)) (eq? (cadr da) (cadr db))
-               (= (+ (caddr da) 1) (caddr db)))))
+      ;; N-ARY, over the pack's definitions in lane order. Two members today,
+      ;; three when the seed finds a third adjacent store; the predicates say
+      ;; "consecutive" and "all the same operation" rather than counting.
+      (define (adjacent-loads? ds)
+        (let ((fs (map (lambda (d) (and d (load-form d))) ds)))
+          (and (for-all values fs)
+               (let ((f0 (car fs)))
+                 (let walk ((xs (cdr fs)) (off (caddr f0)))
+                   (or (null? xs)
+                       (and (eq? (car (car xs)) (car f0))
+                            (eq? (cadr (car xs)) (cadr f0))
+                            (= (caddr (car xs)) (+ off 1))
+                            (walk (cdr xs) (+ off 1)))))))))
 
-      (define (same-op? a b)
-        (and a b (pair? a) (pair? b) (eq? (car a) (car b))
-             (assq (car a) pack-op) (= (length a) 5) (= (length b) 5)
-             (eq? (caddr a) 'raw-f64) (eq? (caddr b) 'raw-f64)))
+      (define (packable-op? d)
+        (and d (pair? d) (assq (car d) pack-op) (= (length d) 5)
+             (eq? (caddr d) 'raw-f64)))
+
+      (define (same-op? ds)
+        (and (for-all packable-op? ds)
+             (for-all (lambda (d) (eq? (car d) (car (car ds)))) (cdr ds))))
+
+      ;; The operands of a packable op, in order.
+      (define (op-operands d) (list (cadddr d) (car (cddddr d))))
 
       ;; Classify one pack and, when it is an op pack, enqueue its operands.
       (define (classify! p)
-        (let* ((lo (pack-lo p)) (hi (pack-hi p))
-               (a (def-of lo)) (b (def-of hi)))
+        (let ((ds (map def-of p)))
           (cond
-           ((adjacent-loads? a b) (hashtable-set! kind p 'load))
-           ((same-op? a b)
+           ((adjacent-loads? ds) (hashtable-set! kind p 'load))
+           ((same-op? ds)
             (hashtable-set! kind p 'op)
             ;; Operand lanes come from THIS pack's order, which came from a
-            ;; store. Equal operands are a splat and form no pack.
-            (for-each (lambda (x y) (unless (eq? x y) (add-pack! x y 'pending)))
-                      (list (cadddr a) (car (cddddr a)))
-                      (list (cadddr b) (car (cddddr b)))))
+            ;; store. At each operand position the members either all name the
+            ;; same value -- a splat, which forms no pack -- or they become a
+            ;; pack of their own with the same arity as this one.
+            (for-each
+             (lambda (pos)
+               (let ((xs (map (lambda (d) (list-ref (op-operands d) pos)) ds)))
+                 (unless (for-all (lambda (x) (eq? x (car xs))) (cdr xs))
+                   (apply add-pack! (append xs '(pending))))))
+             '(0 1)))
            (else (hashtable-set! kind p 'gather)))))
 
       ;; Adjacent stores whose values differ: the seed, and the only place lane
       ;; order is decided.
+      ;;
+      ;; THREE FIRST, THEN TWO. A body is three consecutive doubles, so the
+      ;; shape worth finding is three adjacent stores; two is what is left when
+      ;; the third is not there. Trying the pair first and widening later would
+      ;; mean unpicking a pack that is already registered and already the
+      ;; operand of others, which is the kind of state this pass has no way to
+      ;; back out of.
+      ;;
+      ;; The index at offset d is found by scanning for a store whose offset is
+      ;; d+1 and then d+2 from the SAME base and index. Nothing here proves the
+      ;; three are distinct elements of one object -- adjacency of the
+      ;; SUBSCRIPTS is the whole claim, and it is the claim the load and store
+      ;; forms are normalised to make checkable.
+      (define (store-at base idx off)
+        (let scan ((k 0))
+          (cond ((= k n) #f)
+                ((let ((f (store-form (vector-ref vec k))))
+                   (and f (eq? (car f) base) (eq? (cadr f) idx)
+                        (= (caddr f) off) (f64v? (cadddr f))
+                        (cons k f)))
+                 => values)
+                (else (scan (+ k 1))))))
+
+      ;; THREE LANES ARE OFF, AND THE REASON IS MEASURED RATHER THAN STRUCTURAL.
+      ;;
+      ;; Everything below works. Turning this on packs nbody's force loop into
+      ;; masked 256-bit operations, keeps both energies BIT-EXACT, and takes
+      ;; instructions per step from 717.50 to 625.50 -- the 92 the bead
+      ;; predicted. It also takes cycles per step from 189 to 864.
+      ;;
+      ;; A MASKED STORE CANNOT FORWARD TO A LATER LOAD. Measured on this Zen 5
+      ;; part, a store/load round trip through the same address:
+      ;;
+      ;;     unmasked 256 store -> 256 load        5.65 cyc
+      ;;     128-bit pair + scalar, the old shape  5.65 cyc
+      ;;     masked store -> unmasked load         9.45 cyc
+      ;;     masked store -> masked load          10.70 cyc
+      ;;
+      ;; and `ls_bad_status2.stli_other` counts 59 forwarding failures PER STEP
+      ;; in the packed build, which at the ~12 cycles above is the whole
+      ;; regression. IPC falls from 3.8 to 0.72. nbody's `advance` reads v[3i],
+      ;; writes v[3i] and reads it again on the next pair, so it does exactly
+      ;; the round trip the mask breaks, once per body per pair.
+      ;;
+      ;; Masked LOADS are separately 4x slower than unmasked ones (1.25 against
+      ;; 0.31 cyc/iter), and mixing legacy SSE with 256-bit state costs 14% --
+      ;; real, and both an order of magnitude too small to matter here.
+      ;;
+      ;; WHAT WOULD ACTUALLY WORK is the layout, not the mask: pad a body to
+      ;; FOUR doubles and every load and store is unmasked, forwards normally,
+      ;; and the index arithmetic becomes a shift instead of a multiply by
+      ;; three. That is a change to how the benchmark stores its data, so it is
+      ;; a question about what the matrix is comparing rather than one this
+      ;; pass can answer -- `ref.c` uses three-wide arrays. Filed.
+      ;;
+      ;; The switch stays because that layout change is what flips it back, and
+      ;; because a measurement nobody can repeat is worth nothing.
+      (define three-lane-packs? #f)
+
       (define (collect-store-packs!)
         (let outer ((x 0))
           (when (< x n)
             (let ((fa (store-form (vector-ref vec x))))
-              (when fa
-                (let inner ((y 0))
-                  (when (< y n)
-                    (let ((fb (store-form (vector-ref vec y))))
-                      (when (and fb (not (= x y))
-                                 (eq? (car fa) (car fb))
-                                 (eq? (cadr fa) (cadr fb))
-                                 (= (+ (caddr fa) 1) (caddr fb))
-                                 (f64v? (cadddr fa)) (f64v? (cadddr fb)))
-                        (when (add-pack! (cadddr fa) (cadddr fb) 'pending)
-                          (set! store-packs (cons (list x y) store-packs)))))
-                    (inner (+ y 1))))))
+              (when (and fa (f64v? (cadddr fa)))
+                (let* ((base (car fa)) (idx (cadr fa)) (off (caddr fa))
+                       (b (store-at base idx (+ off 1)))
+                       (c (and b (store-at base idx (+ off 2)))))
+                  (cond
+                   ;; three lanes
+                   ((and three-lane-packs? b c
+                         (add-pack! (cadddr fa) (cadddr (cdr b)) (cadddr (cdr c))
+                                    'pending))
+                    (set! store-packs (cons (list x (car b) (car c)) store-packs)))
+                   ;; two, which is what a body's third component being absent
+                   ;; or unpackable leaves
+                   ((and b (add-pack! (cadddr fa) (cadddr (cdr b)) 'pending))
+                    (set! store-packs (cons (list x (car b)) store-packs)))
+                   (else (values))))))
             (outer (+ x 1)))))
+
+      ;; A TRIPLE THAT CANNOT STAND BECOMES A PAIR, not a gather.
+      ;;
+      ;; A gather assembles the members from values that stay where they are,
+      ;; and assembling three scalars into a 256-bit register takes two
+      ;; instructions -- `vunpcklpd` then `vinsertf128` -- to save the two a
+      ;; triple saves. It breaks even at best, and the encoder does not have
+      ;; `vinsertf128` because of that. So a triple whose members are not three
+      ;; adjacent loads or three identical ops drops its last lane and is
+      ;; classified again as a pair, which is exactly what this pass did before
+      ;; triples existed.
+      ;;
+      ;; The matching store pack narrows with it. WITHOUT THAT the third store
+      ;; is dropped by `plan-store!` while the value pack only ever wrote two
+      ;; lanes, and the third element of every body is stored from whatever was
+      ;; in the register's high half. nbody's `put!` is where it showed:
+      ;;
+      ;;     vmulsd    xmm8, xmm3, xmm7      vx * days-per-year
+      ;;     vmulsd    xmm9, xmm4, xmm7      vy * days-per-year
+      ;;     vmulsd    xmm10, xmm5, xmm7     vz * days-per-year
+      ;;     vunpcklpd xmm7, xmm8, xmm9      a TWO-lane gather
+      ;;     vmovupd   [rbx+rdx*8-1]{k1}, ymm7    storing THREE lanes from it
+      ;;
+      ;; and vz went in as whatever the 128-bit `vunpcklpd` left up there,
+      ;; which is zero. The initial energy came out wrong in the fifth digit.
+      ;;
+      ;; RETURNS WHETHER IT NARROWED ANYTHING, because it cannot run once. The
+      ;; kind it keys off is not settled after `classify-all!`: `demote!` and
+      ;; `demote-unpaired!` both turn a load or op pack into a gather, and they
+      ;; run later. So this is part of the fixpoint below rather than a step
+      ;; before it, and it terminates because every narrowing strictly reduces
+      ;; the total arity of `packs`.
+      (define (narrow!)
+        (let round ((ever #f))
+          (let ((changed #f))
+            (for-each
+             (lambda (p)
+               (when (and (> (length p) 2)
+                          (not (memq (hashtable-ref kind p #f) '(load op))))
+                 (let ((short (list (car p) (cadr p))))
+                   (set! packs (cons short (remq p packs)))
+                   (hashtable-set! kind short 'pending)
+                   (hashtable-delete! kind p)
+                   (set! store-packs
+                         (map (lambda (sp)
+                                (if (and (> (length sp) 2)
+                                         (eq? (cadddr (store-form
+                                                       (vector-ref vec (car sp))))
+                                              (car p)))
+                                    (list (car sp) (cadr sp))
+                                    sp))
+                              store-packs))
+                   (set! changed #t))))
+             packs)
+            (cond (changed (classify-all!) (round #t))
+                  (else ever)))))
 
       (define (classify-all!)
         (let round ()
@@ -350,9 +491,11 @@
       ;; members either name the SAME value or are packed together. Demoted to a
       ;; gather otherwise, which assembles both scalars and reads them
       ;; untouched. A fixpoint, because demoting one pack can unpair another.
-      (define (paired? x y)
-        (or (eq? x y)
-            (exists (lambda (q) (and (eq? (pack-lo q) x) (eq? (pack-hi q) y))) packs)))
+      ;; The lanes of one operand position either are all the same value -- a
+      ;; splat -- or are exactly the members of some pack, in order.
+      (define (lanes-together? xs)
+        (or (for-all (lambda (x) (eq? x (car xs))) (cdr xs))
+            (exists (lambda (q) (equal? q xs)) packs)))
 
       (define (demote-unpaired!)
         (let round ()
@@ -360,11 +503,14 @@
             (for-each
              (lambda (p)
                (when (eq? 'op (hashtable-ref kind p #f))
-                 (let ((a (def-of (pack-lo p))) (b (def-of (pack-hi p))))
-                   (when (and a b
-                              (not (and (paired? (cadddr a) (cadddr b))
-                                        (paired? (car (cddddr a))
-                                                 (car (cddddr b))))))
+                 (let ((ds (map def-of p)))
+                   (when (and (for-all values ds) (for-all packable-op? ds)
+                              (not (for-all
+                                    (lambda (pos)
+                                      (lanes-together?
+                                       (map (lambda (d) (list-ref (op-operands d) pos))
+                                            ds)))
+                                    '(0 1))))
                      (hashtable-set! kind p 'gather)
                      (set! changed #t)))))
              packs)
@@ -398,14 +544,16 @@
           (for-each
            (lambda (p)
              (when (eq? 'op (hashtable-ref kind p #f))
-               (let ((a (def-of (pack-lo p))) (b (def-of (pack-hi p))))
-                 (when (and a b)
-                   (for-each (lambda (x y)
-                               (when (and (eq? x y) (not (hashtable-ref seen x #f)))
-                                 (hashtable-set! seen x #t)
-                                 (set! m (+ m 1))))
-                             (list (cadddr a) (car (cddddr a)))
-                             (list (cadddr b) (car (cddddr b))))))))
+               (let ((ds (map def-of p)))
+                 (when (and (for-all values ds) (for-all packable-op? ds))
+                   (for-each
+                    (lambda (pos)
+                      (let ((xs (map (lambda (d) (list-ref (op-operands d) pos)) ds)))
+                        (when (and (for-all (lambda (x) (eq? x (car xs))) (cdr xs))
+                                   (not (hashtable-ref seen (car xs) #f)))
+                          (hashtable-set! seen (car xs) #t)
+                          (set! m (+ m 1)))))
+                    '(0 1))))))
            packs)
           m))
 
@@ -415,35 +563,52 @@
       ;; than a block left alone.
       ;; One extract per pack whose HIGH member is read as a scalar. The low
       ;; member's scalar uses are free.
+      ;; LANE 0 IS FREE, every other lane may cost one. A packed register's low
+      ;; double IS the scalar, so a scalar use of lane 0 is a rewrite; lanes 1
+      ;; and 2 each need an instruction, once, however many scalar uses they
+      ;; have.
       (define (extract-count)
-        (length (filter (lambda (p)
-                          (and (memq (hashtable-ref kind p #f) '(load op))
-                               (pair? (scalar-uses (pack-hi p)))))
-                        packs)))
+        (fold-left
+         (lambda (acc p)
+           (if (memq (hashtable-ref kind p #f) '(load op))
+               (+ acc (length (filter (lambda (m) (pair? (scalar-uses m))) (cdr p))))
+               acc))
+         0 packs))
 
+      ;; A PACK OF k SAVES k-1, not one. k scalar instructions become one, so a
+      ;; triple is worth twice what a pair is -- which is the whole reason for
+      ;; the third lane and has to be in the arithmetic, not just the comment.
+      ;; A gather adds one, and so does each splat and each extract.
       (define (profitable?)
-        (let* ((gathers (length (filter (lambda (p) (eq? 'gather (hashtable-ref kind p #f)))
-                                        packs)))
-               (savings (+ (- (length packs) gathers) (length store-packs)))
-               (costs (+ gathers (splat-count) (extract-count))))
+        (let* ((gathers (filter (lambda (p) (eq? 'gather (hashtable-ref kind p #f)))
+                                packs))
+               (real (filter (lambda (p)
+                               (memq (hashtable-ref kind p #f) '(load op)))
+                             packs))
+               (savings (+ (fold-left (lambda (a p) (+ a (- (length p) 1))) 0 real)
+                           (fold-left (lambda (a sp) (+ a (- (length sp) 1))) 0
+                                      store-packs)))
+               (costs (+ (length gathers) (splat-count) (extract-count))))
           (> savings costs)))
 
       (collect-store-packs!)
       (classify-all!)
-      (demote!)
-      (demote-unpaired!)
-      (prune-unreachable!)
-      ;; Pruning can remove a pack an op pack was relying on for its operands,
-      ;; so the pairing question has to be asked again after it.
-      (demote-unpaired!)
+      ;; ONE FIXPOINT, and the order inside it is not free. Each of these can
+      ;; undo the premise of the others: demoting a pack to a gather can leave a
+      ;; triple that must narrow, narrowing re-classifies and can unpair an op
+      ;; pack above it, and pruning can remove a pack an op pack was relying on
+      ;; for its operands. Running them once in sequence leaves whichever
+      ;; happens to be last holding a stale answer -- which is exactly how a
+      ;; three-lane store came to be fed by a two-lane gather.
+      (let settle ()
+        (demote!)
+        (demote-unpaired!)
+        (prune-unreachable!)
+        (demote-unpaired!)
+        (when (narrow!) (settle)))
       (if (or (null? packs) (not (profitable?)))
           instrs
           (emit vec n packs store-packs kind consumed? classes stats))))
-
-  ;; Operands line up when both sides come from one pack, or both are the same
-  ;; scalar -- which becomes a splat, once, feeding every pack that shares it.
-  (define (lane-ok? a b paired?)
-    (or (paired? a b) (eq? a b)))
 
   ;; --- emission ---------------------------------------------------------------
 
@@ -483,7 +648,7 @@
 
   (define (emit vec n packs store-packs kind consumed? classes stats)
     (let ((name (make-eq-hashtable))
-          (splat (make-eq-hashtable))
+          (splat (make-hashtable equal-hash equal?))
           (at (make-eqv-hashtable))
           (drop (make-eqv-hashtable))
           (counter 0)
@@ -500,7 +665,7 @@
       (define (fresh p)
         (set! counter (+ counter 1))
         (string->symbol
-         (string-append "p2." (symbol->string p) "." (number->string counter))))
+         (string-append "p." (symbol->string p) "." (number->string counter))))
 
       ;; A pack is a LIST of members in lane order; `(car p)` is lane 0.
       (define (pack-lo p) (car p))
@@ -539,75 +704,108 @@
                      (else (cons (car xs) (walk (cdr xs) (+ k 1)))))))
             i))
 
+      ;; The op name for an arity. Two lanes and three lanes are DIFFERENT
+      ;; INSTRUCTIONS rather than one with a parameter -- see lang.ss -- and the
+      ;; splat is not even the same operation: `vmovddup` duplicates within each
+      ;; 128-bit half, which is (a,a,c,c) on a triple.
+      (define (arith-name lanes mach-op)
+        (string->symbol
+         (string-append "p" (number->string lanes)
+                        (cdr (assq mach-op pack-op-stem)))))
+
       (define pending '())
       (define extracts '())
-      (define (operand v)
+      ;; A SPLAT'S WIDTH IS ITS READER'S. The same scalar feeding a pair and a
+      ;; triple needs two different instructions, so the table is keyed by both.
+      (define (operand v lanes)
         (let ((p (pack-of v)))
           (cond
            (p (pack-name p))
            (else
-            (or (hashtable-ref splat v #f)
-                (let ((s (fresh v)))
-                  (hashtable-set! splat v s)
-                  (hashtable-set! classes s 'raw-f64)
-                  (set! pending (cons (list 'p2splat s 'raw-f64 v) pending))
-                  s))))))
+            (let ((key (cons v lanes)))
+              (or (hashtable-ref splat key #f)
+                  (let ((s (fresh v)))
+                    (hashtable-set! splat key s)
+                    (hashtable-set! classes s 'raw-f64)
+                    (set! pending
+                          (cons (list (if (= lanes 2) 'p2splat 'p3splat) s 'raw-f64 v)
+                                pending))
+                    s)))))))
+
+      ;; The instruction that reads lane `j` of a pack as a scalar. Lane 0 never
+      ;; reaches here -- it is free. Lane 1 is `p2hi` WHATEVER THE ARITY: a
+      ;; ymm's low 128 bits are the xmm of the same number, so the pair's
+      ;; extract reads a triple's lane 1 without knowing it is one. Only lane 2
+      ;; has an instruction of its own.
+      (define (lane-extract j)
+        (case j ((1) 'p2hi) ((2) 'p3lane2)
+          (else (error 'slp "no extract for this lane" j))))
 
       (define (plan-pack! p)
-        (let* ((lo (pack-lo p)) (hi (pack-hi p))
-               (klo (index-of lo)) (khi (index-of hi))
-               (k (max klo khi))
-               (i (vector-ref vec klo))
-               (o (vector-ref vec khi))
+        (let* ((ks (map index-of p))
+               (k (apply max ks))
+               (lanes (length p))
+               (i (vector-ref vec (car ks)))
                (kd (hashtable-ref kind p #f)))
-          ;; A GATHER assembles a pair from values that stay where they are, so
-          ;; neither member is dropped: their scalar forms are still read, which
-          ;; is the whole reason the kind exists.
+          ;; A GATHER assembles a pack from values that stay where they are, so
+          ;; no member is dropped: their scalar forms are still read, which is
+          ;; the whole reason the kind exists.
           (unless (eq? kd 'gather)
-            (hashtable-set! drop klo #t)
-            (hashtable-set! drop khi #t))
+            (for-each (lambda (kk) (hashtable-set! drop kk #t)) ks))
           (set! pending '())
           ;; LANE 0 IS FREE: a scalar use of the low member is rewritten to name
-          ;; the pack and reads the same bits. The high member costs one extract,
-          ;; once, and it must come AFTER the instruction that defines the pack
-          ;; -- splats go before their reader, extracts after theirs, and both
-          ;; for the same reason.
+          ;; the pack and reads the same bits. Every other lane costs one
+          ;; extract, once, and it must come AFTER the instruction that defines
+          ;; the pack -- splats go before their reader, extracts after theirs,
+          ;; and both for the same reason.
           (set! extracts '())
           (when (memq kd '(load op))
-            (hashtable-set! subst lo (pack-name p))
-            (when (pair? (filter (lambda (u) (not (consumed? u))) (uses-in vec n hi)))
-              (let ((x (fresh hi)))
-                (hashtable-set! classes x 'raw-f64)
-                (hashtable-set! subst hi x)
-                (set! extracts (list (list 'p2hi x 'raw-f64 (pack-name p)))))))
+            (hashtable-set! subst (car p) (pack-name p))
+            (let walk ((ms (cdr p)) (j 1))
+              (unless (null? ms)
+                (when (pair? (filter (lambda (u) (not (consumed? u)))
+                                     (uses-in vec n (car ms))))
+                  (let ((x (fresh (car ms))))
+                    (hashtable-set! classes x 'raw-f64)
+                    (hashtable-set! subst (car ms) x)
+                    (set! extracts
+                          (append extracts
+                                  (list (list (lane-extract j) x 'raw-f64
+                                              (pack-name p)))))))
+                (walk (cdr ms) (+ j 1)))))
           (let ((instr
                  (case kd
-                   ((gather) (list 'p2pack (pack-name p) 'raw-f64 lo hi))
+                   ;; A gather is only ever a pair: assembling three scalars
+                   ;; into a 256-bit register costs two instructions to save
+                   ;; two, so `narrow!` sends a triple back to a pair before it
+                   ;; can get here.
+                   ((gather) (list 'p2pack (pack-name p) 'raw-f64 (car p) (cadr p)))
                    ((load)
                     (let ((f (load-form i)))
-                      (list 'p2load (pack-name p) 'raw-f64 (caddr f) (car f) (cadr f))))
+                      (list (if (= lanes 2) 'p2load 'p3load)
+                            (pack-name p) 'raw-f64 (caddr f) (car f) (cadr f))))
                    ((op)
-                    (list (cdr (assq (car i) pack-op)) (pack-name p) 'raw-f64
-                          (operand (cadddr i)) (operand (car (cddddr i)))))
+                    (list (arith-name lanes (car i)) (pack-name p) 'raw-f64
+                          (operand (cadddr i) lanes)
+                          (operand (car (cddddr i)) lanes)))
                    (else #f))))
             (if instr
                 (begin
                   (slp-stats-instructions-set!
                    stats (+ 1 (slp-stats-instructions stats)))
                   (emit-at! k (append (reverse pending) (list instr) extracts)))
-                (begin (hashtable-delete! drop klo)
-                       (hashtable-delete! drop khi))))))
+                (for-each (lambda (kk) (hashtable-delete! drop kk)) ks)))))
 
       (define (plan-store! sp)
-        (let* ((klo (car sp)) (khi (cadr sp))
-               (k (max klo khi))
-               (i (vector-ref vec klo))
+        (let* ((k (apply max sp))
+               (lanes (length sp))
+               (i (vector-ref vec (car sp)))
                (f (store-form i)))
-          (hashtable-set! drop klo #t)
-          (hashtable-set! drop khi #t)
+          (for-each (lambda (kk) (hashtable-set! drop kk #t)) sp)
           (set! pending '())
-          (let ((instr (list 'p2store (cadr i) 'raw-f64
-                             (caddr f) (car f) (cadr f) (operand (cadddr f)))))
+          (let ((instr (list (if (= lanes 2) 'p2store 'p3store) (cadr i) 'raw-f64
+                             (caddr f) (car f) (cadr f)
+                             (operand (cadddr f) lanes))))
             (slp-stats-instructions-set!
              stats (+ 1 (slp-stats-instructions stats)))
             (emit-at! k (append (reverse pending) (list instr))))))
