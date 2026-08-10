@@ -50,27 +50,32 @@
 ;;; alone, because that is register allocation's business and this pass would
 ;;; only lengthen live ranges guessing at it.
 ;;;
-;;; ## NO COMPARISONS, and the reason is a storage class rather than taste
+;;; ## COMPARISONS FOLD TO 0 AND 1, NOT TO #f AND #t
 ;;;
-;;; Folding `(fx< 1 2)` to `(quote #t)` looks like the obvious next step and it
-;;; is a WRONG-CODE BUG. repr.ss classifies the fixnum comparisons as
-;;; `raw-word` -- a boolean-valued machine word holding 0 or 1 -- while
-;;; `datum-class` classifies the datum `#t` as `tagged`, because a Scheme
-;;; boolean is the immediate numeric.ss calls sonic-true. Those are different
-;;; representations in different register files, so the fold silently
-;;; reclassifies the value.
+;;; Folding `(fx< 1 2)` to `(quote #t)` is the obvious spelling and it is a
+;;; WRONG-CODE BUG. repr.ss classifies the fixnum comparisons `raw-word` -- a
+;;; boolean-valued machine word holding 0 or 1 -- while `datum-class`
+;;; classifies the datum `#t` as `tagged`, because a Scheme boolean is the
+;;; immediate numeric.ss calls sonic-true. Different representations, different
+;;; register files, so that fold silently reclassifies the value.
 ;;;
-;;; It does not fail where you would notice, either. Measured: nbody stopped
-;;; compiling with `(vmulsd xmm8 xmm6 rbx)` -- a float multiply reading a
-;;; VALUE-class register -- several passes downstream of the fold, because the
-;;; class change propagated through repr.ss's fixpoint into an unrelated
-;;; expression.
+;;; It does not fail where you would notice. Measured: nbody stopped compiling
+;;; with `(vmulsd xmm8 xmm6 rbx)` -- a float multiply reading a VALUE-class
+;;; register -- several passes downstream, because the class change propagated
+;;; through repr.ss's fixpoint into an unrelated expression.
 ;;;
-;;; Getting it right means folding to the raw-word 0/1 that the comparison
-;;; would have produced, and checking that every consumer of a boolean agrees
-;;; on which representation it is looking at. That is worth doing -- it unlocks
-;;; deleting the branch, which is where the cascade lives -- and it is a
-;;; separate change from this one.
+;;; So a comparison folds to the fixnum 0 or 1, which `datum-class` puts in
+;;; `raw-word` -- exactly where the comparison already was. Every consumer
+;;; downstream already expects a raw word there, because that is what `fx<`
+;;; produced before it was folded.
+;;;
+;;; WHICH MEANS THE TRUTH VALUE IS NOT SCHEME'S. In Scheme every object but
+;;; `#f` is true, so `(if 0 a b)` takes `a`. In this representation 0 IS false:
+;;; `branch-if` lowers to `cmp r, 0` and `jne`. Reading the literal back with
+;;; Scheme's rule would fold the branch the wrong way, so folded comparisons
+;;; are tracked in their own table with their boolean meaning attached, and
+;;; only that table decides a branch. A fixnum that merely happens to be 0
+;;; never does.
 
 (library (sonic fold)
   (export fold-program fold-stats fold-stats? fold-stats-folded fold-stats-branches)
@@ -85,6 +90,9 @@
   (define (fixnum-range? n) (and (exact? n) (integer? n) (<= fx-least n fx-greatest)))
 
   (define (int? d) (and (exact? d) (integer? d)))
+
+  ;; The primitives whose folded 0/1 is a TRUTH VALUE rather than a number.
+  (define (boolean-prim? pr) (and (memq pr '(fx< fx<= fx= fx>= fx>)) #t))
 
   ;; The primitives this file can evaluate, and nothing else. Flonum arithmetic
   ;; is absent on purpose -- see the header.
@@ -106,6 +114,14 @@
                (remainder (a) (b)))
               ((and (eq? pr 'fxmodulo) (arity 2) (not (zero? (b))))
                (modulo (a) (b)))
+              ;; To 0 and 1, not to #f and #t -- see the header. `boolean-prim?`
+              ;; is what tells the caller this result is a TRUTH VALUE in the
+              ;; raw-word representation rather than an ordinary fixnum.
+              ((and (eq? pr 'fx<) (arity 2)) (if (< (a) (b)) 1 0))
+              ((and (eq? pr 'fx<=) (arity 2)) (if (<= (a) (b)) 1 0))
+              ((and (eq? pr 'fx=) (arity 2)) (if (= (a) (b)) 1 0))
+              ((and (eq? pr 'fx>=) (arity 2)) (if (>= (a) (b)) 1 0))
+              ((and (eq? pr 'fx>) (arity 2)) (if (> (a) (b)) 1 0))
               (else #f))))
       ;; Wrapped so "did not fold" and a fold that produced 0 stay distinct.
       ;; The result must fit a fixnum, or the fold would invent a number the
@@ -132,15 +148,25 @@
     ;; var -> the datum it is bound to, for variables whose binding folded to a
     ;; literal. Scoped by construction: Lanf is alpha-converted, so one table
     ;; over the whole program cannot confuse two bindings of one name.
-    (let ((lits (make-eq-hashtable)))
+    (let ((lits (make-eq-hashtable))
+          (bools (make-eq-hashtable)))
 
       ;; WRAPPED for the same reason `fold-prim` is: a variable can be bound to
       ;; the datum `#f`, and an unwrapped table cannot tell that from absence.
       ;; The table stores `(datum)`; #f means "not a known literal".
       (define (lit-of x) (and (symbol? x) (hashtable-ref lits x #f)))
+      ;; Only variables bound to a FOLDED COMPARISON. A fixnum that happens to
+      ;; be 0 is not a false, and must never decide a branch.
+      (define (bool-of x) (and (symbol? x) (hashtable-ref bools x #f)))
       (define (known-val? v) (and (pair? v) #t))
       (define (unwrap v) (car v))
       (define (known? x) (known-val? (lit-of x)))
+
+      ;; Set by `SimpleExpr` when the primcall it just folded was a comparison,
+      ;; and read by the `let` that binds the result. A flag rather than a
+      ;; richer return type because `SimpleExpr` has to keep returning an
+      ;; Lanf SimpleExpr for the nanopass template.
+      (define last-was-boolean #f)
 
       (define (SimpleExpr se)
         (with-output-language (Lanf SimpleExpr)
@@ -152,6 +178,7 @@
                      (if r
                          (begin (fold-stats-folded-set!
                                  stats (+ 1 (fold-stats-folded stats)))
+                                (set! last-was-boolean (boolean-prim? pr))
                                 `(quote ,(car r)))
                          `(primcall ,pr ([,pn* ,c*] ...) ,x* ...)))
                    `(primcall ,pr ([,pn* ,c*] ...) ,x* ...)))]
@@ -162,12 +189,25 @@
         (with-output-language (Lanf Expr)
           (nanopass-case (Lanf Expr) e
             [(let ([,x ,se]) ,body)
+             (set! last-was-boolean #f)
              (let ((se1 (SimpleExpr se)))
                (nanopass-case (Lanf SimpleExpr) se1
-                 [(quote ,d) (hashtable-set! lits x (list d))]
+                 [(quote ,d)
+                  (hashtable-set! lits x (list d))
+                  (when last-was-boolean
+                    (hashtable-set! bools x (list (not (eqv? d 0)))))]
                  [else (void)])
                `(let ([,x ,se1]) ,(Expr body)))]
-            [(if ,x ,e0 ,e1) `(if ,x ,(Expr e0) ,(Expr e1))]
+            ;; A KNOWN TRUTH VALUE TAKES ITS ARM, and only a value this pass
+            ;; folded FROM A COMPARISON counts as one. The deleted arm may hold
+            ;; side effects and that is the point -- it is unreachable.
+            [(if ,x ,e0 ,e1)
+             (let ((b (bool-of x)))
+               (if b
+                   (begin (fold-stats-branches-set!
+                           stats (+ 1 (fold-stats-branches stats)))
+                          (Expr (if (unwrap b) e0 e1)))
+                   `(if ,x ,(Expr e0) ,(Expr e1))))]
             [(seq ,e0 ,e1) `(seq ,(Expr e0) ,(Expr e1))]
             [(lambda (,x* ...) ,body) `(lambda (,x* ...) ,(Expr body))]
             [(letrec ([,x* ,e*] ...) ,body)

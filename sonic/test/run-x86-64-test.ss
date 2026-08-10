@@ -399,6 +399,14 @@
 ;; `(fx* 2 3)` emitted an `imul`, and so did `(let ([i 2]) (fx* i 3))`. Asserted
 ;; on the emitted code rather than the answer, because the answer was always
 ;; right -- the instruction was simply there.
+(define (emitted src)
+  (let* ((f (string-append tmp "-fold.sps"))
+         (_ (let ((p (open-file-output-port f (file-options no-fail)
+                                            (buffer-mode block) (native-transcoder))))
+              (put-string p src) (close-port p)))
+         (c (compile-sonic f '(display newline))))
+    (filter pair? (apply append (map finalized-listing (compiled-functions c))))))
+
 (let ((n (lambda (src)
            (let* ((f (string-append tmp "-fold.sps"))
                   (_ (let ((p (open-file-output-port
@@ -444,6 +452,43 @@
 ;; div-check shape with "division check expects a divisor". That is a
 ;; pre-existing gap, unrelated to folding, and it is filed rather than fixed
 ;; inside this commit.
+
+;; A COMPARISON FOLDS TOO, AND ITS BRANCH GOES WITH IT -- but the truth value
+;; is NOT Scheme's. `fx<` produces a raw-word 0/1 (repr.ss), so the fold has to
+;; produce one too or it changes the value's storage class; and in that
+;; representation 0 is FALSE, where Scheme says every object but `#f` is true.
+;; Folding `(if 0 a b)` by Scheme's rule would take the wrong arm, so only a
+;; value folded FROM A COMPARISON is allowed to decide a branch.
+(ck! "a folded comparison deletes its compare and its branch"
+     (let ((l (emitted (string-append
+                        "(define v (make-vector 4 0))\n"
+                        "(define (main) (begin (vector-set! v 0 (if (fx< 1 2) 7 9))\n"
+                        "  (display (fx->fl (vector-ref v 0))) (newline)))\n(main)\n"))))
+       (and (= 0 (length (filter (lambda (i) (eq? (car i) 'cmp)) l)))
+            (= 0 (length (filter (lambda (i) (memq (car i) '(jl jge))) l))))))
+(run! "and it takes the arm the comparison actually selects"
+      (string-append
+       "(define v (make-vector 4 0))\n"
+       "(define (main) (begin (vector-set! v 0 (if (fx< 1 2) 7 9))\n"
+       "  (vector-set! v 1 (if (fx> 1 2) 7 9))\n"
+       "  (display (fx->fl (fx+ (vector-ref v 0) (vector-ref v 1)))) (newline)))\n(main)\n")
+      '(16.0))
+;; A FIXNUM THAT HAPPENS TO BE 0 IS NOT A FOLDED COMPARISON, so the branch
+;; STAYS -- compare and all -- and whatever the compiler decides `(if 0 ...)`
+;; means at run time is unchanged by this pass. That is the property worth
+;; pinning: folding must not quietly acquire an opinion about truth values it
+;; did not have.
+;;
+;; (Separately: this compiler treats a raw-word 0 as FALSE, where R6RS says
+;; every object but `#f` is true. That predates folding and is filed.)
+(ck! "a literal 0 is NOT treated as a folded comparison: its branch survives"
+     (let ((l (emitted (string-append
+                        "(define v (make-vector 4 0))\n"
+                        "(define (main) (let ((z 0))\n"
+                        "  (begin (vector-set! v 0 (if z 7 9))\n"
+                        "         (display (fx->fl (vector-ref v 0))) (newline))))\n"
+                        "(main)\n"))))
+       (> (length (filter (lambda (i) (eq? (car i) 'cmp)) l)) 0)))
 
 ;; A BOOLEAN LITERAL IS A SCHEME OBJECT, and the selector used to refuse one:
 ;; "only exact integer and flonum literals are selectable". `#t` and `#f` are
