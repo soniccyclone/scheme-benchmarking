@@ -93,6 +93,41 @@
 ;;; Three hypotheses have now died on this issue. Read the IR before forming a
 ;;; fourth.
 
+;;; --- FOUND IT: THE REFINEMENT HAS THE WRONG POLARITY IN A COPY ----------
+;;;
+;;; BASELINE. The else branch's write sits under the FALSE edge of the guard:
+;;;
+;;;   (sigma i.101 i.99  fx< r.94  #f      ; i < r is FALSE, so i >= r
+;;;     (sigma r.102 r.94 fx> i.101 #f     ; therefore r <= i
+;;;       ... (vector-set! v r.102 p0) ...))
+;;;
+;;; r <= i supplies an UPPER bound, which is what a bounds check needs, and the
+;;; site comes out proved why=interval.
+;;;
+;;; SPECIALIZED. The same write sits under the TRUE edge:
+;;;
+;;;   (sigma t.416 t.412 fx< r.403 #t      ; i < r is TRUE
+;;;     (sigma r.417 r.403 fx> t.416 #t    ; therefore r > i
+;;;       ... (vector-set! v r.417 p0) ...))
+;;;
+;;; r > i is a LOWER bound and nothing else. There is no upper bound anywhere
+;;; on that path, so the check cannot be discharged and is kept. One per copy.
+;;;
+;;; THAT IS THE COLLAPSE. Not a lost fact, not a missing premise, not parameter
+;;; status, not the trip count, and not a broken refinement chain -- the chain
+;;; is intact and carries a refinement of the WRONG DIRECTION.
+;;;
+;;; The program still answers correctly, so this is not a miscompilation of
+;;; control flow; the else action is not being executed on the then path. What
+;;; it means is that the copy's guard arms and the e-SSA edge polarity have
+;;; come apart, so the sigma attached to that occurrence describes the other
+;;; edge.
+;;;
+;;; NEXT: find where they come apart. specialize.ss copies the body and essa
+;;; runs afterwards over the enlarged program, so the suspects are the order of
+;;; the copy's `if` arms and whatever essa uses to decide which edge is which.
+;;; Compare the copy's `if` against the original's before assuming either.
+
 (define v (make-vector 8 0))
 (define (rot r)
   (let ((p0 (vector-ref v 0)))
