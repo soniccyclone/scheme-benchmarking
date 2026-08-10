@@ -74,8 +74,25 @@
     (and (eq? sc 'tagged) (memq natural '(raw-word raw-f64))))
 
   ;; Initializers that reach `tagged` for free, or that are not values at all.
+  ;;
+  ;; A FLONUM LITERAL IS NOT FREE, and this used to say every literal was. The
+  ;; reasoning in the header holds only for a fixnum: its tagged machine word is
+  ;; the value shifted left 3, so the constant is materialised already shifted
+  ;; and costs nothing. A tagged DOUBLE is a pointer to a heap box and has no
+  ;; immediate encoding at all, so leaving it alone hands the selector a tagged
+  ;; flonum literal it cannot represent -- "only exact integer and flonum
+  ;; literals are selectable", raised on the literal itself.
+  ;;
+  ;; Nothing reached this before. A flonum literal is only ever REQUIRED tagged
+  ;; by something that stores Scheme objects, and until `prim-arg-classes`
+  ;; declared `(cons tagged tagged)` there was no such requirement a literal
+  ;; could land on: `(cons 1.5 2.5)` is the first program to ask.
   (define (free-form? se)
-    (and (pair? se) (memq (car se) '(quote lambda))))
+    (and (pair? se)
+         (or (eq? (car se) 'lambda)
+             (and (eq? (car se) 'quote)
+                  (pair? (cdr se))
+                  (not (flonum? (cadr se)))))))
 
   ;; `form` is an Lrepr `top` datum. `classes` is the vreg -> class table lower.ss
   ;; will read, and it is MUTATED here: the raw temporaries this pass introduces

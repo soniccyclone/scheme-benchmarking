@@ -224,6 +224,60 @@
       (add rax (imm ,(+ heap-header-bytes heap-tag)))
       (ret)
 
+      ;; ---- pairs ----
+      ;;
+      ;; `(cons 1 2)` used to die in resolve-labels with "undefined label
+      ;; %cons". lower.ss has mapped `cons`, `car` and `cdr` onto these names
+      ;; for as long as the primitive table has existed; nothing defined them,
+      ;; so a Scheme with no pairs failed at LINK rather than at parse, which is
+      ;; loud but late.
+      ;;
+      ;; ARGUMENTS ARRIVE TAGGED, and that is a guarantee rather than a hope:
+      ;; repr.ss's `prim-arg-classes` declares `(cons tagged tagged)` and pushes
+      ;; the requirement back to whatever produces each field, so convert.ss
+      ;; retags a raw word at its definition. Without that declaration this
+      ;; routine would be storing whatever representation the program happened
+      ;; to have -- which is the hazard `%make-vector`'s fill still carries and
+      ;; the reason the declaration had to come first.
+      ;;
+      ;; Both fields are SCANNED by the collector, so both must be objects. A
+      ;; raw machine integer in either one is an address to chase, which is
+      ;; D21's failure mode rather than a wrong number.
+      ;;
+      ;; Layout is every other heap object's: type, length, payload. The length
+      ;; is 2 because the collector's scan walks a header and a field count, and
+      ;; a pair's two fields are exactly what it must follow.
+      %cons
+      (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      (mov rsi (imm ,heap-type-pair))
+      (mov (mem rax #f 1 0) rsi)                 ; [raw+0] = type
+      (mov rsi (imm 2))
+      (mov (mem rax #f 1 8) rsi)                 ; [raw+8] = field count
+      (mov (mem rax #f 1 ,heap-header-bytes) r8)         ; car, first tagged arg
+      (mov (mem rax #f 1 ,(+ heap-header-bytes 8)) r9)   ; cdr, second
+      (lea rsi (mem rax #f 1 ,(+ heap-header-bytes 16)))
+      (mov ,(abs-mem heap-pointer-cell) rsi)
+      (add rax (imm ,(+ heap-header-bytes heap-tag)))
+      (ret)
+
+      ;; THE TAG COMES OFF IN THE DISPLACEMENT, not in an instruction. A tagged
+      ;; pointer is `raw + heap-header-bytes + heap-tag`, so the car sits at
+      ;; `-heap-tag` from it and the cdr eight bytes further on -- the same
+      ;; trick every vector access here uses, and the reason a load's
+      ;; displacement is one constant rather than a subtract and a load.
+      ;;
+      ;; No type check: lang.ss gives `car` and `cdr` a `type-check` control and
+      ;; lower.ss emits it as a `chk` BEFORE the call, so by here the argument
+      ;; is known to be a pair. Repeating it would be a second opinion in the
+      ;; place least able to report anything useful.
+      %car
+      (mov rax (mem r8 #f 1 ,(- heap-tag)))
+      (ret)
+
+      %cdr
+      (mov rax (mem r8 #f 1 ,(- 8 heap-tag)))
+      (ret)
+
       ;; ---- box a flonum ----
       ;;
       ;; The double arrives in xmm0 -- the first raw-f64 argument register --

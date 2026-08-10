@@ -132,6 +132,61 @@
   ;; raw-word so the unused destination does not pull a value register.
   (define effect-prims '(flvector-set! vector-set!))
 
+  ;; --- what a primitive requires of its ARGUMENTS ----------------------------
+  ;;
+  ;; `prim-result-class` says what comes OUT. Nothing said what must go in, and
+  ;; for a primitive that lowers to a runtime call that is not a gap in an
+  ;; analysis, it is a gap in a CALLING CONVENTION: the routine is hand-written
+  ;; assembly reading a fixed register, so it has to know the representation it
+  ;; is handed. runtime.ss says so at `%make-vector`, whose fill it simply
+  ;; assumes is a raw word -- "a tagged fill would read rdx and store garbage.
+  ;; See the bead: the fix is for the compiler to declare argument classes, not
+  ;; for this file to guess."
+  ;;
+  ;; This is that declaration. A requirement here is pushed BACKWARD in the
+  ;; fixpoint exactly as a callee's parameter class is, so convert.ss inserts
+  ;; the `retag` at the definition and the routine can rely on what arrives.
+  ;;
+  ;; ONLY WHERE THE REQUIREMENT IS REAL. `cons` stores both fields into a heap
+  ;; object the collector SCANS, so a raw word in either one is a machine
+  ;; integer being followed as a pointer -- D21's failure, not a wrong answer.
+  ;; `car` and `cdr` dereference their argument, so it must be a pointer.
+  ;;
+  ;; Deliberately NOT listed: the type predicates and `eq?`. Declaring
+  ;; `fixnum?`'s argument tagged would force a boxed representation on every
+  ;; raw word anyone asks about, which costs more than the predicate does and
+  ;; is not needed until those routines exist. `make-vector`'s fill is the
+  ;; other real case and belongs here too, but changing it moves every existing
+  ;; program's codegen, so it goes with the routine that consumes it.
+  (define prim-arg-classes
+    '((cons tagged tagged)
+      (car  tagged)
+      (cdr  tagged)))
+
+  ;; --- what the RUNTIME-PROVIDED externs require --------------------------
+  ;;
+  ;; An extern's result is `tagged` because nothing here can say more, and its
+  ;; ARGUMENTS were unconstrained for the same reason -- which is wrong for the
+  ;; handful of externs this compiler itself implements. runtime.ss's `display`
+  ;; reads its double out of xmm0 unconditionally. Hand it a tagged value and
+  ;; the call places that value in a VALUE register, xmm0 keeps whatever it last
+  ;; held, and eight bytes of a stale double are written to fd 1.
+  ;;
+  ;; That is not hypothetical and it is why this table exists. `(cons 1.5 2.5)`
+  ;; followed by `(display (car q))` printed 2.5 -- the second literal, still in
+  ;; xmm0 from boxing it -- because `car` yields a tagged pointer to a boxed
+  ;; flonum and nothing objected to passing it where a raw double was expected.
+  ;;
+  ;; THE REQUIREMENT IS VERIFIED, NOT PROPAGATED, and the difference matters.
+  ;; Pushing `raw-f64` backward the way `prim-arg-classes` pushes `tagged` would
+  ;; do nothing: the join only ever moves a class UP toward `tagged`, so a
+  ;; tagged value asked to become a double stays tagged and the program compiles
+  ;; anyway. There is no untagging direction in this compiler, on purpose. So
+  ;; the mismatch is a REFUSAL, with a message naming both classes, rather than
+  ;; a conversion.
+  (define extern-arg-classes
+    '((display raw-f64)))
+
   (define (prim-result-class pr)
     (cond ((eq? pr 'vector-ref) (vector-element-class))
           ((memq pr f64-prims) 'raw-f64)
@@ -454,6 +509,23 @@
                         (when nat (hashtable-set! naturals (car l) nat))
                         (when (note! (car l) nat) (set! changed #t))))
                     lets)
+          ;; BACKWARD, from a primitive's declared argument class to whatever
+          ;; produces it -- the same direction and the same reason as the
+          ;; call-site rule below, except that the callee here is hand-written
+          ;; assembly and cannot adapt to what it is handed. See
+          ;; `prim-arg-classes`.
+          (for-each
+           (lambda (l)
+             (let ((se (cdr l)))
+               (when (and (pair? se) (eq? (car se) 'primcall) (pair? (cddr se)))
+                 (let ((req (assq (cadr se) prim-arg-classes)))
+                   (when req
+                     (let loop ((as (cdddr se)) (cs (cdr req)))
+                       (unless (or (null? as) (null? cs))
+                         (when (and (symbol? (car as)) (note! (car as) (car cs)))
+                           (set! changed #t))
+                         (loop (cdr as) (cdr cs)))))))))
+           lets)
           (for-each (lambda (m)
                       (for-each (lambda (op)
                                   (when (note! (car m) (tail-class op))
@@ -506,6 +578,34 @@
                   ps (cdr site)))))
            sites)
           (when changed (fix (+ round 1)))))
+
+      ;; The settled classes are now checked against what the runtime externs
+      ;; actually read. See `extern-arg-classes`: this is a refusal rather than
+      ;; a conversion, because the direction it would need does not exist.
+      (for-each
+       (lambda (site)
+         (unless (hashtable-ref bodies (car site) #f)
+           (let ((req (assq (car site) extern-arg-classes)))
+             (when req
+               (let loop ((as (cdr site)) (cs (cdr req)) (i 0))
+                 (unless (or (null? as) (null? cs))
+                   (let ((ac (if (symbol? (car as))
+                                 (hashtable-ref classes (car as) #f)
+                                 (class-of-simple (car as)))))
+                     (when (and ac (not (eq? ac (car cs))))
+                       (error 'select-representations
+                              (string-append
+                               "argument " (number->string i) " of the runtime procedure `"
+                               (symbol->string (car site)) "` must be "
+                               (symbol->string (car cs)) " and this one is "
+                               (symbol->string ac)
+                               "; there is no conversion in that direction -- a tagged"
+                               " value cannot be untagged into a machine register, so"
+                               " the program is refused rather than compiled into a"
+                               " call that reads a stale register")
+                              (car site) (car as) ac (car cs))))
+                   (loop (cdr as) (cdr cs) (+ i 1))))))))
+       sites)
 
       ;; A PROCEDURE NOTHING CALLS CONSTRAINS NOTHING, so its parameters are
       ;; free rather than unknown, and the difference is the whole point.

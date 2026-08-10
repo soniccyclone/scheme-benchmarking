@@ -702,6 +702,38 @@
     (display "       exit=") (display code)
     (display " got=") (write out) (newline)))
 
+;; PAIRS, END TO END.
+;;
+;; `(cons 1 2)` used to fail at LINK -- "undefined label %cons" -- because
+;; lower.ss has mapped cons/car/cdr onto runtime entry points for as long as the
+;; primitive table has existed and nothing defined them. A Scheme without pairs
+;; is a hole worth a test rather than a note.
+;;
+;; Three cases and each is a different thing being checked: nested pairs walk
+;; the cdr chain, a pair holding a VECTOR proves the fields carry real tagged
+;; pointers rather than immediates, and the fixnum fields prove repr.ss's
+;; `prim-arg-classes` retagged them at their definitions -- without that
+;; declaration the runtime would be storing whichever representation the
+;; program happened to have, and both fields are SCANNED by the collector.
+(let-values (((code out)
+              (compile-and-run
+               (string-append
+                "(define p (cons 1 (cons 2 (cons 3 4))))\n"
+                "(define v (make-vector 3 7))\n"
+                "(define r (cons v 9))\n"
+                "(display (fx->fl (car p))) (newline)\n"
+                "(display (fx->fl (car (cdr p)))) (newline)\n"
+                "(display (fx->fl (cdr (cdr (cdr p))))) (newline)\n"
+                "(display (fx->fl (vector-length (car r)))) (newline)\n"
+                "(display (fx->fl (vector-ref (car r) 2))) (newline)\n"
+                "(display (fx->fl (cdr r))) (newline)\n")
+               '(display newline))))
+  (ck! "pairs: cons, car and cdr, nested and holding a vector"
+       (and (zero? code) (equal? out '(1.0 2.0 4.0 3.0 7.0 9.0))))
+  (unless (and (zero? code) (equal? out '(1.0 2.0 4.0 3.0 7.0 9.0)))
+    (display "       exit=") (display code)
+    (display " got=") (write out) (newline)))
+
 ;; THE BENCHMARK ITSELF, as far as it currently gets.
 ;;
 ;; nbody's initial energy is the first oracle check in docs/METHOD.md, and it
