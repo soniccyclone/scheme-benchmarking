@@ -134,6 +134,47 @@
 ;;; broken refinement chain, and edge polarity. The two that survived longest
 ;;; were the ones I did not check against the specific site.
 
+;;; --- THE INTERVALS AT THE CHECK, WHICH IS WHAT SHOULD HAVE BEEN READ FIRST
+;;;
+;;; Printed from bounds-ok? itself, final fixpoint round, both runs:
+;;;
+;;;   baseline      t.7.21   [1, 7]      proved      via the interval rule
+;;;                 t.4.1.52 [0, 0]      proved
+;;;                 r%1.116  [-inf,+inf] KEPT
+;;;
+;;;   specialized   t.7.323  [6, 6]      proved
+;;;                 r%1.362  [-inf, 4]   KEPT
+;;;                 r%1.390  [-inf, 2]   KEPT
+;;;                 t.228    bottom      KEPT
+;;;
+;;; TWO THINGS THIS SETTLES.
+;;;
+;;; 1. THE FAILING BOUND IS THE LOWER ONE, not the upper. Every surviving check
+;;;    has -inf below. `iv-within?` wants the index inside [0, len), so -inf
+;;;    fails it however good the upper bound is -- and the copies often have a
+;;;    perfectly good upper bound, [-inf, 2] and [-inf, 4]. Nothing establishes
+;;;    that r is non-negative. Every hypothesis on this issue so far, mine and
+;;;    the file's, was about the UPPER bound. All of them were looking at the
+;;;    wrong end of the interval.
+;;;
+;;; 2. THE BASELINE KEEPS SOME TOO. r%1.116 is kept with [-inf,+inf] and the
+;;;    baseline still emits ZERO bounds checks in the binary. So a kept verdict
+;;;    here does not imply an emitted check: something after elision removes
+;;;    them, and with specialization on there are simply more copies for that
+;;;    something to miss. Any future count taken from elide's verdicts rather
+;;;    than from the emitted labels is measuring the wrong thing -- as several
+;;;    counts on this issue did.
+;;;
+;;; AND ONE FREE OBSERVATION: `t.228` is kept with a BOTTOM interval. Bottom
+;;; means the site cannot be reached, so the check is unnecessary on any path.
+;;; elide has no rule for it. That is a small, separable improvement and it is
+;;; not what this issue is about.
+;;;
+;;; NEXT: find what gives the baseline's r its non-negative lower bound and why
+;;; the copies lose it. `drive` starts r at 1 and only increments, so r >= 1 is
+;;; true and derivable; the question is which mechanism carries it and whether
+;;; the copies break it or merely outnumber it.
+
 (define v (make-vector 8 0))
 (define (rot r)
   (let ((p0 (vector-ref v 0)))
