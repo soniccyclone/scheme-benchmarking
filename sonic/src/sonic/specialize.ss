@@ -107,10 +107,31 @@
   ;;    loop and 160 when the position loop is unrolled into `advance!`. That
   ;;    is backwards -- a constant index into a vector of known length is the
   ;;    easiest case there is -- so something the copies carry is not what
-  ;;    elide.ss needs. The premises attached by `declare` and the length facts
-  ;;    shapes.ss propagates across the call are the first suspects, because
-  ;;    `freshen` renames binders and a premise naming an old binder is a
-  ;;    premise about nothing.
+  ;;    elide.ss needs.
+  ;;
+  ;;    THE FIRST SUSPECT IS REFUTED. It was that `freshen` renames binders
+  ;;    while a `declare` premise still names the old one, making it a premise
+  ;;    about nothing. It does not: inline.ss's `freshen` maps `declare`'s
+  ;;    names through the substitution, and `policy` beside it for the same
+  ;;    reason. Whatever the copies lose, it is not that.
+  ;;
+  ;;    WHAT IS MEASURED, re-taken after qaq.13 landed. fannkuch goes 0 -> 79
+  ;;    surviving bounds checks and nbody 0 -> 97, and the count scales with
+  ;;    the growth budget rather than sitting on a few bad copies: 2, 19, 47,
+  ;;    79 checks at budgets 1, 2, 3, 4. So the loss is per-copy and general,
+  ;;    not a handful of unreachable tails.
+  ;;
+  ;;    AND THE LOOP IT UNROLLS IS THE TELL. On fannkuch every copy is of
+  ;;    `shift`, `rotate`'s inner loop, which takes exactly one parameter --
+  ;;    `i`, a literal 0 -- while its bound `r` is FREE and symbolic. Every
+  ;;    argument is therefore a literal, so this pass fires; and the guard
+  ;;    `(fx< i r)` can never fold, so nothing stops it. It unrolls past the
+  ;;    real trip count into copies that index perm1[11] and perm1[12] on an
+  ;;    eleven-element vector -- unreachable, and unprovably so.
+  ;;
+  ;;    That inverts the fix order recorded below. A trip count is not a
+  ;;    refinement to add after the elision is repaired; the absence of one is
+  ;;    why this pass unrolls a loop it cannot bound.
   ;;
   ;; 2. THE PAIR NEST DOES NOT UNROLL, which is the one that matters --
   ;;    `inner%24` survives with its `sqrtsd`. The outer loop's copies each
@@ -123,6 +144,13 @@
   ;; and the pair nest -- 10 bodies, two `imul`s each, the entire point -- did
   ;; not. Fix (1) before touching (2): the elision regression is most of the
   ;; cost and it would sink the transformation even after (2) worked.
+  ;;
+  ;; STILL THE RIGHT ORDER, for a different reason than it was written with.
+  ;; (1) is not a premise-plumbing bug to be found and patched -- see above --
+  ;; and the part of it now understood is that this pass copies a loop whose
+  ;; trip count it never established. qaq.23 is where that gets fixed, and the
+  ;; transformation is measured at 8.4% of fannkuch's cycles (LEDGER D43), so
+  ;; it is worth the work once it stops manufacturing checks.
   (define specialize-enabled? (make-parameter #f))
 
   ;; The most a single loop body may be, in Lanf nodes, before this refuses to
