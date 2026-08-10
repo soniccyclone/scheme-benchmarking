@@ -176,6 +176,21 @@
   (define (parameter-classes form)
     (let-values (((c n b) (parameter-classes/full form))) c))
 
+  ;; Every distinct symbol in the datum. An OVER-count of the variables the
+  ;; fixpoint can classify -- primitive names, check names and labels are all
+  ;; symbols too -- and over-counting is the safe direction for a bound.
+  (define (distinct-names form)
+    (let ((seen (make-eq-hashtable)) (n 0))
+      (let walk ((x form))
+        (cond ((symbol? x)
+               (unless (hashtable-ref seen x #f)
+                 (hashtable-set! seen x #t)
+                 (set! n (+ n 1))))
+              ((pair? x) (walk (car x)) (walk (cdr x)))
+              ((vector? x) (vector-for-each walk x))
+              (else (void))))
+      n))
+
   (define (parameter-classes/full form)
     (let ((classes (make-eq-hashtable))     ; vreg -> class
           (naturals (make-eq-hashtable))    ; vreg -> class of its initializer
@@ -185,7 +200,13 @@
           (lets '())                        ; (x . simple-expr)
           (merges '())                      ; (x . (expr ...)) from phi/sigma
           (booleans (make-eq-hashtable))    ; raw words that hold 0/1, not a fixnum
-          (sites '()))                      ; (name . (arg ...))
+          (sites '())                       ; (name . (arg ...))
+          ;; An upper bound on the variables this fixpoint can classify. See
+          ;; the note on the ceiling below: it decides how many rounds are
+          ;; possible, so it is computed from the program and not chosen.
+          (names (distinct-names form)))
+      ;; 2N productive rounds, plus one to observe that nothing changed.
+      (define ceiling (+ 2 (* 2 names)))
 
       ;; Merging two classes.
       ;;
@@ -386,23 +407,45 @@
       ;; argument in position i IS the parameter in position i, and a single
       ;; pass would ask for a class still being computed. Classes are only ever
       ;; joined upward, and the lattice has three points, so it settles.
-      ;; BOUNDED, like every other fixpoint in this compiler.
+      ;; BOUNDED, like every other fixpoint in this compiler -- and bounded by
+      ;; the PROGRAM rather than by a constant.
       ;;
-      ;; The termination argument is real -- classes only ever join upward
-      ;; through a three-point lattice, so each round either adds information or
-      ;; stops -- but an argument is not a guard. `resolve-parallel-copy` had an
-      ;; equally real argument, with an unstated precondition, and when that
+      ;; The termination argument is real: classes only ever join upward through
+      ;; a three-point lattice, so each round either adds information or stops.
+      ;; An argument is not a guard, though. `resolve-parallel-copy` had an
+      ;; equally real one, with an unstated precondition, and when that
       ;; precondition broke it consed until a single process held 31GB and the
-      ;; OOM killer took the machine.
+      ;; OOM killer took the machine three times in a session. A pass that
+      ;; cannot make progress must FAIL.
       ;;
-      ;; A pass that cannot make progress must FAIL. The ceiling is generous
-      ;; enough that only a genuinely stuck fixpoint reaches it, and it names
-      ;; itself so the next reader knows which pass to look at.
+      ;; THE CEILING WAS 200 AND THAT WAS A SCALE LIMIT WEARING A
+      ;; STUCK-DETECTOR'S LABEL. Information propagates one EDGE per round --
+      ;; a call site pushes its argument's class to a parameter, the next round
+      ;; pushes that parameter's class onward -- so a program with a longer
+      ;; dependency chain needs more rounds whether or not anything is stuck. A
+      ;; fully unrolled nbody (qaq.7.19) reaches 201 legitimately and was told
+      ;; it had found a bug in this pass.
+      ;;
+      ;; So the ceiling comes from the termination argument instead of from a
+      ;; guess. Every round that changes anything raises at least one variable's
+      ;; class, and the lattice is three points, so a variable can be raised at
+      ;; most twice: 2N productive rounds for N variables, plus one to observe
+      ;; that nothing changed. `distinct-names` over-counts -- it includes
+      ;; primitive names and labels -- which is the safe direction for a bound.
+      ;;
+      ;; The guarantee is unchanged: this still cannot run forever, and it still
+      ;; fails rather than spinning. What changed is that the number now scales
+      ;; with the thing it is bounding, and the message says which of the two
+      ;; things went wrong.
       (let fix ((round 0))
-        (when (> round 200)
+        (when (> round ceiling)
           (error 'select-representations
-                 "storage-class fixpoint did not settle; this is a bug in the pass, not in the program"
-                 round))
+                 (string-append
+                  "storage-class fixpoint did not settle in " (number->string ceiling)
+                  " rounds for a program with " (number->string names)
+                  " names; the bound is 2 names + 2, so this is a bug in the pass"
+                  " rather than a program too large")
+                 round ceiling names))
         (let ((changed #f))
           (for-each (lambda (l)
                       (let ((nat (class-of-simple (cdr l))))
