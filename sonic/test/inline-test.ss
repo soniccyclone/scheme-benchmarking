@@ -341,15 +341,27 @@
          (= 1 (count-calls (inline-program escaping-prog) 'f))
          (inline-program escaping-prog))
 
-;; Rule 5. Two tail positions means `k` would have to be copied into both.
+;; Rule 5. Two tail positions used to mean `k` would have to be copied into
+;; both, so the call was refused. It is now spliced through a JOIN: the
+;; continuation is bound once as a procedure and each arm tail-calls it.
+;;
+;;     (letrec ([join (lambda (r) k)])
+;;       (if a (tailcall join b) (tailcall join a)))
+;;
+;; `k` appears once, so nothing is duplicated; each arm ends in a tail call, so
+;; nothing grows the stack; and the join's parameter carries the result, so a
+;; `k` that mentions it still sees it.
+;;
+;; The call to `pick` is therefore GONE, which is what this asserts. Counting
+;; the join's own calls would be counting the machinery rather than the result.
 (define branchy-prog
   (with-output-language (Lanf Expr)
     `(let ([pick (lambda (u v) (if u v u))])
        (let ([r (call pick a b)])
          r))))
 
-(ok/show "a non-tail call to a two-tailed body is refused"
-         (= 1 (count-calls (inline-program branchy-prog) 'pick))
+(ok/show "a non-tail call to a two-tailed body is spliced through a join"
+         (= 0 (count-calls (inline-program branchy-prog) 'pick))
          (inline-program branchy-prog))
 
 ;; ...but in tail position there is no continuation to copy, so the same

@@ -417,6 +417,68 @@
   ;; is the correct reading: the frame the tail call was going to reuse is now
   ;; the caller's, and it still has `k` left to run.
 
+  ;; RULE 5, THE GENERAL CASE: a body with MORE than one tail position.
+  ;;
+  ;; `splice` puts the continuation after the callee's single result. With two
+  ;; results there are two places to put it, and copying `k` into both is code
+  ;; duplication -- which is why this was refused rather than solved.
+  ;;
+  ;; The answer is the one the IR already uses elsewhere: bind `k` ONCE as a
+  ;; join procedure taking the result, and have every tail position call it.
+  ;;
+  ;;     (letrec ([join (lambda (r) k)])
+  ;;       ... (let ([t <tail>]) (tailcall join t)) ...)
+  ;;
+  ;; `k` appears exactly once, so nothing is duplicated; each arm ends in a
+  ;; tail call, so nothing grows the stack; and `r` is the join's parameter, so
+  ;; a `k` that mentions the call's result still sees it.
+  ;;
+  ;; WHY THIS BECAME POSSIBLE ONLY NOW. The join is a letrec-bound lambda whose
+  ;; parameter takes its storage class from its call sites, and until qaq.23
+  ;; that propagation ran before the step that defaults an uncalled procedure's
+  ;; parameters -- so a class arriving from the default could never travel on.
+  ;; The same defect blocked the peel. See LEDGER D50.
+  ;;
+  ;; MEASURED at 2.2% of fannkuch's cycles, and only after the peel exists:
+  ;; before it, this rule refuses nothing at all on either benchmark, because
+  ;; nothing in them has a multi-tail body at a non-tail call site. An unrolled
+  ;; body is a chain of nested ifs, which is exactly that shape.
+  (define (redirect-tails e j)
+    (with-output-language (Lanf Expr)
+      (nanopass-case (Lanf Expr) e
+        [(if ,x ,e0 ,e1) `(if ,x ,(redirect-tails e0 j) ,(redirect-tails e1 j))]
+        [(seq ,e0 ,e1) `(seq ,e0 ,(redirect-tails e1 j))]
+        [(let ([,x ,se]) ,body) `(let ([,x ,se]) ,(redirect-tails body j))]
+        [(letrec ([,x* ,e*] ...) ,body)
+         `(letrec ([,x* ,e*] ...) ,(redirect-tails body j))]
+        [(declare ([,x* ,prem*] ...) ,body)
+         `(declare ([,x* ,prem*] ...) ,(redirect-tails body j))]
+        [(declare-distinct (,x* ...) ,body)
+         `(declare-distinct (,x* ...) ,(redirect-tails body j))]
+        [(policy ([,pn* ,b*] ...) ,body)
+         `(policy ([,pn* ,b*] ...) ,(redirect-tails body j))]
+        ;; A tail CALL becomes an ordinary call whose result is handed to the
+        ;; join, exactly as `splice` does for the single-tail case.
+        [(tailcall ,x ,x* ...)
+         (let ([t (fresh 't)])
+           (let ([c (with-output-language (Lanf SimpleExpr) `(call ,x ,x* ...))])
+             `(let ([,t ,c]) (tailcall ,j ,t))))]
+        [,x `(tailcall ,j ,x)]
+        [(quote ,d)
+         (let ([t (fresh 't)])
+           `(let ([,t (quote ,d)]) (tailcall ,j ,t)))]
+        [(lambda (,x* ...) ,body)
+         (let ([t (fresh 't)])
+           (let ([l (with-output-language (Lanf SimpleExpr) `(lambda (,x* ...) ,body))])
+             `(let ([,t ,l]) (tailcall ,j ,t))))]
+        [else e])))
+
+  (define (splice-join b r k)
+    (with-output-language (Lanf Expr)
+      (let ([j (fresh 'join)])
+        `(letrec ([,j (lambda (,r) ,k)])
+           ,(redirect-tails b j)))))
+
   (define (splice b r k)
     (with-output-language (Lanf Expr)
       (nanopass-case (Lanf Expr) b
@@ -541,6 +603,9 @@
                  (cond [(and b (= 1 (tail-count b)))
                         (set! report (cons x report))
                         (splice b r k)]
+                       [(and b (> (tail-count b) 1))
+                        (set! report (cons x report))
+                        (splice-join b r k)]
                        [else (set! report saved) #f])))]
             [else #f]))
 

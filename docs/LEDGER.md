@@ -1398,3 +1398,48 @@ needs the trip count this issue was originally filed for, and D43's probe says
 the fully-unrolled form reaches 1.196x with the call still in place and 1.176x
 without it. So the remaining unroll work is worth about two more points, and
 rule 5 (qaq.7.21) is worth 2.2 of them.
+
+## D51 -- rule 5 built, and the 2.2% I predicted for it does not exist
+
+inline.ss's rule 5 is implemented. A callee whose body has more than one tail
+position is no longer refused at a non-tail call site; the continuation is
+bound once as a join procedure and every tail position calls it:
+
+    (letrec ([join (lambda (r) k)])
+      (if a (tailcall join b) (tailcall join a)))
+
+`k` appears once so nothing is duplicated, each arm ends in a tail call so
+nothing grows the stack, and the join's parameter carries the result. 54 suites
+green, both benchmarks bit-exact.
+
+IT IS WORTH NOTHING, AND MY REASON FOR EXPECTING OTHERWISE WAS WRONG.
+fannkuch's instruction count is identical to the digit -- 27,615,516,631
+against 27,615,516,613, a difference of eighteen out of twenty-seven billion,
+which is process startup -- and the cycles sit inside the run-to-run band.
+
+D48's addendum claimed this rule's ceiling was 0 before the peel and 2.2%
+after it, on the strength of a hand-spliced probe. The error is in what that
+probe spliced. It removed the call between count-flips and a FULLY UNROLLED
+flip-prefix -- a body with no loop in it at all, hence many tail positions,
+hence rule 5's shape. The shipped peel does not produce that body. It peels
+copies and leaves the residual loop, so the call that survives is to a
+RECURSIVE loop, and recursion is refused by rule 4, which is a different rule
+with a different and deliberate reason.
+
+So the 2.2% belongs to a program the compiler does not emit. Rule 5 is not what
+stands between us and it; rule 4 is, and rule 4's refusal of recursion is the
+termination argument for the whole pass.
+
+KEPT ANYWAY, on the qaq.26 test rather than the qaq.24 one: would this be worth
+having if it never appeared in a measurement? Rule 5 is a documented capability
+gap -- `(let ([r (f x)]) k)` where `f` ends in a conditional is a shape ordinary
+Scheme produces constantly, and both benchmarks happen to avoid it. That is a
+fact about two programs, not about the language. The qaq.24 compare-swap was
+reverted because it was justified ONLY by a performance number that evaporated;
+this is justified by the gap, and the number was a bonus I should not have
+predicted.
+
+THE LESSON, and it is the same one D48 taught in the other direction: a probe
+measures the program you wrote, not the program the compiler will produce. D43's
+unroll probe predicted the peel correctly because the compiler can produce that
+shape. This one did not, because it cannot.
