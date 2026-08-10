@@ -87,6 +87,11 @@
   (import (chezscheme) (nanopass) (sonic lang)
           (only (sonic inline) freshen expr-size))
 
+  ;; Copy names must be unique across ROUNDS, not merely within one. See
+  ;; `copy-name`: a per-call counter collided round two's first copy with round
+  ;; one's, and both were in the program at once.
+  (define copy-counter 0)
+
   (define-record-type (specialize-stats make-specialize-stats specialize-stats?)
     (fields (mutable specialized) (mutable names)))
 
@@ -233,11 +238,29 @@
       (define pending '())        ; (name original args) awaiting a binding
       (define copies-made 0)
 
-      (define counter 0)
+      ;; `counter` is MODULE-LEVEL, and that is the whole of a real bug.
+      ;;
+      ;; It used to be defined here, inside the per-call state, so it restarted
+      ;; at zero on every round. `unroll-fully` calls this pass repeatedly, so
+      ;; round two minted `loop%66@1` for its first copy -- the name round one
+      ;; had already given a copy that was still in the program. Two letrec
+      ;; bindings then shared one name, and the reference from the new copy's
+      ;; body resolved to whichever the later passes saw first.
+      ;;
+      ;; That is what produced the ring the guard below catches: `loop%66@1`
+      ;; appearing to tail-call `loop%66@1`. It was never a copy calling itself;
+      ;; it was two different copies wearing one name. Round one alone is clean
+      ;; -- `loop%66 => loop%66` and `loop%66@1 => loop%66`, exactly the chain
+      ;; this pass is supposed to build -- and the collision arrives with the
+      ;; second round.
+      ;;
+      ;; Nothing here may reset it. A name minted in any round has to stay
+      ;; distinct from every name minted in every other, because they all end up
+      ;; in the same program.
       (define (copy-name f)
-        (set! counter (+ counter 1))
+        (set! copy-counter (+ copy-counter 1))
         (string->symbol (string-append (symbol->string f) "@"
-                                       (number->string counter))))
+                                       (number->string copy-counter))))
 
       (define (eligible? f x*)
         (let ((p (hashtable-ref loops f #f)))
@@ -273,10 +296,10 @@
                ;; are two bindings and every pass after this assumes names are
                ;; unique program-wide.
                (fresh-ps (map (lambda (q)
-                                (set! counter (+ counter 1))
+                                (set! copy-counter (+ copy-counter 1))
                                 (string->symbol
                                  (string-append (symbol->string q) "."
-                                                (number->string counter))))
+                                                (number->string copy-counter))))
                               params))
                (b (freshen (cdr p) (map cons params fresh-ps)))
                (vals (map (lambda (a) (car (hashtable-ref lits a '(#f)))) args)))

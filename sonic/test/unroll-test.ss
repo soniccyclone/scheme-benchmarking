@@ -185,30 +185,17 @@
 ;; every edge is a tail call, so a ring of them is an infinite loop with no
 ;; stack growth to notice it by.
 ;;
-;; specialize.ss builds one today. Turning `specialize-enabled?` on and
-;; compiling nbody produces a copy whose body tail-calls itself, and the
-;; compiler used to notice only three passes later, as repr.ss failing to give
-;; a binding a storage class -- because a result class computed round a ring
-;; never resolves. Had the class been computable it would have compiled and
-;; hung.
+;; specialize.ss built one, and the cause was a name collision rather than
+;; anything about copying: `copy-name`'s counter lived in the per-call state and
+;; restarted at zero every round, so round two minted `loop%66@1` for its first
+;; copy -- a name round one had already given to a copy still in the program.
+;; Two letrec bindings shared one name and the graph appeared to close on
+;; itself. The counter is module-level now.
 ;;
-;; So this asserts the GUARD, not the fix: that the pass refuses rather than
-;; emitting the ring. When the underlying bug is fixed this test is what says
-;; so -- it stops passing because the error stops being raised, and that is the
-;; signal to replace it with an assertion about the unrolled output.
-(define (says-tail-calls? msg)
-  (let ((n (string-length msg)))
-    (let scan ((i 0))
-      (cond ((> (+ i 11) n) #f)
-            ((string=? (substring msg i (+ i 11)) "TAIL-CALLS ") #t)
-            (else (scan (+ i 1)))))))
-
-;; N BAKED, because that is what lets folding reach the cycle. With
-;; `(command-line)` in the way N is never a literal, nothing specialises far
-;; enough, and the ring does not form -- so a test against the shipped source
-;; would pass while the bug sat there. measure-sonic.sh rewrites the same four
-;; lines for its own reasons, and asserts the shape the same way: if the
-;; preamble is reworded, this fails loudly rather than silently testing nothing.
+;; This asserts the OUTCOME, not the guard: full unrolling compiles nbody and
+;; computes the same two energies as the rolled program, to the bit. The
+;; acyclicity check in specialize.ss stays as the thing that would catch a
+;; recurrence, and it is silent here because there is nothing to catch.
 (define baked
   (let* ((src (call-with-input-file nb
                 (lambda (p)
@@ -228,6 +215,10 @@
                      ((string=? (substring src i (+ i nold)) old) i)
                      (else (scan (+ i 1))))))
          (out "/tmp/sonic-unroll-baked.sps"))
+    ;; N BAKED, because with `(command-line)` in the way N is never a literal,
+    ;; nothing specialises far enough and none of this is exercised. The shape
+    ;; is asserted so a reworded preamble fails loudly instead of silently
+    ;; testing nothing.
     (unless at
       (error 'unroll-test
              "config-sonic.sps no longer opens N with the preamble this rewrites"))
@@ -239,15 +230,12 @@
       'replace)
     out))
 
-(define specialization-refused?
-  (guard (e (#t (and (message-condition? e)
-                     (says-tail-calls? (condition-message e)))))
-    (parameterize ((specialize-enabled? #t))
-      (compile-sonic baked nbody-externs))
-    #f))
-
-(ck! "specialization refuses to emit a cycle of copies, rather than hanging"
-     specialization-refused?)
+(let ((compiled
+       (guard (e (#t #f))
+         (parameterize ((specialize-enabled? #t))
+           (compile-sonic baked nbody-externs)))))
+  (ck! "full unrolling compiles nbody rather than emitting a ring of copies"
+       (and compiled (compiled? compiled))))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
