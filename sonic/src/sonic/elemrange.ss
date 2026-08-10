@@ -48,6 +48,29 @@
 ;;; not agree: a vector stored into a global structure has not escaped for GC
 ;;; purposes and has certainly escaped for this one.
 ;;;
+;;; ## The sharp edge, measured
+;;;
+;;; The rule is strict enough that an ordinary Scheme idiom defeats it. Binding
+;;; a global to a local for speed --
+;;;
+;;;     (define (flip-prefix k)
+;;;       (let ((p perm))                    ; perm in a VALUE position
+;;;         ... (vector-ref p i) ...))
+;;;
+;;; -- puts `perm` somewhere other than a vector operand, so it stops being
+;;; tracked and every bounds check on it returns. Measured on fannkuch at
+;;; n=11 while trying to hand-probe loop-invariant code motion: 27.161G
+;;; instructions became 35.974G, a third more, and the cycles went with it.
+;;; The answer stayed correct; the analysis simply gave up.
+;;;
+;;; That is the right trade -- the alternative is following the value through
+;;; the binding, and then through a parameter, and the soundness argument stops
+;;; being a syntactic one anybody can check. But it means a source-level
+;;; transformation that renames a tracked vector pays for it, while a pass
+;;; working below the name level -- hoisting the global cell's LOAD at Lmach,
+;;; after names are gone -- does not. Those two are easy to confuse because
+;;; they are described the same way.
+;;;
 ;;; ## The initial contents count
 ;;;
 ;;; `(make-vector 7 0)` puts a 0 in every slot before any `vector-set!` runs,
