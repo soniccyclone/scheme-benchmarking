@@ -129,6 +129,35 @@
          ;; representations this pass has no business knowing.
          ;; The same for `mul`, whose constant is the element stride: nbody
          ;; derives 3i and 3j, so the 3 is live across the whole block.
+         ;; (sub dst raw-word a k). SUBTRACTION DOES NOT COMMUTE, so only a
+         ;; constant on the RIGHT folds, and it folds by NEGATING: `a - k` is
+         ;; `a + (-k)`, which is `add-imm` and needs no `sub-imm` to exist.
+         ;;
+         ;; AND THE COST OF LEAVING IT WAS NOT THE ONE INSTRUCTION IT LOOKS
+         ;; LIKE. An unfolded constant keeps the vreg holding it LIVE, so the
+         ;; allocator gives it a register for the whole loop. peephole.ss then
+         ;; folds the use into an immediate regardless -- it runs after
+         ;; allocation -- and the `mov $1, r11` that materialised the constant
+         ;; is left with no reader and no pass after it to notice. fannkuch's
+         ;; `flip-prefix` paid exactly that, once per iteration of the hottest
+         ;; loop in the benchmark, for `j - 1`; the `i + 1` on the line above
+         ;; folded here and cost nothing.
+         ;;
+         ;; A constant too large to negate safely is refused. These are the
+         ;; operations a `chk` follows to test for overflow, and turning one
+         ;; overflow question into a different one is not a rewrite this pass
+         ;; is entitled to make.
+         ((and (pair? i) (eq? (car i) 'sub) (= (length i) 5)
+               (eq? (caddr i) 'raw-word))
+          (let* ((dst (cadr i)) (a (cadddr i)) (b (car (cddddr i)))
+                 (ka (and (symbol? a) (hashtable-ref consts a #f)))
+                 (kb (and (symbol? b) (hashtable-ref consts b #f))))
+            (cond
+             ((and ka kb) i)
+             ((and kb (< (abs kb) (expt 2 62)))
+              (addrfold-stats-folded-set! stats (+ 1 (addrfold-stats-folded stats)))
+              (list 'add-imm dst (caddr i) (- kb) a))
+             (else i))))
          ((and (pair? i) (memq (car i) '(add mul)) (= (length i) 5)
                (eq? (caddr i) 'raw-word))
           (let* ((dst (cadr i)) (a (cadddr i)) (b (car (cddddr i)))

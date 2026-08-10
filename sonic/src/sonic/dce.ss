@@ -68,8 +68,15 @@
   ;; listed here is kept, so the list being incomplete costs instructions and
   ;; never correctness -- which is the right way round for a table that a new
   ;; mach-op could be added to without anyone thinking about this file.
+  ;; `const` BELONGS HERE AND WAS MISSING, and the pass that makes it matter
+  ;; runs immediately before this one. addrfold.ss rewrites `add(v, k)` into
+  ;; `add-imm`, whose constant rides in the instruction -- which orphans the
+  ;; `(const kv raw-word k)` that used to hold it. Every such constant was
+  ;; kept. fannkuch's `flip-prefix` showed it as a `mov $0x1,%r11` that no
+  ;; instruction reads, once per iteration of the hottest loop in the
+  ;; benchmark, next to the `add $0x1` that made it redundant.
   (define pure-ops
-    '(add sub mul neg sqrt abs
+    '(const add sub mul neg sqrt abs
       cmp-lt cmp-le cmp-eq cmp-ge cmp-gt
       fcmp-lt fcmp-le fcmp-eq fcmp-ge fcmp-gt
       load load-at move vlen gref add-imm mul-imm
