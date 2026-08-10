@@ -103,6 +103,31 @@
   (ck! "and a declared raw-f64 binding is left alone"
        (eq? (const-class-of p) 'raw-f64)))
 
+;; A DIVISION CHECK READS THE DIVISOR AND NOTHING ELSE.
+;;
+;; `check-operands` had no case for it, so it fell through to "hand the check
+;; every operand the primcall had" -- two, for a quotient -- and both selectors
+;; refused with "division check expects a divisor". So `(fxquotient a 0)` did
+;; not compile at all, and the trap it was supposed to reach did not exist.
+;;
+;; Asserted here rather than end to end because integer division is not
+;; implemented on either target yet: the selector refuses `div` itself with
+;; "idiv hardwires the rdx:rax pair, which the register partition does not
+;; model". That is a separate and much larger gap, and it is filed.
+(let-values ([(prog stats)
+              (lower-program
+               '(let ([q raw-word (primcall fxquotient ([div-check checked]) a b)])
+                  q)
+               'entry)])
+  (ck! "a division check is emitted"
+       (equal? (ops prog) '(chk div)))
+  (ck! "and it carries ONE operand, the divisor, not the whole operand list"
+       (let ((chk (car (cadr (cadr (car (cadr prog)))))))
+         (and (eq? (car chk) 'chk)
+              (eq? (cadr chk) 'div-check)
+              (= (length (cddddr chk)) 1)
+              (eq? (car (cddddr chk)) 'b)))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))

@@ -189,6 +189,12 @@
       ;; (vector-ref v i) / (vector-set! v i x): index is operand 2, vector is 1
       ((bounds-check) (list (cadr srcs) (car srcs)))
       ((type-check)   (list (car srcs)))
+      ;; (fxquotient a b): the DIVISOR is operand 2, and it is the only one the
+      ;; check reads. Without this case the `else` below handed both operands
+      ;; to a rule that takes one, and both targets refused with "division
+      ;; check expects a divisor" -- so `(fxquotient 6 0)` did not compile at
+      ;; all, and the trap it was supposed to reach did not exist.
+      ((div-check)    (list (cadr srcs)))
       (else srcs)))
 
   ;; Returns two lists: instructions that must run BEFORE the operation, and
