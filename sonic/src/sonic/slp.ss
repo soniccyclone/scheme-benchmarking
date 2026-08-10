@@ -752,6 +752,12 @@
         (string->symbol
          (string-append "p" (number->string lanes)
                         (cdr (assq mach-op pack-op-stem)))))
+
+      ;; Memory ops name their width the same way arithmetic does, so a pack
+      ;; cannot end up with widened arithmetic and a narrower access.
+      (define (width-name lanes stem)
+        (string->symbol
+         (string-append "p" (number->string lanes) (symbol->string stem))))
       ;; Lane 0 is free, lane 1 is `p2hi` at any arity -- a ymm's low 128 bits
       ;; ARE the xmm of the same number -- lane 2 is the low double of the high
       ;; half, and lane 3 is the high double of it.
@@ -825,7 +831,20 @@
                    ((gather) (list 'p2pack (pack-name p) 'raw-f64 (car p) (cadr p)))
                    ((load)
                     (let ((f (load-form i)))
-                      (list (if (= lanes 2) 'p2load 'p3load)
+                      ;; THE WIDTH COMES FROM THE PACK, exactly as `arith-name`
+                      ;; takes it. Spelling it `(if (= lanes 2) ... 'p3load)`
+                      ;; sent a FOUR-lane pack to the three-lane form, whose
+                      ;; 256-bit access is predicated on k1 -- so the arithmetic
+                      ;; widened and the memory did not, and the pack paid for a
+                      ;; mask it had padding precisely to avoid.
+                      ;;
+                      ;; That is not a cosmetic mismatch. A masked store does not
+                      ;; forward to a later load, and the inner loop of nbody
+                      ;; reloads the accumulator it just stored: 128.55 store-to-
+                      ;; load forwards per step became 63.48, and the 65 lost
+                      ;; forwards cost 7.6 cycles each -- 495 of a 495-cycle
+                      ;; regression, measured. See vec-x86-64.ss's four-lane row.
+                      (list (width-name lanes 'load)
                             (pack-name p) 'raw-f64 (caddr f) (car f) (cadr f))))
                    ((op)
                     (list (arith-name lanes (car i)) (pack-name p) 'raw-f64
@@ -846,7 +865,7 @@
                (f (store-form i)))
           (for-each (lambda (kk) (hashtable-set! drop kk #t)) sp)
           (set! pending '())
-          (let ((instr (list (if (= lanes 2) 'p2store 'p3store) (cadr i) 'raw-f64
+          (let ((instr (list (width-name lanes 'store) (cadr i) 'raw-f64
                              (caddr f) (car f) (cadr f)
                              (operand (cadddr f) lanes))))
             (slp-stats-instructions-set!
