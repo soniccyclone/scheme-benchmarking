@@ -390,6 +390,59 @@ default because it protects the bit-exact oracle. Integer is 329 against 17, and
 So beating gcc on cycles requires re-opening D24. Nothing in the back end reaches it.
 
 
+### D36 --- D24 is re-opened as it was written: a variant that grants contraction
+
+D34 ends "beating gcc on cycles requires re-opening D24. Nothing in the back end reaches
+it." That was true in both halves, and the second was the more embarrassing one:
+`fp-contract` had been a fully-formed permission since D24 --- parsed by policy.ss, scoped
+lexically, carried on every flonum primcall, counted in lower.ss's report, deliberately
+excluded from veclegal's check vocabulary --- and **nothing ever acted on it**. A program
+that granted contraction got byte-identical code to one that refused it.
+
+So re-opening D24 required changing nothing about D24. Contraction stays OFF by default and
+stays a named, lexically scoped permission. `bench/nbody/config-sonic.sps` is untouched and
+stays BIT-EXACT against Chez, which is oracle check 2 and the strongest evidence this
+project has. What was added is a second variant, `config-sonic-fma.sps`, generated from the
+first so the two cannot drift in anything but the policy wrapper, whose kernels grant the
+permission. Its answers differ from the strict one in the last bit of the second energy ---
+`-0.16908760523460614` against `...620` --- which is what one rounding instead of two does,
+and is what was asked for.
+
+**The comparison was never apples to apples, and that is the part worth recording.** gcc
+contracts BY DEFAULT: `-ffp-contract=fast` is the default at every optimisation level, so
+`ref.c` under `-O3 -march=native` has been emitting `vfmadd` and `vfnmadd` since the first
+measurement in this project. Every ratio quoted here compared our twice-rounded arithmetic
+against its once-rounded arithmetic --- two different computations, one of them allowed
+fewer instructions. D24's own entry anticipated this ("it also makes the contraction delta
+measurable, which is a publishable result"); what it did not anticipate is that the
+un-contracted comparison would be the one on the record for two months.
+
+|                    | cycles/step | instructions/step | FP ops/step | integer ops/step |
+|--------------------|------------:|------------------:|------------:|-----------------:|
+| c-native           |      168.71 |               333 |         297 |               36 |
+| sonic, strict      |      189.19 |             717.5 |           - |                - |
+| sonic, contracting |      178.05 |             650.5 |         280 |              370 |
+
+**1.055.** And the FP side is past parity: 280 operations against gcc's 297, where D34
+recorded 420. That half of D34's diagnosis is closed.
+
+**CONTRACTION AND PACKING ARE NOT ALTERNATIVES, and treating them as such cost most of the
+benefit.** Fusing before packing left slp.ss nothing to pack --- it packs add, sub, mul and
+div, and a multiply-add already rewritten to `fma` is none of them --- so nbody's velocity
+updates went from `vsubpd`/`vmulpd` back to six scalar load/fma/store sequences.
+Contraction measured 4.5 cycles that way against the 15 it is worth. Packing first, and
+packing the MARKED spellings so the permission survives into the packed form, is what
+delivers both: a `vfmadd231pd` is two independent fused multiply-adds, lane by lane, each
+rounding once where the two packed instructions it replaces round twice. Same permission,
+same argument, twice over.
+
+**What is left is entirely integer**: 370 operations per step against 36. gcc's 36 is not
+tighter loop control, it is the absence of a loop --- five separate `vsqrtsd` sites in its
+`main` say it fully unrolled the ten-pair nest, so every index is a constant displacement
+and every `bi = i*3` folded. That is a structural difference and not an increment, and it
+is tracked on its own bead rather than here.
+
+
 ### D35 --- a call destroys what its callee writes, not the whole register file
 
 regalloc.ss spilled every value live across a call, and said why:
