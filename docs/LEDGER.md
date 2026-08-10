@@ -558,6 +558,30 @@ permission because the approximation loses once packed, and this refuses a
 contents domain because its ceiling is 2.8%. Both were reachable with a compiler
 switch and a benchmark. Neither would have been visible from reading the code.
 
+**ADDENDUM --- the integer packing this entry pointed at is also closed, at 5%.**
+The paragraph above ends by naming integer packing as the next candidate, on the
+grounds that an eleven-element copy is eleven iterations. `harness/profile-sonic.sh`
+now attributes cycles to functions in an executable with no symbol table, and the
+answer is that `copy-perm` is 5.13% of fannkuch and `rotate`'s shift loop is
+3.31%. Those are the only two loops such a pass would touch, so its ceiling is
+eight percent and its yield a fraction of that.
+
+The profile also explains every conversion ratio in this entry. `flip-prefix`'s
+swap loop is **51.98%** of the program, and taking its bounds checks out --- 17
+instructions a swap down to 8 --- moved the whole benchmark about two percent.
+Each unrolled iteration issues four loads and four stores, and that is the limit;
+the checks ride in the shadow of the memory operations. `count-flips` is another
+20.37%, and its loop reloads `perm[0]` immediately after `flip-prefix` stored it,
+which is a store-to-load forwarding chain once per flip.
+
+So fannkuch is memory-throughput-bound where nbody is divider-bound, and neither
+responds to instruction removal. That is the same finding twice, in two units,
+and it is why every instruction-cutting candidate measured this session came back
+between 1:3 and 1:9. The remaining open passes --- LICM, inline rule 5, the
+literal-index fold, the contents domain --- are all instruction-count
+optimisations, and each now has a measured ceiling small enough that none should
+be started for a benchmark number.
+
 
 ### D35 --- a call destroys what its callee writes, not the whole register file
 
