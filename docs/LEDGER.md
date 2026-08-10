@@ -943,8 +943,15 @@ instruction it should not:
 
 The literal is materialised into a register instead of riding in the compare.
 peephole.ss folds immediates but not with the constant on the LEFT of a
-comparison, which is exactly where unrolling puts it -- `(fx< 1 j1)`. So 8.4%
-is what the transformation buys THROUGH that waste, and the waste is a separate
-and much cheaper fix. Filed rather than bundled: correcting an instruction
-selection while measuring a loop transformation would leave neither number
-attributable.
+comparison, which is exactly where unrolling puts it -- `(fx< 1 j1)`.
+
+THAT PARAGRAPH WAS WRONG ABOUT THE COST, and the correction is worth more than
+the claim was. The swap was built (qaq.24), it works, and it buys NOTHING: the
+compare becomes `cmp $0x0,%rdx ; jg` as intended and the `mov` stays, because
+the constant 0 is ALSO flip-prefix's return value and the register has a second
+genuine reader. Instructions came out identical to the digit. Reverted.
+
+So `mov $imm` next to its only apparent use is not evidence of waste. The
+register may be read somewhere the eye does not travel -- here, the epilogue --
+and the peephole's "all uses or none" test knows it even when the reader of the
+disassembly does not. 8.4% is the whole prize, not a prize through a waste.
