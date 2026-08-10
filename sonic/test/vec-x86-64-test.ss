@@ -565,7 +565,19 @@
     ;; which ARE xmm3, so that instruction reads lane 1 of a triple unchanged.
     (vextractf128 xmm5 ymm3 1)
     (vextractf128 xmm0 ymm9 0)
-    (vextractf128 xmm12 ymm13 1)))
+    (vextractf128 xmm12 ymm13 1)
+    ;; The 4-lane splat. vmovddup duplicates within each 128-bit half, which is
+    ;; (a,a,c,c) on a ymm -- right for a pair, silently wrong for a triple.
+    (vbroadcastsd ymm4 xmm2)
+    (vbroadcastsd ymm11 xmm13)
+    (vbroadcastsd ymm0 (mem r8 rcx 8 16))
+    ;; The same two through the three-lane names the selector actually emits,
+    ;; where the width comes from the mnemonic and the operands are spelled xmm
+    ;; because that is what the allocator produces.
+    (v3splat xmm4 xmm2)
+    (v3splat xmm0 (mem r8 rcx 8 16))
+    (v3lane2 xmm5 xmm3)
+    (v3lane2 xmm12 xmm13)))
 
 ;; --- what masking must REFUSE ----------------------------------------------
 ;;

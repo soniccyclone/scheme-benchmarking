@@ -241,6 +241,14 @@
       ;; REG field with the destination in r/m -- the opposite of everything
       ;; else in this table, which is why it is its own form rather than a flag.
       (vextractf128 3 #x19 1 0 0 exti)
+      ;; THE 4-LANE SPLAT, and `vmovddup` cannot serve as one.
+      ;;
+      ;; slp.ss splats a shared scalar with `vmovddup`, which duplicates the low
+      ;; double of each 128-BIT HALF into that half. On a ymm that gives
+      ;; (a,a,c,c), not (a,a,a,a) -- correct for a pair and silently wrong for a
+      ;; triple, where lane 2 would read whatever was in the high half.
+      ;; `vbroadcastsd` is the instruction that means what the name says.
+      (vbroadcastsd 2 #x19 1 0 0 bcst)
       ;; packed double, 0F38 map. W1 under both encodings.
       (vfmadd132pd  2 #x98 1 1 1 rvm)
       (vfmadd213pd  2 #xA8 1 1 1 rvm)
@@ -285,17 +293,30 @@
   ;; except the one setup. We emit the whole static image and call no external
   ;; code, so that is checkable rather than hoped for.
   ;;
-  ;; Each entry is (three-lane-mnemonic base-mnemonic width mask). Encoding
+  ;; Each entry is (three-lane-mnemonic base-mnemonic width shape). Encoding
   ;; rewrites to the base form and recurses, so these share every byte of the
   ;; path already verified against gas rather than getting a second one.
+  ;;
+  ;; THREE SHAPES, because two instructions have operands that legitimately
+  ;; disagree about width:
+  ;;
+  ;;   masked   every vector operand widens and the destination takes {k1}.
+  ;;            This is the arithmetic and the load/store.
+  ;;   bcast    only the DESTINATION widens, and there is no mask: a broadcast
+  ;;            writes every lane by definition, so predicating it would leave
+  ;;            lane 2 holding whatever was there.
+  ;;   ext2     only the SOURCE widens, no mask, and the immediate 1 selects
+  ;;            the high half. The destination is an xmm by construction.
   (define three-lane-table
-    '((v3addpd   vaddpd   256 k1)
-      (v3subpd   vsubpd   256 k1)
-      (v3mulpd   vmulpd   256 k1)
-      (v3divpd   vdivpd   256 k1)
-      (v3sqrtpd  vsqrtpd  256 k1)
-      (v3xorpd   vxorpd   256 k1)
-      (v3movupd  vmovupd  256 k1)))
+    '((v3addpd   vaddpd       256 masked)
+      (v3subpd   vsubpd       256 masked)
+      (v3mulpd   vmulpd       256 masked)
+      (v3divpd   vdivpd       256 masked)
+      (v3sqrtpd  vsqrtpd      256 masked)
+      (v3xorpd   vxorpd       256 masked)
+      (v3movupd  vmovupd      256 masked)
+      (v3splat   vbroadcastsd 256 bcst)
+      (v3lane2   vextractf128 256 ext2)))
 
   (define (three-lane-entry m) (assq m three-lane-table))
 
@@ -308,11 +329,26 @@
     (cond ((vec-reg? o) (vec-reg-name width (vec-reg-number o)))
           (else o)))
 
+  (define three-lane-mask-register 'k1)
+
   (define (three-lane-rewrite i)
     (let* ((e (three-lane-entry (car i)))
-           (base (cadr e)) (width (caddr e)) (k (cadddr e))
-           (ops (map (lambda (o) (widen-operand o width)) (cdr i))))
-      (cons base (cons (list 'mask (car ops) k) (cdr ops)))))
+           (base (cadr e)) (width (caddr e)) (shape (cadddr e))
+           (ops (cdr i))
+           (wide (lambda (o) (widen-operand o width))))
+      (case shape
+        ((masked)
+         (let ((w (map wide ops)))
+           (cons base (cons (list 'mask (car w) three-lane-mask-register) (cdr w)))))
+        ((bcst)
+         (unless (= (length ops) 2)
+           (error 'vec-encode-instr "a broadcast takes two operands" i))
+         (list base (wide (car ops)) (cadr ops)))
+        ((ext2)
+         (unless (= (length ops) 2)
+           (error 'vec-encode-instr "a lane extract takes two operands" i))
+         (list base (car ops) (wide (cadr ops)) 1))
+        (else (error 'vec-encode-instr "unknown three-lane shape" shape)))))
 
   (define (vec-entry m) (assq m vec-table))
   ;; `kmovw` is encoded by hand rather than from the table, so membership in
@@ -561,9 +597,15 @@
            (scalar? (= pp 3))
            ;; For an extract the operands DISAGREE about width on purpose --
            ;; xmm out of ymm -- so the encoding width is the source's.
-           (width (if (eq? (entry-form e) 'exti)
-                      (vec-reg-width (cadr ops))
-                      (operand-width 'vec-encode-instr ops))))
+           ;; THE WIDTH IS THE WIDE OPERAND'S, and for these two forms the
+           ;; operands disagree on purpose rather than by mistake:
+           ;; `vextractf128` narrows (xmm out of ymm) and `vbroadcastsd`
+           ;; widens (ymm from xmm), so `operand-width` insisting they agree
+           ;; would refuse both.
+           (width (case (entry-form e)
+                    ((exti) (vec-reg-width (cadr ops)))
+                    ((bcst) (vec-reg-width (car ops)))
+                    (else (operand-width 'vec-encode-instr ops)))))
       (when (exists masked? (cdr raw-ops))
         (error 'vec-encode-instr "only the destination may carry a mask" i))
       (when (and (masked? dst) (mem? (masked-operand dst)) (masked-zeroing? dst))
@@ -591,6 +633,14 @@
                (unless (= (length ops) 3)
                  (error 'vec-encode-instr "vextractf128 expects two operands and an immediate" i))
                (values (cadr ops) 0 (car ops) (entry-op e)))
+              ;; `(vbroadcastsd ymm-dst xmm-src)` or a 64-bit memory source.
+              ;; Ordinary `rm` placement; it needs its own form only because the
+              ;; operands disagree about width by design, the other way round
+              ;; from `exti`.
+              ((bcst)
+               (unless (= (length ops) 2)
+                 (error 'vec-encode-instr "vbroadcastsd expects two operands" i))
+               (values (car ops) 0 (cadr ops) (entry-op e)))
               ((mov)
                (unless (= (length ops) 2)
                  (error 'vec-encode-instr "expects two operands" i))

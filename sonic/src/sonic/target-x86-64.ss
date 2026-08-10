@@ -447,6 +447,54 @@
      (cons 'p2mul (packed 'vmulpd))
      (cons 'p2div (packed 'vdivpd))
 
+     ;; --- three lanes: (x, y, z, pad) ---------------------------------------
+     ;;
+     ;; The same operations at 256 bits with the fourth lane predicated off.
+     ;; The OPERANDS ARE SPELLED THE SAME -- the allocator hands out a raw-f64
+     ;; register and finalize spells it `xmm3`, and a ymm of that number is the
+     ;; same physical register. The width rides on the MNEMONIC: the encoder
+     ;; rewrites `v3addpd` to `vaddpd ymm3{k1}, ...`. Putting it on the operand
+     ;; instead would make every pass between here and the encoder see through
+     ;; a wrapper, and `listing-writes` reading a destination as `(cadr i)`
+     ;; would stop seeing one -- which under-reports what a call clobbers.
+     ;;
+     ;; k1 holds 0b0111 for the whole image; runtime.ss sets it once at _start
+     ;; and nothing we emit ever writes a mask register again.
+     (cons 'p3load
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 3)
+               (error 'x86-64-selector "p3load expects (p3load dst sc d base index)" srcs))
+             `((v3movupd ,dst ,(mem/disp (cadr srcs) (caddr srcs)
+                                         (+ heap-element-disp (* (car srcs) word-scale)))))))
+     (cons 'p3store
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 4)
+               (error 'x86-64-selector
+                      "p3store expects (p3store <unused> sc d base index value)" srcs))
+             `((v3movupd ,(mem/disp (cadr srcs) (caddr srcs)
+                                    (+ heap-element-disp (* (car srcs) word-scale)))
+                         ,(cadddr srcs)))))
+     ;; `vbroadcastsd`, NOT a wider `vmovddup`: that one duplicates the low
+     ;; double of each 128-bit half into that half, which is (a,a,c,c) on a ymm
+     ;; -- right for a pair and silently wrong for a triple.
+     (cons 'p3splat
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 1)
+               (error 'x86-64-selector "p3splat expects one source" srcs))
+             `((v3splat ,dst ,(car srcs)))))
+     ;; Lane 2 is the low double of the HIGH half. Lane 1 needs no rule: a
+     ;; ymm's low 128 bits are the xmm of the same number, so `p2hi` reads a
+     ;; triple's lane 1 unchanged.
+     (cons 'p3lane2
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 1)
+               (error 'x86-64-selector "p3lane2 expects one source" srcs))
+             `((v3lane2 ,dst ,(car srcs)))))
+     (cons 'p3add (packed 'v3addpd))
+     (cons 'p3sub (packed 'v3subpd))
+     (cons 'p3mul (packed 'v3mulpd))
+     (cons 'p3div (packed 'v3divpd))
+
      ;; `(store ignored sc base index value)`. Lmach's Instr production makes the
      ;; destination slot mandatory and a store has no result, so the slot is
      ;; dead and the stored value rides in the sources, where the allocator's

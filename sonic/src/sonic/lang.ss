@@ -181,17 +181,31 @@
       ;; float register, so `raw-f64` still describes where it lives and the
       ;; register allocator, the partition and the collector all need no changes.
       ;;
-      ;; Two lanes and not a variable width. The shape that motivates them is
-      ;; three spatial components, which fills two lanes and leaves one scalar;
-      ;; a wider vector would need masking to avoid touching a fourth element
-      ;; that may not exist. The lane count is in the NAME because a different
-      ;; width is a different instruction, not a parameter.
+      ;; THE LANE COUNT IS IN THE NAME, because a different width is a
+      ;; different instruction rather than a parameter. That was the whole
+      ;; reason for two: three spatial components fill two lanes and leave one
+      ;; scalar, and a wider vector needs masking to avoid touching a fourth
+      ;; element that may not exist.
+      ;;
+      ;; The masking exists now. The `p3` forms are the same operations over
+      ;; (x, y, z, pad) in a 256-bit register with the fourth lane predicated
+      ;; off -- one instruction where the pair plus its scalar tail were two.
+      ;; They live in a raw-f64 vreg exactly as a pair does: a ymm and an xmm
+      ;; of the same number are the same physical register, so the allocator,
+      ;; the partition and the collector still need no changes at all.
       p2add p2sub p2mul p2div                       ; packed pair arithmetic
+      p3add p3sub p3mul p3div                       ; packed triple arithmetic
       ;; The SPLAT: one scalar into both lanes. A pack whose other operand is
       ;; the same value in both lanes -- `dx * mag` beside `dy * mag` -- needs
       ;; it once, and it then feeds every packed operation that shares the
       ;; scalar.
       p2splat
+      ;; The triple's splat is a DIFFERENT INSTRUCTION, not the same one wider.
+      ;; `vmovddup` duplicates the low double of each 128-bit half into that
+      ;; half, which on a 256-bit register is (a,a,c,c) -- correct for a pair
+      ;; and silently wrong for a triple, whose lane 2 would read whatever the
+      ;; high half held.
+      p3splat
       ;; ASSEMBLE a pair from two scalars. The other packs delete the scalar
       ;; form of their members; this one does not, which is what lets a value
       ;; feed both a packed use and an unpackable one -- nbody's `dx` is squared
@@ -203,6 +217,12 @@
       ;; scalar instruction reads exactly that. So a pack costs an extract for
       ;; one of its two members and nothing at all for the other.
       p2hi
+      ;; LANE 2 of a triple. Lane 0 is free for the same reason as a pair's,
+      ;; and lane 1 is `p2hi` UNCHANGED -- a ymm's low 128 bits are the xmm of
+      ;; the same number, so the pair's extract reads a triple's lane 1 without
+      ;; knowing it. Only lane 2, the low double of the high half, needs its
+      ;; own instruction.
+      p3lane2
       branch branch-if jump                         ; control
       call ret                                      ; calls
       ;; Access to a TOP-LEVEL binding, which is storage rather than a value in
@@ -526,7 +546,16 @@
       ;; nothing here can check it, which is why that pass is where the
       ;; reasoning lives.
       (p2load v sc d v* ...)
-      (p2store v sc d v* ...))
+      (p2store v sc d v* ...)
+      ;; THREE adjacent elements starting at `idx + d`, in a 256-bit register
+      ;; whose fourth lane is masked off. The mask is what makes the store
+      ;; legal rather than merely tidy: an unmasked 256-bit store would write
+      ;; four doubles and the fourth would land on the next body's x. The LOAD
+      ;; is masked for a related reason -- a masked lane performs no memory
+      ;; access, so reading (x,y,z) at the end of an array does not touch the
+      ;; word past it.
+      (p3load v sc d v* ...)
+      (p3store v sc d v* ...))
     (Transfer (t)
       (jump lbl)
       (branch-if v lbl0 lbl1)

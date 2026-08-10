@@ -12,7 +12,8 @@
 
 (import (chezscheme) (nanopass) (rnrs io simple)
         (sonic lang) (sonic fixtures) (sonic select) (sonic regs) (sonic regalloc)
-        (sonic target-x86-64) (sonic encode-x86-64) (sonic litpool))
+        (sonic target-x86-64) (sonic encode-x86-64) (sonic litpool)
+        (sonic vec-x86-64))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -117,6 +118,64 @@
 (ck! "a `checked` chk emits a compare and a trap branch"
      (equal? (select-instr x86-64-selector '(chk bounds-check checked 0 v0 v1))
              '((cmp v0 v1) (jge (label sonic-bounds-error)))))
+
+;; --- three lanes: (x, y, z, pad) --------------------------------------------
+;;
+;; The selector rules for the p3 forms, checked at the instruction rather than
+;; through a whole program, because slp.ss does not emit them yet -- it packs
+;; pairs. Without this the rules would be code nothing runs, which is the state
+;; inline.ss and five other passes were in when D32 was written.
+;;
+;; THE OPERANDS ARE SPELLED THE SAME AS A PAIR'S. The allocator hands out a
+;; raw-f64 register and finalize spells it `xmm3`; a ymm of that number is the
+;; same physical register. The width rides on the MNEMONIC -- the encoder
+;; rewrites `v3addpd` to `vaddpd ymm3{k1}, ...` -- so nothing between selection
+;; and encoding has to know a wider register exists.
+
+(ck! "a packed triple add selects one masked 256-bit instruction"
+     (equal? (select-instr x86-64-selector '(p3add t raw-f64 a b))
+             '((v3addpd t a b))))
+(ck! "and so do sub, mul and div"
+     (equal? (list (select-instr x86-64-selector '(p3sub t raw-f64 a b))
+                   (select-instr x86-64-selector '(p3mul t raw-f64 a b))
+                   (select-instr x86-64-selector '(p3div t raw-f64 a b)))
+             '(((v3subpd t a b)) ((v3mulpd t a b)) ((v3divpd t a b)))))
+
+;; The load and the store address element `idx + d` exactly as the pair forms
+;; do; only the width and the mask differ, and both are the mnemonic's.
+(ck! "a packed triple load addresses element idx+d, like the pair form"
+     (equal? (select-instr x86-64-selector '(p3load t raw-f64 0 base idx))
+             (map (lambda (i) (cons 'v3movupd (cdr i)))
+                  (select-instr x86-64-selector '(p2load t raw-f64 0 base idx)))))
+(ck! "and so does the store"
+     (equal? (select-instr x86-64-selector '(p3store ig raw-f64 1 base idx val))
+             (map (lambda (i) (cons 'v3movupd (cdr i)))
+                  (select-instr x86-64-selector '(p2store ig raw-f64 1 base idx val)))))
+
+;; THE SPLAT IS A DIFFERENT INSTRUCTION, not the pair's one wider. `vmovddup`
+;; duplicates the low double of each 128-bit HALF into that half, which on a
+;; 256-bit register is (a,a,c,c) -- correct for a pair and silently wrong for a
+;; triple, whose lane 2 would read whatever the high half held.
+(ck! "a triple's splat is a broadcast, not a wider vmovddup"
+     (equal? (select-instr x86-64-selector '(p3splat t raw-f64 x))
+             '((v3splat t x))))
+(ck! "and the pair's splat is still vmovddup"
+     (equal? (select-instr x86-64-selector '(p2splat t raw-f64 x))
+             '((vmovddup t x))))
+
+;; Lane 1 needs NO rule. A ymm's low 128 bits are the xmm of the same number,
+;; so `p2hi` reads a triple's lane 1 without knowing it is one. Only lane 2 --
+;; the low double of the high half -- has an instruction of its own.
+(ck! "lane 2 extracts from the high half"
+     (equal? (select-instr x86-64-selector '(p3lane2 t raw-f64 x))
+             '((v3lane2 t x))))
+
+;; End to end on the bytes: what the rules emit, encoded, is the masked 256-bit
+;; form it claims to be. Register names are the allocator's spelling.
+(ck! "the selected triple ops encode as masked ymm operations"
+     (equal? (map (lambda (i) (vec-encode-instr (cons (car i) '(xmm3 xmm1 xmm2))))
+                  (select-instr x86-64-selector '(p3add t raw-f64 a b)))
+             (list (vec-encode-instr '(vaddpd (mask ymm3 k1) ymm1 ymm2)))))
 
 ;; --- allocate the fixture onto real registers ------------------------------
 
