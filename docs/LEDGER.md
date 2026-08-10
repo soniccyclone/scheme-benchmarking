@@ -909,3 +909,42 @@ nbody is unaffected, as intended -- its flvectors are parameters, so
 elemrange.ss declines to track them and the driver takes the untouched path.
 Measured after the change at 186.92 cycles/step against c-native's 168.71,
 which is 1.108x and if anything marginally better than the 1.12x before it.
+
+## D43 -- the unroll ceiling is 8.4% of CYCLES, and that is the first one that converts
+
+Probed before building, per D38. `flip-prefix` hand-unrolled to gcc's shape --
+the low index a literal in every copy, no back edge, five copies because n=11
+bounds k at 10 and floor(10/2) swaps can run -- compiled and measured against
+the real thing. Bit-exact 556355/51.
+
+    n=11                  cycles      instructions    vs gcc
+    gcc -O3 -march=native  8.275G        11.129G       1.000
+    sonic today           10.802G        27.161G       1.305
+    sonic hand-unrolled    9.896G        24.812G       1.196
+
+MINUS 8.4% OF CYCLES, against minus 8.6% of instructions. Set that beside D42,
+where minus 22.4% of instructions moved the clock by nothing at all. Same
+program, same machine, same week. The difference is what was removed: a bounds
+check the machine was already absorbing costs nothing to delete, and a loop back
+edge costs its full price. This is the first lever measured on fannkuch that
+converts roughly one-for-one, and it is the reason qaq.23 should be built while
+qaq.7.21 should not.
+
+THE MECHANISM IS CONFIRMED, not assumed. The emitted probe carries
+`mov -0x1(%rbx),%rsi` for perm[0] and `mov 0x7(%rbx),%rsi` for perm[1] -- the
+low side folded to a literal displacement by addrfold, the high side still
+indexed as `-0x1(%rbx,%rdx,8)`. That is gcc's shape, reached by the pass we
+already have, once the index is a constant it can see.
+
+AND IT IS AN UNDER-ESTIMATE, which is the useful part. Every copy pays an
+instruction it should not:
+
+    mov $0x0,%rsi ; cmp %rdx,%rsi        ; and $0x1, and $0x2, once per copy
+
+The literal is materialised into a register instead of riding in the compare.
+peephole.ss folds immediates but not with the constant on the LEFT of a
+comparison, which is exactly where unrolling puts it -- `(fx< 1 j1)`. So 8.4%
+is what the transformation buys THROUGH that waste, and the waste is a separate
+and much cheaper fix. Filed rather than bundled: correcting an instruction
+selection while measuring a loop transformation would leave neither number
+attributable.
