@@ -32,7 +32,7 @@
           ;; checks; this fixpoint discharges nearly all of them, and a
           ;; vectorizer looking at the un-fixed IR refuses every loop for
           ;; checks the compiled program does not contain.
-          elide-to-fixpoint
+          elide-to-fixpoint unroll-fully-rounds
           compiled? compiled-image compiled-code compiled-pool
           compiled-entry compiled-listing compiled-functions
           compiled-globals compiled-lift-report)
@@ -189,13 +189,21 @@
   ;; premises on the callees' parameters. Facts only ever get added, and each is
   ;; a bounded integer range over a finite lattice, so it settles; the bound is
   ;; there because an argument for termination is not a guard.
+  ;; ONE SUBSTITUTION PER ROUND, so this bound is a count of COPIES and not of
+  ;; sweeps. After a substitution the copy's own self call reads an argument
+  ;; that is still a primcall, so only fold.ss can make it eligible -- which
+  ;; means exactly one site turns per round. nbody's nest wants 5 + 10 + 5,
+  ;; and at 24 the rounds ran out on the cheap loop before reaching the
+  ;; expensive one.
+  (define unroll-fully-rounds (make-parameter 24))
+
   ;; Specialize, fold, repeat. Bounded twice over: specialize.ss has its own
   ;; size and copy budgets, and this stops as soon as a round substitutes
   ;; nothing -- which is what happens the moment every remaining loop has a
   ;; guard that will not fold or an argument that is not a literal.
   (define (unroll-fully p)
     (let loop ((p p) (round 0))
-      (if (> round 24)
+      (if (> round (unroll-fully-rounds))
           p
           (let-values (((p1 st) (specialize-program/report p)))
             (if (zero? (specialize-stats-specialized st))
