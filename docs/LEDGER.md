@@ -1265,3 +1265,40 @@ known to be non-memory work at 1.50x, and which nothing else has localised. The
 test is cheap and does not need the inliner changed: hand-write a fannkuch
 variant whose flip loop is spliced into count-flips, compile it, and measure.
 That is D43's technique and it settled the unroll question in one turn.
+
+### D48 addendum -- answered: the call is 2.2%, the latency is the rest
+
+D48 asked which of two things makes count-flips 22.7% of fannkuch: a
+store-to-load dependency the algorithm owns, or the call boundary we own. Test
+as filed -- hand-splice the unrolled flip body into count-flips so no call sits
+between the flip's stores and the dependent load of perm[0]:
+
+    n=11                        cycles    instructions   vs gcc
+    gcc -O3 -march=native        8.259G      11.129G      1.000
+    sonic today                 10.822G      27.161G      1.310
+    + unroll (D43)               9.934G      24.812G      1.203
+    + unroll, no call            9.713G      22.506G      1.176
+
+THE CALL BOUNDARY IS WORTH 2.2% OF CYCLES. So the algorithm's dependency
+dominates count-flips' 22.7%, and the part that is ours is a fifth of it at
+most. Candidate one wins, which is the answer that closes a line of enquiry
+rather than opening one.
+
+Note the shape: removing the call took 9.3% of the instructions and 2.2% of the
+cycles, while removing the back edge took 8.6% and 8.4%. Both are control flow
+and D46 predicts both convert, but a call happens once per flip and a back edge
+once per swap, so the back edge is the one that is in the way. D46 is refined
+rather than contradicted: it is not "control flow converts" but "control flow
+converts in proportion to how often it is executed", which is obvious in
+retrospect and was not the reading before this measurement.
+
+AND IT REVIVES qaq.7.21, which I measured at a ceiling of zero earlier in this
+session and reprioritised to P3 on that basis. That measurement was correct for
+the sources as they stand: rule 5 refuses nothing today. But the reason
+`flip-prefix` stays a separate procedure in the unrolled variant IS rule 5 --
+an unrolled body is a chain of nested ifs, so it has many tail positions and
+the non-tail splice refuses it. So rule 5's ceiling is 0 before the unroll and
+2.2% after it. The two are coupled and neither is worth building alone.
+
+Total available from the two source-level transformations measured so far:
+1.310x to 1.176x, of which the unroll is 10.7 points and the call 2.2.
