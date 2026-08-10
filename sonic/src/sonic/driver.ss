@@ -41,7 +41,7 @@
           (sonic anf) (sonic assign) (sonic inline) (sonic unroll)
           (sonic essa) (sonic elide)
           (sonic repr) (sonic lift) (sonic convert) (sonic lower) (sonic globals)
-          (sonic shapes) (sonic interval) (sonic cse) (sonic dce) (sonic contract) (sonic addrfold) (sonic slp)
+          (sonic shapes) (sonic interval) (sonic cse) (sonic dce) (sonic contract) (sonic fold) (sonic addrfold) (sonic slp)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
           (sonic order)
@@ -58,13 +58,17 @@
            ;; essa, because the copy needs fresh names and `essa` is what
            ;; establishes SSA over whatever shape it is handed -- doing it the
            ;; other way round would mean re-running SSA construction here.
+           ;; CONSTANT FOLDING BEFORE UNROLLING, because the unroller's copies
+           ;; are what folding has to chew on -- and after inlining, so a
+           ;; literal passed to a procedure is a literal inside it.
            (p0 (unroll-program
+                (fold-program
                 (inline-program
                 (assign-convert-program
                  (anf-program
                   (resolve-policy-program
                    (parse-program (expand-program (read-all-from-file path))
-                                  externs))))))))
+                                  externs)))))))))
       ;; SHAPES BEFORE ELISION. The interval domain can discharge nbody's inner
       ;; loop arithmetically and never had the premises: a vector's length was
       ;; never connected to the `make-flvector` that produced it, and a

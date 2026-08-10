@@ -248,6 +248,17 @@
                 ;; The empty list is a real Scheme object, not an immediate --
                 ;; see the same case in target-rv64.ss. `r15` holds nil.
                 ((null? d) `((mov ,dst ,(arch-register-for arch-x86-64 'nil))))
+                ;; A BOOLEAN IS A REAL SCHEME OBJECT, like the empty list above.
+                ;; `#t` and `#f` are the immediates numeric.ss calls sonic-true
+                ;; and sonic-false -- 15 and 7 -- and NOT the fixnums 1 and 0,
+                ;; which is the mistake repr.ss's header calls a live
+                ;; memory-corruption bug in the other direction.
+                ;;
+                ;; Selectable at all because fold.ss can now produce one: a
+                ;; comparison over literals folds to `(quote #f)`, and before
+                ;; this the selector refused it. Every boolean reaching here is
+                ;; a folded comparison or a source literal.
+                ((boolean? d) `((mov ,dst (imm ,(sonic-boolean-tag d)))))
                 ((and (integer? d) (exact? d)) `((mov ,dst (imm ,d))))
                 (else
                  (error 'x86-64-selector

@@ -394,6 +394,70 @@
        "(main)\n")
       '(30.0))
 
+;; CONSTANT FOLDING, which this compiler did not have.
+;;
+;; `(fx* 2 3)` emitted an `imul`, and so did `(let ([i 2]) (fx* i 3))`. Asserted
+;; on the emitted code rather than the answer, because the answer was always
+;; right -- the instruction was simply there.
+(let ((n (lambda (src)
+           (let* ((f (string-append tmp "-fold.sps"))
+                  (_ (let ((p (open-file-output-port
+                               f (file-options no-fail)
+                               (buffer-mode block) (native-transcoder))))
+                       (put-string p src) (close-port p)))
+                  (c (compile-sonic f '(display newline)))
+                  (l (filter pair? (apply append
+                                          (map finalized-listing
+                                               (compiled-functions c))))))
+             (length (filter (lambda (i) (eq? (car i) 'imul)) l))))))
+  (ck! "arithmetic on literals folds, so no multiply is emitted"
+       (= 0 (n (string-append
+                "(define v (make-vector 8 0))\n"
+                "(define (main) (begin (vector-set! v 0 (fx* 2 3))\n"
+                "  (display (fx->fl (vector-ref v 0))) (newline)))\n(main)\n"))))
+  (ck! "and through a let-bound literal, which is what ANF actually produces"
+       (= 0 (n (string-append
+                "(define v (make-vector 8 0))\n"
+                "(define (main) (let ((i 2)) (begin (vector-set! v 0 (fx* i 3))\n"
+                "  (display (fx->fl (vector-ref v 0))) (newline))))\n(main)\n")))))
+
+;; The answers, so folding is checked for being RIGHT and not just for being
+;; absent. 2*3+1 = 7, and the let-bound form is the same number by a different
+;; route.
+(run! "a folded expression computes what it folded to"
+      (string-append
+       "(define v (make-vector 8 0))\n"
+       "(define (main) (let ((i 2))\n"
+       "  (begin (vector-set! v 0 (fx+ (fx* i 3) 1))\n"
+       "         (display (fx->fl (vector-ref v 0))) (newline))))\n(main)\n")
+      '(7.0))
+;; A division by a non-zero literal folds like anything else.
+(run! "quotient by a non-zero literal folds"
+      (string-append
+       "(define v (make-vector 8 0))\n"
+       "(define (main) (begin (vector-set! v 0 (fxquotient 20 4))\n"
+       "  (display (fx->fl (vector-ref v 0))) (newline)))\n(main)\n")
+      '(5.0))
+;; Division by ZERO is deliberately left alone -- the program may be relying on
+;; the trap and a fold would delete it. Not asserted end to end here because
+;; `(fxquotient 6 0)` does not reach the trap at all: the selector refuses the
+;; div-check shape with "division check expects a divisor". That is a
+;; pre-existing gap, unrelated to folding, and it is filed rather than fixed
+;; inside this commit.
+
+;; A BOOLEAN LITERAL IS A SCHEME OBJECT, and the selector used to refuse one:
+;; "only exact integer and flonum literals are selectable". `#t` and `#f` are
+;; the immediates numeric.ss calls sonic-true and sonic-false -- 15 and 7 --
+;; not the fixnums 1 and 0, which repr.ss's header calls a live
+;; memory-corruption bug in the other direction. Reachable straight from
+;; source, so this was a hole rather than a scope note.
+(run! "a boolean literal can be stored and the vector still works"
+      (string-append
+       "(define v (make-vector 4 0))\n"
+       "(define (main) (begin (vector-set! v 0 #f) (vector-set! v 1 7)\n"
+       "  (display (fx->fl (vector-ref v 1))) (newline)))\n(main)\n")
+      '(7.0))
+
 ;; WHICH BOUNDS CHECKS SURVIVE, counted in the emitted code.
 ;;
 ;; The elision is what these two benchmarks are in the matrix to exercise, so

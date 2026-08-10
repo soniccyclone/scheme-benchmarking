@@ -158,6 +158,11 @@
        ;; register move rather than a tag.
        ((null? d)
         `((addi ,dst ,(arch-register-for arch-rv64 'nil) 0)))
+       ;; A BOOLEAN IS A REAL SCHEME OBJECT, and `#t`/`#f` are the immediates
+       ;; numeric.ss calls sonic-true and sonic-false -- 15 and 7 -- not the
+       ;; fixnums 1 and 0. Selectable at all because fold.ss can now produce
+       ;; one: a comparison over literals folds to `(quote #f)`.
+       ((boolean? d) `((addi ,dst zero ,(sonic-boolean-tag d))))
        ((not (and (integer? d) (exact? d)))
         (error 'rv64-select "RV64 const rule takes an exact integer" d))
        ((<= -2048 d 2047)
