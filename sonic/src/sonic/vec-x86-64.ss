@@ -332,7 +332,31 @@
       (v3xorpd   vxorpd       256 masked)
       (v3movupd  vmovupd      256 masked)
       (v3splat   vbroadcastsd 256 bcst)
-      (v3lane2   vextractf128 256 ext2)))
+      (v3lane2   vextractf128 256 ext2)
+      ;; --- FOUR LANES, UNMASKED -------------------------------------------
+      ;;
+      ;; The same 256-bit operations with no predicate at all, for a layout
+      ;; that PADS a body to four doubles instead of packing three and masking
+      ;; the fourth. The mask was never wanted for its own sake -- it existed
+      ;; to avoid touching a fourth element that may not exist -- and it cost
+      ;; more than the packing saved, because a masked store cannot forward to
+      ;; a later load: 5.65 cycles for an unmasked round trip against 10.70 for
+      ;; a masked one, measured on this part, and 59 forwarding failures per
+      ;; step in nbody.
+      ;;
+      ;; Pad the layout and the fourth lane is ours to write, so the mask goes
+      ;; and the forwarding penalty goes with it. Same widening, no `aaa`, no
+      ;; `{k1}`, and no dependence on the lane mask being set at all.
+      (v4addpd   vaddpd       256 wide)
+      (v4subpd   vsubpd       256 wide)
+      (v4mulpd   vmulpd       256 wide)
+      (v4divpd   vdivpd       256 wide)
+      (v4movupd  vmovupd      256 wide)
+      (v4fma     vfmadd231pd  256 wide)
+      (v4fnma    vfnmadd231pd 256 wide)
+      (v4fma132  vfmadd132pd  256 wide)
+      (v4fnma132 vfnmadd132pd 256 wide)
+      (v4splat   vbroadcastsd 256 bcst)))
 
   (define (three-lane-entry m) (assq m three-lane-table))
 
@@ -353,6 +377,8 @@
            (ops (cdr i))
            (wide (lambda (o) (widen-operand o width))))
       (case shape
+        ;; No predicate: every operand widens and nothing is masked.
+        ((wide) (cons base (map wide ops)))
         ((masked)
          (let ((w (map wide ops)))
            (cons base (cons (list 'mask (car w) three-lane-mask-register) (cdr w)))))

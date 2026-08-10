@@ -584,7 +584,21 @@
     (v3splat xmm4 xmm2)
     (v3splat xmm0 (mem r8 rcx 8 16))
     (v3lane2 xmm5 xmm3)
-    (v3lane2 xmm12 xmm13)))
+    (v3lane2 xmm12 xmm13)
+    ;; --- four lanes, unmasked: a PADDED body, no predicate ------------------
+    (v4addpd xmm3 xmm1 xmm2)
+    (v4subpd xmm0 xmm5 xmm7)
+    (v4mulpd xmm9 xmm11 xmm13)
+    (v4divpd xmm2 xmm2 xmm2)
+    (v4movupd xmm7 (mem r8 rcx 8 32))
+    (v4movupd (mem r9 rcx 8 32) xmm7)
+    ;; dst, then the two FACTORS. The addend IS the destination in the 231
+    ;; ordering, so it is not an operand here -- the selector checks that and
+    ;; drops it, exactly as the p2 rules already do.
+    (v4fma xmm5 xmm6 xmm7)
+    (v4fnma xmm4 xmm2 xmm3)
+    (v4fma132 xmm1 xmm2 xmm3)
+    (v4splat xmm4 xmm2)))
 
 ;; --- what masking must REFUSE ----------------------------------------------
 ;;
