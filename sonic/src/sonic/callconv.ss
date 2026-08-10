@@ -116,30 +116,40 @@
   (define (callconv-name cc) (arch-name (callconv-arch cc)))
 
   ;; --- x86-64 ---------------------------------------------------------------
-  ;; value pool: rbx r8 r9 r10 r11 r12 r13 r14  (8)
-  ;; raw pool:   rcx rdx rsi rdi                (4, rax is scratch)
-  ;; float pool: xmm0-xmm14                     (15, xmm15 is scratch)
+  ;; value pool: rbx r8 r9 r12                  (4)
+  ;; raw pool:   rcx rdx rsi rdi r10 r11 r13 r14 (8, rax is scratch)
+  ;; float pool: xmm0-xmm13                     (14, xmm14/15 scratch)
   ;;
-  ;; System V calls rbx and r12-r15 callee-saved, so those are the four value
-  ;; registers we keep across calls, and r8-r11 become the tagged argument
-  ;; registers. FOUR tagged argument registers is tight and it is the honest
-  ;; consequence of an eight-register value class. Every raw register on this
-  ;; target is caller-saved in System V, so there are no callee-saved raw
-  ;; registers at all and a raw word live across a call is always spilled.
+  ;; THIS COMMENT HAS BEEN WRONG TWICE, so it is worth saying where the numbers
+  ;; come from rather than restating them: regs.ss owns the partition and
+  ;; explains the measurement that chose it. Read it there.
+  ;;
+  ;; System V calls rbx, r12, r13, r14 callee-saved. Two of those are value and
+  ;; two are raw, which is the part that changed: there used to be no
+  ;; callee-saved RAW register at all, so a raw word live across a call was
+  ;; always spilled, and fannkuch's enumeration driver spilled thirteen values
+  ;; for that reason. r13 and r14 being raw means a raw word can now survive a
+  ;; call in a register.
+  ;;
+  ;; TWO tagged argument registers, and that is the honest consequence of a
+  ;; four-register value class. A call needing a third passes it on the stack,
+  ;; which works in both directions -- see the outgoing argument area in
+  ;; finalize.ss.
   (define callconv-x86-64
     (make-callconv
      arch-x86-64
-     ;; arguments, in order, per class
-     ;; TWO tagged argument registers and SIX raw ones, following the 6/6
-     ;; partition in regs.ss. r10 and r11 were tagged argument registers and are
-     ;; now raw ones; the convention has to agree with the partition or an
-     ;; argument arrives in a register of the wrong class and the collector
-     ;; either scans a machine word or misses a root.
+     ;; arguments, in order, per class.
      ;;
-     ;; Two tagged argument registers is tight, and it is the honest consequence
-     ;; of a six-register value class. A call needing a third tagged argument
-     ;; passes it on the stack, which now works in both directions -- see the
-     ;; outgoing argument area in finalize.ss.
+     ;; THE CONVENTION HAS TO AGREE WITH THE PARTITION, or an argument arrives
+     ;; in a register of the wrong class and the collector either scans a
+     ;; machine word or misses a root. Every register named here is in the pool
+     ;; of its own class in regs.ss, and that is the invariant to preserve when
+     ;; either file changes.
+     ;;
+     ;; It is also why retuning the partition is cheaper than it looks: the four
+     ;; registers that moved between the pools -- rbx, r12, r13, r14 -- appear
+     ;; in NO list below. Only the pool sizes changed, not where anything is
+     ;; passed or returned.
      '((tagged   . (r8 r9))
        (raw-word . (rcx rdx rsi rdi r10 r11))
        (raw-f64  . (xmm0 xmm1 xmm2 xmm3 xmm4 xmm5 xmm6 xmm7)))

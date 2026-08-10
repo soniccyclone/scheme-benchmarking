@@ -15,8 +15,8 @@
 ;; 196 raw-word values against 45 tagged ones and the pools were sized the other
 ;; way round, so its pairwise loop spilled seven values through a single scratch
 ;; and spent 85 of 119 instructions moving data.
-(ck! "x86-64: 6 value, 6 raw, 14 float (rax, xmm14 and xmm15 reserved as scratch)"
-     (and (= (value-count arch-x86-64) 6) (= (raw-count arch-x86-64) 6)
+(ck! "x86-64: 4 value, 8 raw, 14 float (rax, xmm14 and xmm15 reserved as scratch)"
+     (and (= (value-count arch-x86-64) 4) (= (raw-count arch-x86-64) 8)
           (= (float-count arch-x86-64) 14)))
 ;; TWO float scratches on x86-64, because of three-address VEX. A two-address
 ;; `addsd d, s` has two operands and one can ride in memory, so one scratch
@@ -36,14 +36,22 @@
 (ck! "and neither scratch is in the allocatable float pool"
      (not (exists (lambda (r) (memq r (arch-float arch-x86-64)))
                   (arch-float-scratch arch-x86-64))))
-;; The four registers that survive a call are still value class: System V makes
-;; rbx, r12, r13 and r14 callee-saved and they did not move. r10 and r11 did,
-;; and both are caller-saved, so no tagged value was relying on them across a
-;; call. A raw word live across a call still always spills, because System V
-;; leaves no callee-saved raw register -- unchanged by this, and the reason the
-;; rebalance costs the tagged class nothing it was using.
-(ck! "and the callee-saved registers are all still value class"
-     (for-all (lambda (r) (memq r (arch-value arch-x86-64))) '(rbx r12 r13 r14)))
+;; THE CALLEE-SAVED REGISTERS ARE NOW SPLIT BETWEEN THE CLASSES, and that is
+;; the substance of the 6/6 -> 4/8 retune rather than a side effect of it.
+;; System V makes rbx, r12, r13 and r14 callee-saved. All four used to be value
+;; class, which meant there was NO callee-saved raw register and a raw word live
+;; across a call always spilled -- fannkuch's enumeration driver spilled
+;; thirteen values for that reason alone. Two of the four are raw now, so a raw
+;; word can survive a call in a register.
+;;
+;; What must stay true is that each is in EXACTLY ONE pool, and that each class
+;; keeps at least one, since a value of either class may be live across a call.
+(ck! "the callee-saved registers are split two and two, each in exactly one pool"
+     (and (for-all (lambda (r) (memq r (arch-value arch-x86-64))) '(rbx r12))
+          (for-all (lambda (r) (memq r (arch-raw arch-x86-64))) '(r13 r14))
+          (for-all (lambda (r) (not (and (memq r (arch-value arch-x86-64))
+                                         (memq r (arch-raw arch-x86-64)))))
+                   '(rbx r12 r13 r14))))
 ;; Three scratch registers per file on RV64, one per file on x86-64, and the
 ;; counts are forced by the ISAs rather than chosen. RV64 is load/store, so a
 ;; spilled operand must be reloaded into a register, and its arithmetic is
@@ -52,9 +60,14 @@
 (ck! "rv64: 14 value, 8 raw, 29 float (t0-t2 and ft9-ft11 reserved as scratch)"
      (and (= (value-count arch-rv64) 14) (= (raw-count arch-rv64) 8)
           (= (float-count arch-rv64) 29)))
-(ck! "RV64 still has more of both classes than x86-64, which is the point of it"
+;; RV64's advantage is now entirely in the VALUE class. It used to have more of
+;; both; the x86-64 retune brought the raw pools level at eight, which is worth
+;; stating rather than weakening the comparison to `>=` and moving on. a0-a7
+;; being value class is what still makes RV64 comfortable -- eight tagged
+;; argument registers against two.
+(ck! "RV64's remaining advantage is the value class, and the raw pools are level"
      (and (> (value-count arch-rv64) (value-count arch-x86-64))
-          (> (raw-count arch-rv64) (raw-count arch-x86-64))))
+          (= (raw-count arch-rv64) (raw-count arch-x86-64))))
 
 ;; Scratch is NOT allocatable. This is the bug the RV64 agent found: it used t0
 ;; as an address temporary while t0 sat at the head of the allocatable raw pool,
@@ -154,9 +167,14 @@
               (hashtable-set! cls (string->symbol (string-append "w" (number->string i)))
                               'raw-word))
             (iota 7))
+  ;; EIGHT SIMULTANEOUS RAW VALUES NOW FIT ON BOTH TARGETS -- seven words plus
+  ;; the sink -- where x86-64 used to spill them into a six-register pool. The
+  ;; program that separated the two targets no longer does, so the boundary is
+  ;; tested where it actually is rather than left asserting a difference that
+  ;; has gone.
   (let ([r (allocate arch-x86-64 many cls)])
-    (ck! "x86-64 spills with 7 simultaneous raw words plus a sink: it has 4"
-         (not (null? (alloc-result-spills r)))))
+    (ck! "x86-64 does NOT spill 7 raw words plus a sink: 8 fit in 8"
+         (null? (alloc-result-spills r))))
   (let ([r (allocate arch-rv64 many cls)])
     (ck! "RV64 does NOT spill the same program: 7 words plus a sink fit in 8"
          (null? (alloc-result-spills r)))))

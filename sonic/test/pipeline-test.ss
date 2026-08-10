@@ -224,8 +224,17 @@
     (display " x86-64=") (display x86) (newline)
     (ck! "spilling stays bounded -- a liveness regression multiplies this"
          (and (< rv 120) (< x86 140)))
-    (ck! "x86-64 spills more than RV64, because eight value registers is not fourteen"
-         (> x86 rv)))
+    ;; THE TARGETS ARE NOW LEVEL ON THIS PROGRAM, and this assertion used to be
+    ;; `(> x86 rv)` -- "x86-64 spills more, because eight value registers is not
+    ;; fourteen". The 6/6 -> 4/8 retune in regs.ss closed it: x86-64 and RV64
+    ;; both spill 73 here. RV64 still has far more VALUE registers, so the
+    ;; original reasoning was sound; it was the raw pool that was starving
+    ;; x86-64, and nbody's spills are overwhelmingly raw.
+    ;;
+    ;; Asserted as an inequality rather than as 73 = 73, because the point is
+    ;; that x86-64 must not fall BEHIND again, not that either number is sacred.
+    (ck! "x86-64 no longer spills more than RV64: the raw pool was what starved it"
+         (<= x86 rv)))
 
   ;; Every block label must be unique: two blocks with one label make the
   ;; program ambiguous in a way selection cannot detect, since it walks both

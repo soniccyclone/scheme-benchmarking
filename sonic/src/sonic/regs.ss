@@ -107,8 +107,45 @@
   ;; unchanged and is why this costs the tagged class nothing it was using.
   (define arch-x86-64
     (make-arch 'x86-64
-      '(rbx r8 r9 r12 r13 r14)                      ; value: 6
-      '(rcx rdx rsi rdi r10 r11)                    ; raw: 6
+      ;; THE SPLIT IS TUNED, and it was previously tuned on one benchmark.
+      ;;
+      ;; Only twelve of the sixteen GPRs are allocatable at all -- rax is the
+      ;; scratch, rsp and rbp are structural, r15 holds nil -- so this line
+      ;; decides how many registers integer code may use, and 6/6 gave fannkuch
+      ;; six. It spilled `j` out of flip-prefix's inner loop, the hottest in the
+      ;; benchmark, and reloaded it four times an iteration.
+      ;;
+      ;; Measured across the whole range, answers bit-exact at every point:
+      ;;
+      ;;   value/raw   nbody instr/step   fannkuch instructions
+      ;;      6/6           714.50              42.157G
+      ;;      5/7           718.50              38.115G
+      ;;      4/8           715.50              37.705G
+      ;;      3/9           715.50              37.580G
+      ;;      2/10          787.50              37.284G
+      ;;
+      ;; nbody is FLAT from 6/6 to 3/9 and falls off a cliff at 2/10, where it
+      ;; runs out of tagged registers for its three flvector parameters. So the
+      ;; six-register value class was not buying nbody anything; it was costing
+      ;; fannkuch ten percent of its instructions for nothing.
+      ;;
+      ;; 4/8 rather than 3/9, which is fractionally better on fannkuch: rbx and
+      ;; r12 are the only value registers System V calls callee-saved once r13
+      ;; and r14 leave, and a tagged value live across a call needs one. Two of
+      ;; them is a thin margin already and one is not a margin. Both benchmarks
+      ;; here are unusually raw-heavy for Scheme, and the split should not be
+      ;; fitted so closely to them that ordinary tagged code has nowhere to sit.
+      ;;
+      ;; WHAT THIS DOES NOT TOUCH. r8 and r9 are the tagged ARGUMENT registers
+      ;; and rcx/rdx/rsi/rdi/r10/r11 the raw ones; the convention in callconv.ss
+      ;; names those explicitly and none of the four registers moved here
+      ;; appears in any convention list. The value class also stays a FIXED
+      ;; GLOBAL LIST, which is the property D21 rests on -- the collector
+      ;; scavenges it unconditionally and gcmeta.ss carries no register bitmap
+      ;; because of it. A per-function partition would buy more and would
+      ;; change that contract; see the bead.
+      '(rbx r8 r9 r12)                              ; value: 4
+      '(rcx rdx rsi rdi r10 r11 r13 r14)            ; raw: 8
       '(xmm0 xmm1 xmm2 xmm3 xmm4 xmm5 xmm6 xmm7
         xmm8 xmm9 xmm10 xmm11 xmm12 xmm13)            ; float: 14, xmm14/15 scratch
       '((rsp . stack) (rbp . frame) (r15 . nil))
