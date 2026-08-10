@@ -345,6 +345,55 @@
        "(main)\n")
       '(5.0))
 
+;; `vector-length` AND `flvector-length`, which had no machine op.
+;;
+;; Both lower to `vlen`, and one op serving both is D29 rather than a shortcut:
+;; the length word is at the same offset for every heap type, so the selector's
+;; rule is a load at a constant displacement that asks nothing about the type
+;; word. Neither was wired because nbody carries its own `n` and never asks --
+;; `vlen` reached the emitted code only through bounds checks, which the
+;; elision pass materialises directly.
+(run! "vector-length reads the length of a general vector"
+      (string-append
+       "(define v (make-vector 4 0))\n"
+       "(define (main) (begin (display (fx->fl (vector-length v))) (newline)))\n"
+       "(main)\n")
+      '(4.0))
+(run! "flvector-length reads the length of an flvector"
+      (string-append
+       "(define v (make-flvector 3 0.0))\n"
+       "(define (main) (begin (display (fx->fl (flvector-length v))) (newline)))\n"
+       "(main)\n")
+      '(3.0))
+;; Both kinds in one program, each through a call so the length is a parameter
+;; rather than a constant the compiler could have folded. If anything
+;; downstream keyed off the flvector type when it saw `vlen`, this is where the
+;; two would disagree.
+(run! "both lengths in one program, each passed through a call"
+      (string-append
+       "(define a (make-vector 6 0))\n"
+       "(define b (make-flvector 9 0.0))\n"
+       "(define (twice n) (fx+ n n))\n"
+       "(define (main)\n"
+       "  (begin (display (fx->fl (fx+ (twice (vector-length a))\n"
+       "                               (twice (flvector-length b)))))\n"
+       "         (newline)))\n(main)\n")
+      '(30.0))
+;; The length as a LOOP BOUND, which is what a program that does not carry its
+;; own `n` actually writes.
+(run! "a loop bounded by vector-length runs the right number of times"
+      (string-append
+       "(define v (make-vector 5 0))\n"
+       "(define (fill i)\n"
+       "  (if (fx< i (vector-length v))\n"
+       "      (begin (vector-set! v i (fx* i i)) (fill (fx+ i 1)))\n"
+       "      0))\n"
+       "(define (sum i acc)\n"
+       "  (if (fx< i (vector-length v)) (sum (fx+ i 1) (fx+ acc (vector-ref v i))) acc))\n"
+       "(define (main) (begin (fill 0) (display (fx->fl (sum 0 0))) (newline)))\n"
+       "(main)\n")
+      '(30.0))
+
 ;; A PROCEDURE NOTHING CALLS MUST NOT REFUSE THE PROGRAM.
 ;;
 ;; A parameter's class comes from the call sites (repr.ss), so a procedure with

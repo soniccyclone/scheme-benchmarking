@@ -53,6 +53,18 @@
       (fx->fl . cvt-f64-from-int) (fl->fx . cvt-int-from-f64)
       (flvector-ref . load) (flvector-set! . store)
       (vector-ref . load) (vector-set! . store)
+      ;; ONE MACH-OP FOR BOTH, and that is D29 rather than a shortcut. The
+      ;; length word sits at the same offset for every heap type, so `vlen` is
+      ;; a load at a constant displacement and knows nothing about what it is
+      ;; reading the length of -- see the selector rule, which absorbs the
+      ;; header offset and the pointer tag into one displacement and asks no
+      ;; question about the type word.
+      ;;
+      ;; Neither was wired because nbody carries its own `n` and never asks,
+      ;; and `vlen` reached the emitted code only through bounds checks, which
+      ;; the elision pass materialises directly. A program that asks in source
+      ;; was refused with "primitive has no machine op".
+      (flvector-length . vlen) (vector-length . vlen)
       ;; Allocation and anything else with no single machine op becomes a call
       ;; into the runtime. `alloc.ss` owns the fast path and `gc.ss` the slow
       ;; one, and neither is expressible as one Lmach instruction: the claim,
