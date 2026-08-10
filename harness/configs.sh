@@ -16,9 +16,39 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/nbody"
 
-CONFIGS="c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2b racket-2b chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
+CONFIGS="sonic c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2b racket-2b chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
 
 mkdir -p "$BUILD"
+
+# --- SonicScheme, this project's own compiler -------------------------------
+#
+# It took three bespoke harnesses to measure this before now, because the
+# emitted programs had no command line: `command-line` returned the empty list
+# and `length` returned 1, so N had to be baked in at compile time and the
+# `cfg_run_<name> $N` contract below could not be met. argv is decoded into
+# real strings at _start now, so it can be driven like anything else here.
+#
+# COMPILED IN THE CONTAINER, like every Chez invocation in this tree -- see the
+# hard rule in CLAUDE.md. compile.sh may itself already be inside one, so this
+# checks rather than assuming: an unguarded `scheme` here is exactly the second
+# way of running things that rule exists to prevent.
+cfg_src_sonic() { echo "config-sonic.sps"; }
+cfg_compile_sonic() {
+    local drv="$BUILD/sonic-build.ss"
+    cat > "$drv" <<EOF
+(import (chezscheme) (sonic driver) (sonic pipeline))
+(compile-sonic-to-file "$BENCH/config-sonic.sps" nbody-externs "$BUILD/sonic")
+EOF
+    if [ -f /.dockerenv ]; then
+        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
+    else
+        docker compose -f "$ROOT/docker-compose.yml" run --rm -T \
+            --entrypoint bash sonic -c \
+            "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-build.ss"
+    fi
+    chmod +x "$BUILD/sonic"
+}
+cfg_run_sonic() { echo "$BUILD/sonic $1"; }
 
 # --- configuration 6: C, the reference -------------------------------------
 # Two flag sets, because the pair separates "no vectorizer" from "worse scalar
