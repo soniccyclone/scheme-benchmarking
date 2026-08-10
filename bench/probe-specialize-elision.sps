@@ -245,6 +245,36 @@
 ;;; assume it is a copy of rot's body just because the names share a lineage --
 ;;; that assumption is exactly the kind that has died five times on this issue.
 
+;;; --- WHICH COPIES, EXACTLY: THREE OF FOURTEEN, NOT ONE PER COPY ---------
+;;;
+;;; Emitted functions with specialisation on, and their bounds checks:
+;;;
+;;;   main.entry1        0     shift%3.3@13.163   0
+;;;   shift%3.3@5.13     0     shift%3.3@17.164   0
+;;;   shift%3.3@9.14     0     shift%3.3@21.165   0
+;;;   shift%3.3@13.15    0     shift%3.3@25.166   0
+;;;   shift%3.3@17.16    0     shift%3.3.159      0    <- residual loop
+;;;   shift%3.3@21.17    0     shift%3.3@1.12     1
+;;;   shift%3.3@25.18    0     shift%3.3@1.160    1
+;;;   shift%3.11         0     shift%3.3@5.161    1
+;;;   shift%3.3@9.162    0     drive              0
+;;;
+;;; THREE checks across FOURTEEN copies, and the residual loop is clean.
+;;;
+;;; THIS RETRACTS "one check per copy", which appears in earlier notes here and
+;;; on the issue. It came from dividing a total by a copy count instead of
+;;; attributing the checks, and it made the loss look uniform when it is
+;;; concentrated. The fannkuch figures that scale with the growth budget
+;;; (2, 19, 47, 79) are aggregates and do not license the per-copy reading
+;;; either.
+;;;
+;;; WHAT THE CONCENTRATION SUGGESTS. The affected copies are @1 twice and @5
+;;; once -- early ones, not the tail -- so this is again NOT the out-of-range
+;;; story. Two copies share the @1 index across different rounds of copying,
+;;; which is worth a look: whatever distinguishes @1.12 and @1.160 from
+;;; @9.162 and its neighbours is the remaining question, and it is now a
+;;; question about three named functions rather than about a pass.
+
 (define v (make-vector 8 0))
 (define (rot r)
   (let ((p0 (vector-ref v 0)))
