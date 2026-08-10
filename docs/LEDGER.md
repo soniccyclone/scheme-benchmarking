@@ -1220,3 +1220,48 @@ exactly its instruction count, which cannot mean one memory op per
 instruction, so `ls_dispatch` is not counting what its name suggests. Only the
 RATIOS between the two binaries are used here, and those are sound because both
 were measured the same way.
+
+## D48 -- count-flips is 22.7% of fannkuch and does almost no work
+
+Re-profiled after qaq.13, and the distribution is unchanged from before it:
+
+    loop%2 (two copies)   30.0% + 24.5%
+    count-flips           22.7%
+    next                   8.9%
+    copy-perm              5.0%
+
+Removing 22.4% of the program's instructions moved the shape of the profile not
+at all, which is D42 arriving from a third direction: the checks were absorbed
+everywhere in proportion, so deleting them changed no function's share.
+
+THE ANOMALY IS count-flips. Its entire body is
+
+    (let ((k (vector-ref perm 0)))
+      (if (fx= k 0) f (begin (flip-prefix k) (count-flips (fx+ f 1)))))
+
+-- one load, one compare, an increment, a call and a tail call. It cannot be
+22.7% of the program on throughput. It is 22.7% on LATENCY, and there are two
+candidates sitting in plain sight.
+
+The first is a store-to-load dependency the algorithm cannot avoid: `perm[0]`
+is read immediately after the flip that just wrote it, so each iteration waits
+on the previous iteration's store forwarding. Zen 5's forwarding is measured
+elsewhere in this ledger at around 7 cycles when it fails to forward
+(qaq.7.16); even when it succeeds it is not free.
+
+The second is the call boundary. `flip-prefix` is inlined into count-flips by
+rule 2', but the flip LOOP inside it stays a separate procedure -- rule 4
+refuses to inline anything recursive -- so every flip pays a call and a return
+between the store and the dependent load, and pays them inside the dependency
+chain rather than beside it.
+
+WHICH MATTERS IS NOT ESTABLISHED, and the distinction is the whole question:
+the first is the algorithm's and nobody can remove it, while the second is
+ours. gcc has the same data dependency and no call, so the difference between
+8.28G and 10.88G may be largely this one boundary.
+
+This is the first specific, testable account of D47's residual -- which is
+known to be non-memory work at 1.50x, and which nothing else has localised. The
+test is cheap and does not need the inliner changed: hand-write a fannkuch
+variant whose flip loop is spliced into count-flips, compile it, and measure.
+That is D43's technique and it settled the unroll question in one turn.
