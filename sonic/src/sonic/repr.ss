@@ -163,6 +163,34 @@
       (car  tagged)
       (cdr  tagged)))
 
+  ;; --- what the runtime externs RETURN --------------------------------------
+  ;;
+  ;; An extern's result is `tagged` because nothing can say more -- true of a
+  ;; procedure this compiler does not implement, and false of the handful it
+  ;; does. runtime.ss's `length` returns a raw count and its `string->number`
+  ;; returns a fixnum; calling those tagged is not conservatism, it is a wrong
+  ;; answer waiting for the join to find it.
+  ;;
+  ;; nbody is where it was found. Its N comes from
+  ;;
+  ;;     (if (fx> (length args) 1) (string->number (cadr args)) 1000)
+  ;;
+  ;; so the `if` joined an extern's `tagged` against the literal 1000 and made N
+  ;; tagged -- while `(fx< i N)` reads it as a raw word. The program is correct
+  ;; today only because the literal was never encoded and the extern arm is dead
+  ;; code. Declaring both routines raw-word removes the join, and N is a machine
+  ;; word from end to end, which is what every consumer already assumed.
+  (define extern-result-classes
+    '((length        . raw-word)
+      (string->number . raw-word)))
+
+  ;; `tagged` for anything not named: an external procedure returns a Scheme
+  ;; object and nothing here can say more. Naming one is a claim about a routine
+  ;; in runtime.ss, checked by reading it.
+  (define (extern-result-class name)
+    (let ((p (assq name extern-result-classes)))
+      (if p (cdr p) 'tagged)))
+
   ;; --- what the RUNTIME-PROVIDED externs require --------------------------
   ;;
   ;; An extern's result is `tagged` because nothing here can say more, and its
@@ -382,7 +410,7 @@
             ;; procedure returns a Scheme object and nothing here can say more.
             ((call)     (if (hashtable-ref bodies (cadr se) #f)
                             (hashtable-ref results (cadr se) #f)
-                            'tagged))
+                            (extern-result-class (cadr se))))
             ((primcall) (prim-result-class (cadr se)))
             (else 'tagged)))))
 
@@ -406,7 +434,7 @@
                     (cond ((and a b) (join-class '<if> a b)) (a a) (else b))))
             ((tailcall call) (if (hashtable-ref bodies (cadr e) #f)
                                  (hashtable-ref results (cadr e) #f)
-                                 'tagged))
+                                 (extern-result-class (cadr e))))
             ((primcall) (prim-result-class (cadr e)))
             ((lambda) 'tagged)
             ;; An unspecified value. Classified raw-word to match what lower.ss
