@@ -517,11 +517,19 @@
           (unless (gpr? dst) (error 'encode-instr "lea destination must be a GPR" i))
           (unless (mem? src) (error 'encode-instr "lea source must be a memory operand" i))
           (asm 'encode-instr '() 1 '(#x8D) (reg-number dst) src '() #f)))
+       ;; SHIFTS. `C1 /ext ib` takes the count as an immediate byte, and there
+       ;; is a one-byte-shorter `D1 /ext` whose count is an implicit 1. gas
+       ;; picks the short form and the differential test compares BYTES, so
+       ;; emitting the long one for a shift by one showed up as
+       ;; `mine=(72 193 251 1) gas=(72 209 251)`. Both decode to the same
+       ;; instruction; only one of them is what the assembler writes.
        ((memq m '(shl sar shr))
         (let ((dst (arg 0)) (src (arg 1))
               (ext (case m ((shl) 4) ((shr) 5) ((sar) 7))))
           (unless (imm? src) (error 'encode-instr "shift count must be an immediate" i))
-          (asm 'encode-instr '() 1 '(#xC1) ext dst (imm8-bytes (cadr src)) #f)))
+          (if (eqv? (cadr src) 1)
+              (asm 'encode-instr '() 1 '(#xD1) ext dst '() #f)
+              (asm 'encode-instr '() 1 '(#xC1) ext dst (imm8-bytes (cadr src)) #f))))
        ;; SYSCALL. Two bytes, no operands, and no REX -- the only way this
        ;; runtime talks to the kernel, since D25 puts no libc in the running
        ;; system. Adding it here rather than as a magic byte string keeps it

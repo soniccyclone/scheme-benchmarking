@@ -411,6 +411,30 @@
                       "mul-imm expects (mul-imm dst sc d src)" dst srcs))
              `((imul ,dst ,(cadr srcs) (imm ,(car srcs))))))
 
+     ;; (ashr-imm dst sc d src) -- an arithmetic shift right by a constant.
+     ;;
+     ;; TWO INSTRUCTIONS, unlike `add-imm` and `mul-imm` above, and the reason
+     ;; is the encoding rather than a missed trick. x86-64 has a three-address
+     ;; `lea` for the add and a three-address `imul` with an immediate for the
+     ;; multiply; `sar` is two-address only, so the value has to be in the
+     ;; destination first. The move coalesces away whenever the source dies
+     ;; here, which for an untag is the usual case.
+     ;;
+     ;; `sar` and not `shr`: a fixnum is signed, and a logical shift turns
+     ;; every negative one into a large positive number.
+     (cons 'ashr-imm
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'x86-64-selector
+                      "ashr-imm expects (ashr-imm dst sc d src)" dst srcs))
+             (let ((d (car srcs)) (src (cadr srcs)))
+               (unless (and (exact? d) (integer? d) (<= 0 d 63))
+                 (error 'x86-64-selector
+                        "ashr-imm shift count must be 0..63" d))
+               (if (eq? dst src)
+                   `((sar ,dst (imm ,d)))
+                   `((mov ,dst ,src) (sar ,dst (imm ,d)))))))
+
      ;; --- packed pairs -------------------------------------------------------
      ;;
      ;; One 128-bit register holds two doubles, so these are `xmm` operations on

@@ -584,6 +584,26 @@
       ;; multiply-immediate and has to build the constant, which costs it
       ;; nothing it was not already paying.
       (mul-imm v sc d v* ...)
+      ;; An ARITHMETIC shift right by a constant: `(ashr-imm v sc d x)` is
+      ;; `v = x >> d`, sign-preserving.
+      ;;
+      ;; It exists because untagging a fixnum has no other spelling. Tagging one
+      ;; is a multiply by 8 and lower.ss deliberately emits `retag fixnum` that
+      ;; way, reusing an op both targets already have so that the conversion
+      ;; costs no new selector rule. The INVERSE has no such shortcut: integer
+      ;; division on x86-64 is a runtime call, because `idiv` hardwires rdx:rax
+      ;; and the register partition cannot express that, and it rounds toward
+      ;; zero where a shift rounds toward negative infinity -- a different
+      ;; function on every negative fixnum.
+      ;;
+      ;; So this is the one conversion that has to be named. Both targets have
+      ;; the instruction already: x86-64 `sar`, RV64 `srai`.
+      ;;
+      ;; SHIFT COUNTS ARE CONSTANT HERE ON PURPOSE. Every use is a tag width,
+      ;; known at compile time, so nothing needs a variable count -- which on
+      ;; x86-64 would have to go through `cl` and give the allocator a
+      ;; precoloured constraint for one instruction.
+      (ashr-imm v sc d v* ...)
       ;; The packed-pair load and store: two ADJACENT elements starting at
       ;; element `idx + d`. Adjacency is the precondition the SLP pass proves;
       ;; nothing here can check it, which is why that pass is where the

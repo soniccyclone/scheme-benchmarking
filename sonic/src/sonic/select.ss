@@ -167,7 +167,7 @@
         (let ((r (rule-for sel 'const)))
           (unless r (error 'select-instr "target has no rule for const" (selector-name sel)))
           (r (cadr i) (caddr i) (list (cadddr i)))))
-       ((memq head '(load-at store-at p2load p2store add-imm mul-imm))
+       ((memq head '(load-at store-at p2load p2store add-imm mul-imm ashr-imm))
         ;; (load-at dst sc d base idx), (store-at dst sc d base idx val),
         ;; their packed-pair counterparts, and (add-imm/mul-imm dst sc d src).
         ;; The element offset rides as the first source, the same way `chk`

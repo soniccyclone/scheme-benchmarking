@@ -393,6 +393,14 @@
     (lea rbx (mem r14 r9 8 24))
     (lea r10 (mem rax #f 1 8))
     (shl r12 (imm 3))
+    ;; ARITHMETIC shift right, which `ashr-imm` selects to. Verified against
+    ;; gas alongside `shl` because the two differ by one ModRM extension field
+    ;; (4 against 7) and a transposition would be a silently wrong DIRECTION
+    ;; rather than a decode failure. `sar` and not `shr`: a fixnum is signed.
+    (sar r12 (imm 3))
+    (sar rbx (imm 1))
+    (sar rax (imm 63))
+    (sar r9 (imm 3))
     (neg r13)
     ;; signed division: cqo builds the 128-bit dividend, idiv divides it
     (cqo)

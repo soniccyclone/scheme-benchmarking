@@ -79,7 +79,7 @@
     '(const add sub mul neg sqrt abs
       cmp-lt cmp-le cmp-eq cmp-ge cmp-gt
       fcmp-lt fcmp-le fcmp-eq fcmp-ge fcmp-gt
-      load load-at move vlen gref add-imm mul-imm
+      load load-at move vlen gref add-imm mul-imm ashr-imm
       cvt-f64-from-int cvt-int-from-f64))
 
   ;; Operand vregs of one instruction. The DESTINATION is not an operand: that

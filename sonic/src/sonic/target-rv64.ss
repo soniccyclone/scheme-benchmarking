@@ -325,6 +325,18 @@
       `((addi ,t zero ,d)
         (mul ,dst ,src ,t))))
 
+  ;; (ashr-imm dst sc d src) -- an arithmetic shift right by a constant.
+  ;;
+  ;; ONE instruction here, where x86-64 needs two: RV64's shifts are
+  ;; three-address, so `srai` writes a destination that need not be a source.
+  ;; `srai` and not `srli`: a fixnum is signed.
+  (define (r:ashr-imm dst sc srcs)
+    (arity-check! 'rv64-select 2 srcs)
+    (let ((d (car srcs)) (src (cadr srcs)))
+      (unless (and (exact? d) (integer? d) (<= 0 d 63))
+        (error 'rv64-select "ashr-imm shift count must be 0..63" d))
+      `((srai ,dst ,src ,d))))
+
   ;; (store <unused> sc base idx val). Lmach's `(op v sc v* ...)` makes the
   ;; destination slot mandatory even for an op with no result, and `store-mach`
   ;; in sonic/src/sonic/fixtures.ss PINS that slot as unused with the base, the
@@ -548,6 +560,7 @@
      (cons 'vlen   r:vlen)
      (cons 'load     r:load)
      (cons 'store    r:store)
+     (cons 'ashr-imm r:ashr-imm)
      (cons 'load-at  r:load-at)
      (cons 'store-at r:store-at)
      (cons 'add-imm  r:add-imm)
