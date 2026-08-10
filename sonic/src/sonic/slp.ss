@@ -51,8 +51,13 @@
 ;;; oracle would catch.
 
 (library (sonic slp)
-  (export slp-program slp-stats slp-stats? slp-stats-packs slp-stats-instructions)
+  (export slp-program four-lane-packing? slp-stats slp-stats? slp-stats-packs slp-stats-instructions)
   (import (chezscheme) (sonic order))
+
+  ;; The padded shape is a property of the PROGRAM, not of the pass, so it is a
+  ;; parameter rather than a constant: a benchmark that stores four-wide bodies
+  ;; wants it and one that stores three-wide finds nothing.
+  (define four-lane-packing? (make-parameter #f))
 
   (define-record-type (slp-stats make-slp-stats slp-stats?)
     (fields (mutable packs) (mutable instructions)))
@@ -321,6 +326,18 @@
       ;; because a measurement nobody can repeat is worth nothing.
       (define three-lane-packs? #f)
 
+      ;; FOUR LANES, UNMASKED, for a layout that pads a body to four doubles.
+      ;;
+      ;; This is the shape three-lane packing was a workaround for. The mask
+      ;; existed only to avoid writing a fourth element that may not exist, and
+      ;; it cost 675 cycles to save 92 instructions because a masked store
+      ;; cannot forward to a later load. Where the fourth element is padding
+      ;; the program owns, there is nothing to mask.
+      ;;
+      ;; Off until a padded layout exists to point it at -- nbody stores bodies
+      ;; three-wide, so seeding four adjacent stores finds nothing there.
+      (define four-lane-packs? (four-lane-packing?))
+
       (define (collect-store-packs!)
         (let outer ((x 0))
           (when (< x n)
@@ -330,6 +347,17 @@
                        (b (store-at base idx (+ off 1)))
                        (c (and b (store-at base idx (+ off 2)))))
                   (cond
+                   ;; four lanes, unmasked: the padded shape
+                   ((and four-lane-packs? b c
+                         (store-at base idx (+ off 3))
+                         (let ((d (store-at base idx (+ off 3))))
+                           (add-pack! (cadddr fa) (cadddr (cdr b))
+                                      (cadddr (cdr c)) (cadddr (cdr d))
+                                      'pending)))
+                    (set! store-packs
+                          (cons (list x (car b) (car c)
+                                      (car (store-at base idx (+ off 3))))
+                                store-packs)))
                    ;; three lanes
                    ((and three-lane-packs? b c
                          (add-pack! (cadddr fa) (cadddr (cdr b)) (cadddr (cdr c))
@@ -724,6 +752,9 @@
         (string->symbol
          (string-append "p" (number->string lanes)
                         (cdr (assq mach-op pack-op-stem)))))
+      ;; Lane 0 is free, lane 1 is `p2hi` at any arity -- a ymm's low 128 bits
+      ;; ARE the xmm of the same number -- lane 2 is the low double of the high
+      ;; half, and lane 3 is the high double of it.
 
       (define pending '())
       (define extracts '())
@@ -750,7 +781,7 @@
       ;; extract reads a triple's lane 1 without knowing it is one. Only lane 2
       ;; has an instruction of its own.
       (define (lane-extract j)
-        (case j ((1) 'p2hi) ((2) 'p3lane2)
+        (case j ((1) 'p2hi) ((2) 'p3lane2) ((3) 'p4lane3)
           (else (error 'slp "no extract for this lane" j))))
 
       (define (plan-pack! p)

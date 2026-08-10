@@ -530,6 +530,69 @@
                (error 'x86-64-selector "p2fnma132 expects the other factor and the addend" srcs))
              `((vfnmadd132pd ,dst ,(cadr srcs) ,(car srcs)))))
 
+     ;; --- four lanes, unmasked ------------------------------------------------
+     ;;
+     ;; Identical in shape to the p3 rules with the mask gone. The operands are
+     ;; spelled `xmm` because that is what the allocator produces; the width is
+     ;; the mnemonic's, and a ymm of that number is the same physical register.
+     (cons 'p4load
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 3)
+               (error 'x86-64-selector "p4load expects (p4load dst sc d base index)" srcs))
+             `((v4movupd ,dst ,(mem/disp (cadr srcs) (caddr srcs)
+                                         (+ heap-element-disp (* (car srcs) word-scale)))))))
+     (cons 'p4store
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 4)
+               (error 'x86-64-selector
+                      "p4store expects (p4store <unused> sc d base index value)" srcs))
+             `((v4movupd ,(mem/disp (cadr srcs) (caddr srcs)
+                                    (+ heap-element-disp (* (car srcs) word-scale)))
+                         ,(cadddr srcs)))))
+     (cons 'p4splat
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 1)
+               (error 'x86-64-selector "p4splat expects one source" srcs))
+             `((v4splat ,dst ,(car srcs)))))
+     ;; Lane 3: the HIGH double of the high half. `vextractf128` brings lanes
+     ;; 2 and 3 down as an xmm, and `vunpckhpd` takes the upper of the two.
+     (cons 'p4lane3
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 1)
+               (error 'x86-64-selector "p4lane3 expects one source" srcs))
+             `((v3lane2 ,dst ,(car srcs))
+               (vunpckhpd ,dst ,dst ,dst))))
+     (cons 'p4add (packed 'v4addpd))
+     (cons 'p4sub (packed 'v4subpd))
+     (cons 'p4mul (packed 'v4mulpd))
+     (cons 'p4div (packed 'v4divpd))
+     ;; The addend IS the destination in the 231 ordering, so it is checked and
+     ;; dropped rather than passed -- three sources would encode d = a*d + d.
+     (cons 'p4fma
+           (lambda (dst sc srcs)
+             (unless (and (= (length srcs) 3) (eq? (caddr srcs) dst))
+               (error 'x86-64-selector
+                      "p4fma's addend must be its destination; contract.ss emits the move"
+                      dst srcs))
+             `((v4fma ,dst ,(car srcs) ,(cadr srcs)))))
+     (cons 'p4fnma
+           (lambda (dst sc srcs)
+             (unless (and (= (length srcs) 3) (eq? (caddr srcs) dst))
+               (error 'x86-64-selector
+                      "p4fnma's addend must be its destination; contract.ss emits the move"
+                      dst srcs))
+             `((v4fnma ,dst ,(car srcs) ,(cadr srcs)))))
+     (cons 'p4fma132
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'x86-64-selector "p4fma132 expects the other factor and the addend" srcs))
+             `((v4fma132 ,dst ,(cadr srcs) ,(car srcs)))))
+     (cons 'p4fnma132
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'x86-64-selector "p4fnma132 expects the other factor and the addend" srcs))
+             `((v4fnma132 ,dst ,(cadr srcs) ,(car srcs)))))
+
      (cons 'p2add (packed 'vaddpd))
      (cons 'p2sub (packed 'vsubpd))
      (cons 'p2mul (packed 'vmulpd))

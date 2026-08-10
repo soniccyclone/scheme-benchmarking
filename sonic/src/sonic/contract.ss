@@ -115,7 +115,8 @@
   ;; Each row is (marked-mul marked-add marked-sub fma fnma fma132 fnma132).
   (define fuse-table
     '((mul-c   add-c   sub-c   fma   fnma   fma132   fnma132)
-      (p2mul-c p2add-c p2sub-c p2fma p2fnma p2fma132 p2fnma132)))
+      (p2mul-c p2add-c p2sub-c p2fma p2fnma p2fma132 p2fnma132)
+      (p4mul-c p4add-c p4sub-c p4fma p4fnma p4fma132 p4fnma132)))
 
   (define (row-for-mul op) (assq op fuse-table))
   (define (row-of i) (and (instr? i) (row-for-mul (car i))))
@@ -130,7 +131,8 @@
   ;; downstream should have to know the mark existed.
   (define unmark-table
     '((mul-c . mul) (add-c . add) (sub-c . sub)
-      (p2mul-c . p2mul) (p2add-c . p2add) (p2sub-c . p2sub)))
+      (p2mul-c . p2mul) (p2add-c . p2add) (p2sub-c . p2sub)
+      (p4mul-c . p4mul) (p4add-c . p4add) (p4sub-c . p4sub)))
 
   (define (unmark-instr i)
     (let ((m (and (instr? i) (assq (car i) unmark-table))))

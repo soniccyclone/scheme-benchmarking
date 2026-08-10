@@ -188,6 +188,16 @@
       ;; there was nothing left for it to pack, and nbody's velocity updates
       ;; went from `vsubpd`/`vmulpd` back to six scalar sequences.
       p2mul-c p2add-c p2sub-c p2fma p2fnma p2fma132 p2fnma132
+      ;; FOUR LANES, UNMASKED, for a layout that pads a body to four doubles
+      ;; rather than packing three and predicating the fourth. Same 256-bit
+      ;; operations as the p3 forms with no mask -- see vec-x86-64.ss on why the
+      ;; mask cost more than the packing saved.
+      p4add p4sub p4mul p4div p4splat
+      p4mul-c p4add-c p4sub-c p4fma p4fnma p4fma132 p4fnma132
+      ;; Lane 3 is the only extract that needs its own op. Lane 0 is free, lane
+      ;; 1 is `p2hi` unchanged -- a ymm's low 128 bits ARE the xmm of the same
+      ;; number -- and lane 2 is `p3lane2`, the low double of the high half.
+      p4lane3
       ;; Comparison is split by OPERAND type, not result type. The `sc` a
       ;; selection rule receives is the class of the boolean RESULT, so a single
       ;; cmp-lt cannot tell whether it is comparing two fixnums or two flonums,
@@ -588,7 +598,11 @@
       ;; access, so reading (x,y,z) at the end of an array does not touch the
       ;; word past it.
       (p3load v sc d v* ...)
-      (p3store v sc d v* ...))
+      (p3store v sc d v* ...)
+      ;; FOUR adjacent elements starting at `idx + d`, unmasked because the
+      ;; fourth is padding this program owns.
+      (p4load v sc d v* ...)
+      (p4store v sc d v* ...))
     (Transfer (t)
       (jump lbl)
       (branch-if v lbl0 lbl1)
