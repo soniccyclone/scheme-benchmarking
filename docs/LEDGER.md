@@ -1443,3 +1443,39 @@ THE LESSON, and it is the same one D48 taught in the other direction: a probe
 measures the program you wrote, not the program the compiler will produce. D43's
 unroll probe predicted the peel correctly because the compiler can produce that
 shape. This one did not, because it cannot.
+
+## D52 -- the collector is not lowered, and that is what limits the benchmark set
+
+Filing the third-benchmark issue turned up a constraint worth stating on its
+own, because it shapes more than that issue.
+
+`gc.ss` is a precise generational copying collector, written in Scheme, and its
+own header says what it is: "A later bead lowers it; what it lowers is these
+steps, in this order, over this object layout." `(sonic gc)` is imported by
+`elide.ss` alone, for tag widths. Nothing emits it. Compiled programs bump-
+allocate and never collect.
+
+Everything measured in this project so far is therefore allocation-free by
+construction. nbody allocates three vectors at startup; fannkuch allocates
+three; neither allocates in a loop. Both fit in L2 and both branch predictably.
+Every ledger entry from D42 onward -- the exchange rate, control flow versus
+work, the decomposition of fannkuch's residual -- is calibrated to programs of
+that one shape, and D46 says so explicitly.
+
+THE CONSEQUENCE FOR CHOOSING A THIRD BENCHMARK is sharper than it looks. The
+Benchmarks Game entries that would break the shape are the allocation-heavy
+ones: binary-trees is nothing but allocation and pointer chasing, k-nucleotide
+is hash tables over a large input. Both are unavailable until the collector is
+lowered. What remains available -- spectral-norm, mandelbrot -- is another
+small-working-set FP kernel, which is a third data point on an axis that
+already has two.
+
+AND RESEARCH.md ALREADY SAYS THIS IS THE AXIS THAT MATTERS. Section 3 records
+Stalin losing 5x to 16x to C on allocation-heavy code, with the cause being its
+conservative Boehm collector rather than its analysis -- the argument this
+project's whole GC design is built on. The compiler has never once been
+measured on the workload its collector was designed for.
+
+So the honest reading of the current standing -- fannkuch 1.198x, nbody 1.118x
+-- is that it covers the half of the language that does not allocate. That is
+not a small half, and it is not the whole one.
