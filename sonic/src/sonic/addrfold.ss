@@ -101,21 +101,38 @@
         (cond
          ;; (load dst sc base idx)
          ((and (pair? i) (eq? (car i) 'load) (= (length i) 5))
-          (let ((f (folded-index (car (cddddr i)))))
-            (if f
-                (begin
-                  (addrfold-stats-folded-set! stats (+ 1 (addrfold-stats-folded stats)))
-                  (list 'load-at (cadr i) (caddr i) (cdr f) (cadddr i) (car f)))
-                i)))
+          (let* ((idx (car (cddddr i)))
+                 (f (folded-index idx))
+                 (k (and (not f) (symbol? idx) (hashtable-ref consts idx #f))))
+            (cond
+             (f (addrfold-stats-folded-set! stats (+ 1 (addrfold-stats-folded stats)))
+                (list 'load-at (cadr i) (caddr i) (cdr f) (cadddr i) (car f)))
+             ;; A LITERAL INDEX NEEDS NO INDEX REGISTER AT ALL. `v[3]` is one
+             ;; displacement off the base, so the index slot goes to #f and the
+             ;; selector's `mem/disp` produces exactly the shape `mem-disp`
+             ;; builds for a header field.
+             ;;
+             ;; The constant used to be materialised instead -- `mov $3, %rcx`
+             ;; and then `(base,rcx,8)` -- which costs an instruction AND a
+             ;; register, and hides adjacency: slp.ss decides two accesses are
+             ;; neighbours by comparing index vregs, and twelve vregs holding
+             ;; 0..11 never look adjacent however contiguous the addresses are.
+             (k (addrfold-stats-folded-set! stats (+ 1 (addrfold-stats-folded stats)))
+                (list 'load-at (cadr i) (caddr i) k (cadddr i) #f))
+             (else i))))
          ;; (store dst sc base idx val)
          ((and (pair? i) (eq? (car i) 'store) (= (length i) 6))
-          (let ((f (folded-index (car (cddddr i)))))
-            (if f
-                (begin
-                  (addrfold-stats-folded-set! stats (+ 1 (addrfold-stats-folded stats)))
-                  (list 'store-at (cadr i) (caddr i) (cdr f) (cadddr i) (car f)
-                        (cadr (cddddr i))))
-                i)))
+          (let* ((idx (car (cddddr i)))
+                 (f (folded-index idx))
+                 (k (and (not f) (symbol? idx) (hashtable-ref consts idx #f))))
+            (cond
+             (f (addrfold-stats-folded-set! stats (+ 1 (addrfold-stats-folded stats)))
+                (list 'store-at (cadr i) (caddr i) (cdr f) (cadddr i) (car f)
+                      (cadr (cddddr i))))
+             (k (addrfold-stats-folded-set! stats (+ 1 (addrfold-stats-folded stats)))
+                (list 'store-at (cadr i) (caddr i) k (cadddr i) #f
+                      (cadr (cddddr i))))
+             (else i))))
          ;; (add dst raw-word a b), where one side is a constant.
          ;;
          ;; The two rules above remove the add entirely when its result is only
