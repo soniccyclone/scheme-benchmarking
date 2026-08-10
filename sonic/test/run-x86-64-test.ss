@@ -862,6 +862,39 @@
   (ck! "a bounds check still traps on a tagged index that is out of range"
        (= 102 code)))
 
+;; TWO GROUPS OF ADJACENT STORES IN ONE BLOCK.
+;;
+;; slp.ss seeds a pack from adjacent stores and used to find its partners by
+;; scanning the block from the TOP, returning the first store matching
+;; (base, index, offset). That is right while a block holds one such group,
+;; which is every program this compiler had seen -- nbody's pair body writes
+;; v[bi], v[bi+1], v[bi+2] once.
+;;
+;; Two groups accumulating into the SAME three elements is what unrolling a
+;; pair loop produces, and it is the shape qaq.7.22 needs. The second group's
+;; seed reached BACKWARD into the first, packing one value from one
+;; computation with two from the other, and the program computed a different
+;; number -- NaN, from the full benchmark. The search starts at the seed now.
+;;
+;; The oracle is Chez on the same source, which is where these two values come
+;; from. They are not round numbers and that is the point: a packing bug that
+;; mixes lanes produces something plausible, not something obviously broken.
+(let-values (((code out)
+              (compile-and-run
+               (call-with-input-file "../bench/nbody/repro-two-groups.sps"
+                 (lambda (p)
+                   (let loop ((acc '()))
+                     (let ((l (get-line p)))
+                       (if (eof-object? l)
+                           (apply string-append (reverse acc))
+                           (loop (cons (string-append l "\n") acc)))))))
+               '(display newline))))
+  (ck! "two groups of adjacent stores in one block do not cross-pack"
+       (and (zero? code) (equal? out '(0.0027397408607378075 0.0))))
+  (unless (and (zero? code) (equal? out '(0.0027397408607378075 0.0)))
+    (display "       exit=") (display code)
+    (display " got=") (write out) (newline)))
+
 ;; THE BENCHMARK ITSELF, as far as it currently gets.
 ;;
 ;; nbody's initial energy is the first oracle check in docs/METHOD.md, and it

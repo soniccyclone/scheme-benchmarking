@@ -280,8 +280,26 @@
       ;; three are distinct elements of one object -- adjacency of the
       ;; SUBSCRIPTS is the whole claim, and it is the claim the load and store
       ;; forms are normalised to make checkable.
-      (define (store-at base idx off)
-        (let scan ((k 0))
+      ;; FROM THE SEED, NOT FROM THE TOP OF THE BLOCK.
+      ;;
+      ;; This scanned from k=0 and returned the first store anywhere in the
+      ;; block matching (base, idx, off). That is right while a block holds one
+      ;; group of adjacent stores, which is every program this compiler had
+      ;; seen: nbody's pair body writes v[bi], v[bi+1], v[bi+2] once.
+      ;;
+      ;; Put TWO such groups in one block -- two pair interactions accumulating
+      ;; into the SAME three elements, which is what unrolling the pair loop
+      ;; produces and what qaq.7.22 wants -- and the second group's seed looks
+      ;; for its offset+1 and finds the FIRST group's. The pack then carries a
+      ;; value from one computation and two from the other, and the program
+      ;; computes a different number. bench/nbody/repro-two-groups.sps is that
+      ;; program in 55 lines; it returned NaN from the full benchmark.
+      ;;
+      ;; Searching forward from the seed keeps every existing pack -- a group's
+      ;; own members follow its offset-0 store -- and stops a later group from
+      ;; reaching backward into an earlier one.
+      (define (store-at from base idx off)
+        (let scan ((k from))
           (cond ((= k n) #f)
                 ((let ((f (store-form (vector-ref vec k))))
                    (and f (eq? (car f) base) (eq? (cadr f) idx)
@@ -344,19 +362,19 @@
             (let ((fa (store-form (vector-ref vec x))))
               (when (and fa (f64v? (cadddr fa)))
                 (let* ((base (car fa)) (idx (cadr fa)) (off (caddr fa))
-                       (b (store-at base idx (+ off 1)))
-                       (c (and b (store-at base idx (+ off 2)))))
+                       (b (store-at x base idx (+ off 1)))
+                       (c (and b (store-at x base idx (+ off 2)))))
                   (cond
                    ;; four lanes, unmasked: the padded shape
                    ((and four-lane-packs? b c
-                         (store-at base idx (+ off 3))
-                         (let ((d (store-at base idx (+ off 3))))
+                         (store-at x base idx (+ off 3))
+                         (let ((d (store-at x base idx (+ off 3))))
                            (add-pack! (cadddr fa) (cadddr (cdr b))
                                       (cadddr (cdr c)) (cadddr (cdr d))
                                       'pending)))
                     (set! store-packs
                           (cons (list x (car b) (car c)
-                                      (car (store-at base idx (+ off 3))))
+                                      (car (store-at x base idx (+ off 3))))
                                 store-packs)))
                    ;; three lanes
                    ((and three-lane-packs? b c
