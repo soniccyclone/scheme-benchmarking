@@ -890,3 +890,22 @@ and two different directions: on this machine the instruction count has not
 once predicted the cycles. Anything proposed on an instruction-count argument
 alone should be assumed not to move the clock until it is measured on the
 clock.
+
+### D42 addendum -- what is actually left, counted rather than inferred
+
+The post-change guard count is `bounds 0, overflow 6`. Worth stating because the
+instruction total invites a wrong inference: 27.161G sits next to the 27.088G
+that qaq.13's table recorded for "neither bounds nor overflow", which reads like
+both families went. They did not. That table was measured against a 37.705G
+baseline and is -28% from it; this change is -22.4% from a 35.005G baseline that
+had already absorbed a session of other work. Different denominators, and the
+proximity of the two totals is coincidence.
+
+Six overflow checks survive. Bounding an element bounds the INDEX arithmetic it
+feeds, and that is what discharged the bounds family; it does not bound every
+`fx+` in the program, and the six that remain are not in the reversal.
+
+nbody is unaffected, as intended -- its flvectors are parameters, so
+elemrange.ss declines to track them and the driver takes the untouched path.
+Measured after the change at 186.92 cycles/step against c-native's 168.71,
+which is 1.108x and if anything marginally better than the 1.12x before it.
