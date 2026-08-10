@@ -554,8 +554,19 @@
 ;; perm is less than n", which is a statement about the array's CONTENTS --
 ;; not about any scalar the domain tracks. SPEC.md picked this program for
 ;; exactly that shape. The other six went with the equality-edge refinement.
-(ck! "fannkuch-redux keeps four, and only in flip-prefix's loop"
-     (= 4 (surviving-bounds-checks "../bench/fannkuch/config-sonic.sps"
+;; EIGHT, BEING FOUR IN EACH OF TWO COPIES of that loop, and the doubling is
+;; not a lost elision. `flip-prefix` is named by exactly one call, so inline.ss
+;; splices it into `count-flips` (rule 2'); `unroll-program` then runs on the
+;; larger body and duplicates it. Each copy keeps the same four checks it kept
+;; when there was one copy, which is the number that says the analysis did not
+;; get worse.
+;;
+;; Attributed rather than assumed: the checks land 4 in `loop%2` and 4 in
+;; `loop%2.14`, which are the two unrolled copies of the flip loop and nothing
+;; else. If a future change puts a check anywhere but there, this number moves
+;; and the reason is not this one.
+(ck! "fannkuch-redux keeps four per copy of flip-prefix's loop, and it has two"
+     (= 8 (surviving-bounds-checks "../bench/fannkuch/config-sonic.sps"
                                    '(display newline))))
 
 ;; A TAGGED FALSE IS sonic-false, NOT ZERO.
@@ -640,13 +651,19 @@
                    "(define (dead r)\n"
                    "  (let loop ((i 0))\n"
                    "    (if (fx< i r) (begin (vector-set! v i i) (loop (fx+ i 1))) 0)))\n"
+                   ;; CALLED TWICE, so rule 2' leaves it alone. A procedure
+                   ;; named by one call is spliced whatever its size, and this
+                   ;; test is about a procedure named by NONE.
                    "(define (live x) (fx+ x 1))\n"
-                   "(define (main) (begin (display (fx->fl (live 41))) (newline)))\n"
+                   "(define (main) (begin (display (fx->fl (fx+ (live 41) (live 0)))) (newline)))\n"
                    "(main)\n"))
                  (close-port p)))
             (names (map finalized-name
                         (compiled-functions (compile-sonic f '(display newline))))))
-       (and (memq 'live names) (memq 'main names)
+       ;; `main` is NOT required to survive: it is named by exactly one call,
+       ;; the one the top level makes, so rule 2' splices it into the entry.
+       ;; What this test is about is `dead`, which nothing calls at all.
+       (and (memq 'live names)
             (not (memq 'dead names))
             ;; the loop inside it goes too, which is the case that would
             ;; survive a check that only looked at top-level names
@@ -897,11 +914,18 @@
 (let ((caught #f))
   (guard (e (#t (set! caught #t)))
     (compile-and-run
+     ;; TWO CALLERS EACH, so inline.ss leaves both alone. A procedure named by
+     ;; exactly one call is spliced whatever its size (rule 2'), which would
+     ;; move the call to `big` out of tail position and leave nothing to refuse.
      (string-append
       "(define (big a b c d e f g)\n"
       "  (fx+ a (fx+ b (fx+ c (fx+ d (fx+ e (fx+ f g)))))))\n"
       "(define (small p q) (big p q 1 2 3 4 5))\n"
-      "(define (main) (display (fx->fl (small 9 8))) (newline))\n(main)\n")
+      "(define (other u v) (big v u 5 4 3 2 1))\n"
+      "(define (main)\n"
+      "  (display (fx->fl (fx+ (fx+ (small 9 8) (small 1 2)) (other 3 4))))\n"
+      "  (newline))\n"
+      "(main)\n")
      '(display newline)))
   (if caught
       (display "  ok   a tail call that would GROW the stack is refused\n")

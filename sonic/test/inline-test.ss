@@ -276,7 +276,39 @@
 
 ;; --- 5. the budgets are real --------------------------------------------
 
+;; TWO CALL SITES, which is what makes this a test of the SIZE budget. A callee
+;; named by exactly one call is spliced at any size (rule 2'), so a single-site
+;; fixture would measure that rule instead and pass for the wrong reason.
 (define big-prog
+  (with-output-language (Lanf Expr)
+    `(let ([big (lambda (u v)
+                  (let ([a1 (primcall fl* ([fp-contract unchecked]) u v)])
+                    (let ([a2 (primcall fl+ ([fp-contract unchecked]) a1 u)])
+                      (let ([a3 (primcall fl- ([fp-contract unchecked]) a2 v)])
+                        (let ([a4 (primcall fl* ([fp-contract unchecked]) a3 a3)])
+                          (let ([a5 (primcall fl/ () a4 a1)])
+                            a5))))))])
+       (let ([r (call big a b)])
+         (let ([s (call big b a)])
+           s)))))
+
+(ok/show "a procedure over the size budget, called twice, is refused"
+         (= 2 (count-calls (inline-program big-prog) 'big))
+         (inline-program big-prog))
+
+;; --- 5'. a callee named ONCE goes in whatever its size --------------------
+;;
+;; Splicing a body that one call names duplicates nothing: the body moves, it
+;; does not multiply, and a call, a return, a prologue and an epilogue go with
+;; it. The size budget exists to stop a body being copied to many sites; with
+;; one site there is nothing to stop.
+;;
+;; specialize.ss is what makes this matter. It mints a fresh copy per call site
+;; and never shares one, so every copy has exactly one caller and a body far
+;; over the budget -- and nothing spliced them, so full unrolling emitted 210
+;; functions where the rolled program had 101, with a `ret` between consecutive
+;; pair bodies.
+(define big-once-prog
   (with-output-language (Lanf Expr)
     `(let ([big (lambda (u v)
                   (let ([a1 (primcall fl* ([fp-contract unchecked]) u v)])
@@ -288,9 +320,8 @@
        (let ([r (call big a b)])
          r))))
 
-(ok/show "a procedure over the size budget is refused"
-         (= 1 (count-calls (inline-program big-prog) 'big))
-         (inline-program big-prog))
+(ok! "a procedure over the budget but named by ONE call is inlined"
+     (= 0 (count-calls (inline-program big-once-prog) 'big)))
 
 (ok! "and the same procedure goes in when the budget is raised"
      (parameterize ([inline-size-budget 100])

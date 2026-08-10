@@ -228,16 +228,18 @@
 
   ;; --- which names are known procedures ------------------------------------
 
-  (define-record-type proc (fields params body size))
+  (define-record-type proc (fields params body size sites))
 
   ;; Returns (values procs recursive), both eq-hashtables keyed on name.
   (define (scan e)
     (let ([binds (make-eq-hashtable)]      ; name -> binding occurrences
           [lam (make-eq-hashtable)]        ; name -> (params . body)
           [nonop (make-eq-hashtable)]      ; name -> #t, seen other than as operator
-          [calls (make-eq-hashtable)])     ; name -> (callee ...), edges out of a body
+          [calls (make-eq-hashtable)]
+          [sites (make-eq-hashtable)])
       (define (bind! x) (hashtable-update! binds x (lambda (n) (+ n 1)) 0))
       (define (use! x) (hashtable-set! nonop x #t))
+      (define (site! x) (hashtable-update! sites x (lambda (n) (+ n 1)) 0))
       (define (edge! from to)
         (when from (hashtable-update! calls from (lambda (s) (cons to s)) '())))
       (define (Expr e from)
@@ -255,7 +257,7 @@
               (Expr body1 x)]
              [else (SimpleExpr se from)])
            (Expr body from)]
-          [(tailcall ,x ,x* ...) (edge! from x) (for-each use! x*)]
+          [(tailcall ,x ,x* ...) (edge! from x) (site! x) (for-each use! x*)]
           [(lambda (,x* ...) ,body) (for-each bind! x*) (Expr body from)]
           [(letrec ([,x* ,e*] ...) ,body)
            (for-each bind! x*)
@@ -280,7 +282,7 @@
           [,x (use! x)]
           [(quote ,d) (void)]
           [(lambda (,x* ...) ,body) (for-each bind! x*) (Expr body from)]
-          [(call ,x ,x* ...) (edge! from x) (for-each use! x*)]
+          [(call ,x ,x* ...) (edge! from x) (site! x) (for-each use! x*)]
           [(primcall ,pr ([,pn* ,c*] ...) ,x* ...) (for-each use! x*)]
           [else (void)]))
       ;; TOP-LEVEL BINDINGS ARE PROCEDURES TOO, and reaching them is the whole
@@ -314,7 +316,8 @@
                       (not (hashtable-ref nonop nm #f)))
              (let ([pb (hashtable-ref lam nm #f)])
                (hashtable-set! procs nm
-                               (make-proc (car pb) (cdr pb) (expr-size (cdr pb)))))))
+                               (make-proc (car pb) (cdr pb) (expr-size (cdr pb))
+                                          (hashtable-ref sites nm 0))))))
          (hashtable-keys lam))
         (values procs (self-reaching procs calls)))))
 
@@ -480,7 +483,8 @@
                  (= (length (proc-params p)) nargs)
                  (not (memq f stack))                       ; rule 3
                  (not (hashtable-ref recursive f #f))       ; rule 4
-                 (<= (proc-size p) (inline-size-budget))    ; rule 2
+                 (or (<= (proc-size p) (inline-size-budget))
+                     (= 1 (proc-sites p)))
                  (< (length stack) (inline-depth-budget))
                  p)))
 

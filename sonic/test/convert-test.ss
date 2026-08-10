@@ -73,14 +73,17 @@
 (let-values (((form st) (front (polymorphic "(fx< 1 2)"))))
   (ck! "a boolean merged with a tagged value no longer refuses"
        (convert-report? st))
-  ;; THREE RETAGS, NOT ONE, and two of them are the fixture's own. Every
-  ;; program here also contains `(cons 1 2)`, whose fields repr.ss now requires
-  ;; tagged -- both fields of a pair are scanned by the collector -- so the two
-  ;; literals are retagged as well as the joined value. Asserting membership
-  ;; rather than `cdar` because the site list is built by consing and its order
-  ;; is not part of what this is testing.
+  ;; SIX RETAGS, and every one of them is accounted for. Three come from the
+  ;; program: the joined value, and the two literals of `(cons 1 2)`, whose
+  ;; fields repr.ss requires tagged because both are scanned by the collector.
+  ;; Then all three appear TWICE, because `main` is named by exactly one call
+  ;; and inline.ss splices it (rule 2') while leaving its definition behind for
+  ;; reachability to drop -- and `front` stops before that sweep.
+  ;;
+  ;; Asserting membership rather than `cdar` because the site list is built by
+  ;; consing and its order is not part of what this is testing.
   (ck! "and it inserts a `boolean` retag, alongside the fixture's two literals"
-       (and (= 3 (convert-report-inserted st))
+       (and (= 6 (convert-report-inserted st))
             (memq 'boolean (map cdr (convert-report-sites st))))))
 
 ;; --- the fixnum case, which used to be SILENT -----------------------------
@@ -89,7 +92,7 @@
 ;; program compiled to an untagged word sitting in the value class.
 (let-values (((form st) (front (polymorphic "(fx+ 1 2)"))))
   (ck! "a computed fixnum merged with a tagged value inserts a retag"
-       (= 3 (convert-report-inserted st)))
+       (= 6 (convert-report-inserted st)))
   (ck! "and its kind is `fixnum`, not `boolean`"
        (memq 'fixnum (map cdr (convert-report-sites st)))))
 
@@ -107,7 +110,7 @@
 ;; answering false about the number five is what finally read one.
 (let-values (((form st) (front (polymorphic "5"))))
   (ck! "a literal reaching `tagged` is retagged like anything else"
-       (and (= 3 (convert-report-inserted st))
+       (and (= 6 (convert-report-inserted st))
             (memq 'fixnum (map cdr (convert-report-sites st))))))
 
 ;; --- the double case: BOXED, and it used to raise --------------------------
@@ -118,7 +121,7 @@
 ;; facility and is why this arrived after the other two.
 (let-values (((form st) (front (polymorphic "(fl+ 1.0 2.0)"))))
   (ck! "a double merged with a tagged value no longer refuses"
-       (= 3 (convert-report-inserted st)))
+       (= 6 (convert-report-inserted st)))
   (ck! "and its kind is `boxed`, not an arithmetic retag"
        (memq 'boxed (map cdr (convert-report-sites st)))))
 

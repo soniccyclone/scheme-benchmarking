@@ -553,6 +553,11 @@
                       externs)))))))
 
 ;; A named let: a letrec-bound lambda that tail-calls itself.
+;;
+;; TWICE, because `main` is named by exactly one call -- the one the top level
+;; makes -- so inline.ss splices it and leaves its definition behind for
+;; reachability to drop. `ssa-of` stops before that sweep, so the loop is here
+;; once inside the splice and once inside the definition nothing calls.
 (let ((ls (analyze-loops
            (ssa-of (string-append
                     "(define (main)\n"
@@ -560,7 +565,7 @@
                     "    (if (fx= i 10) a (loop (fx+ i 1) (fx+ a i))))))\n"
                     "  (newline))\n(main)\n")
                    '(display newline)))))
-  (check! "a named let in a real program IS a loop" (length ls) 1)
+  (check! "a named let in a real program IS a loop, spliced and original" (length ls) 2)
   (check! "and its induction variable is found"
           (> (length (loop-ivs (car ls))) 0) #t))
 
@@ -576,12 +581,26 @@
 
 ;; THE BENCHMARK. Six named lets and two self-recursive procedures, one nested
 ;; pair among them -- and the nesting is the part a flat answer would fake.
+;;
+;; ELEVEN, NOT SEVEN, AND FOUR OF THEM ARE DEAD. `ssa-of` above stops after
+;; inlining, and inline.ss SPLICES a body without deleting the binding it came
+;; from: a procedure named by exactly one call (rule 2') is copied into its
+;; caller and its original definition stays where it was, for reachability to
+;; drop later. So `offset-momentum!`'s `loop%12` is here twice -- once inside
+;; `main` where it was spliced, once in the definition nothing calls any more --
+;; and the same goes for `outer%22`, `inner%24` and `loop%35`.
+;;
+;; The duplicates do not reach code generation. Compiling the same source all
+;; the way through gives 13 functions with `loop%12` appearing ONCE, because
+;; finalize drops what nothing calls. This count is of the IR at one stage, and
+;; the stage is before the sweep.
 (let* ((src (let* ((p (open-file-input-port "../bench/nbody/config-sonic.sps"))
                    (bv (get-bytevector-all p)))
               (close-port p)
               (utf8->string bv)))
        (ls (analyze-loops (ssa-of src nbody-externs))))
-  (check! "nbody has seven loops" (length ls) 7)
+  (check! "nbody has eleven loops after inlining, four of them dead copies"
+          (length ls) 11)
   (check! "and one of them is nested inside another"
           (> (fold-left max 0 (map loop-depth ls)) 0) #t)
   ;; THE TRIP COUNT, which is the deliverable rather than a bonus.
@@ -592,6 +611,10 @@
   ;; something unknowable and every one of those loops comes back `unbounded`,
   ;; which is the answer this pass gives when it has nothing, and is therefore
   ;; indistinguishable from not having looked.
+  ;; FOUR, not two, for the same reason the count above is eleven: the spliced
+  ;; copy and the definition it came from are both still here, and both are
+  ;; bounded by `n-bodies`. What this asserts is that the bound is RECOGNISED,
+  ;; and doubling the copies doubles the recognitions rather than losing them.
   (check! "the loops bounded by n-bodies are counted EXACTLY, at five"
           (let count ((xs ls) (n 0))
             (cond ((null? xs) n)
@@ -599,7 +622,7 @@
                         (= 5 (trip-count (loop-trip (car xs)))))
                    (count (cdr xs) (+ n 1)))
                   (else (count (cdr xs) n))))
-          2)
+          4)
   ;; The pairwise inner loop starts at i+1, so its count varies per outer
   ;; iteration. `bound` rather than `exact` is the honest answer and the one
   ;; this pass's header argues for at length: a guessed count is worse than

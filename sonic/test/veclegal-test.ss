@@ -496,7 +496,11 @@
        ;; every loop for checks the compiled program does not contain.
        (vs (let-values (((el st) (elide-to-fixpoint (real-ssa src nbody-externs))))
              (vectorize-legal el))))
-  (check! "nbody yields a verdict per loop" (length vs) 7)
+  ;; ELEVEN, four of them dead. inline.ss splices a procedure named by exactly
+  ;; one call (rule 2') and leaves its definition behind for reachability to
+  ;; drop; this pipeline stops before that sweep, so `loop%12`, `outer%22`,
+  ;; `inner%24` and `loop%35` are each here twice.
+  (check! "nbody yields a verdict per loop" (length vs) 11)
   (check! "and NONE of them is refused for a body this file could not find"
           (fold-left (lambda (a v) (or a (vl-refused-for? v 'loop-body-not-found)))
                      #f vs)
@@ -547,7 +551,10 @@
                    (loop (cdr xs)
                          (if (vl-refused-for? (car xs) 'unknown-trip-count) n (+ n 1))))
                   (else (loop (cdr xs) n))))
-          2)
+          ;; FOUR, being two loops each present twice -- see the count above.
+          ;; What this asserts is that the trip count is RECOGNISED rather than
+          ;; unknown, and a duplicated loop is recognised twice.
+          4)
   ;; THE INNER LOOP IS TOO SHORT, and that is a fact about nbody rather than a
   ;; gap in the analysis. Its counter starts at i+1, so over five bodies it runs
   ;; 4, 3, 2, 1 and 0 times. A 512-bit vector holds eight doubles. There is no
@@ -566,10 +573,17 @@
   ;; Asserted with the widths, because "legal" without a width is not an answer
   ;; a back end can use, and because a width above what the trip count supports
   ;; is the specific failure veclegal's header is written against.
+  ;; SOME `loop%35`, not the FIRST. There are two -- the spliced copy and the
+  ;; definition it came from -- and only the live one has the context that makes
+  ;; the verdict meaningful; the dead one comes back refused, which is correct
+  ;; and uninteresting. Taking the first was fine when there was one.
   (check! "nbody's position update is LEGAL to vectorize, at 128 and 256 bits"
           (let find ((xs vs))
             (cond ((null? xs) #f)
-                  ((name-prefix? 'loop%35 (vl-loop (car xs)))
+                  ((and (name-prefix? 'loop%35 (vl-loop (car xs)))
+                        (equal? (list (vl-legal? (car xs)) (vl-widths (car xs))
+                                      (vl-elt-class (car xs)))
+                                '(#t (128 256) raw-f64)))
                    (list (vl-legal? (car xs)) (vl-widths (car xs))
                          (vl-elt-class (car xs))))
                   (else (find (cdr xs)))))
