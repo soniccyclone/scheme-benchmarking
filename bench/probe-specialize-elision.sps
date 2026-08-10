@@ -275,6 +275,40 @@
 ;;; @9.162 and its neighbours is the remaining question, and it is now a
 ;;; question about three named functions rather than about a pass.
 
+;;; --- THE PROPOSED FIX IS REFUTED BEFORE BEING BUILT ---------------------
+;;;
+;;; The previous note concluded that r has no lower bound because `rot` has no
+;;; call site, and proposed either skipping or deleting call-site-less
+;;; procedures. Tested at source level first, by giving rot a second call site
+;;; so inline.ss declines to splice it:
+;;;
+;;;     one call site  (rot inlined away)   off 0 checks    on  3 checks
+;;;     two call sites (rot survives)       off 4 checks    on 13 checks
+;;;
+;;; WORSE, IN BOTH COLUMNS. When rot is live and has call sites its parameter
+;;; does receive an interval, and the checks still do not discharge -- and the
+;;; baseline, which had been the clean reference all along, sprouts four.
+;;;
+;;; SO THE MISSING CALL SITE IS NOT THE CAUSE. It is incidental. What the
+;;; baseline's zero has always meant is that rot is never EMITTED, not that its
+;;; body is provable; the body is unprovable either way. Both fixes proposed in
+;;; the previous note would have left the emitted copies exactly as they are,
+;;; and one of them (deleting dead procedures) would have been built on the
+;;; strength of a reading this experiment contradicts.
+;;;
+;;; CAVEAT, stated because it limits the conclusion: the two-call-site variant
+;;; also adds a branch, `(if (fx< acc 0) (rot 1) (rot r))`, so it is not a pure
+;;; isolation of call-site count. The dead arm is analysed, and its argument
+;;; joins into rot's parameter interval. A cleaner variant would call rot twice
+;;; from unconditional positions.
+;;;
+;;; WHERE THAT LEAVES IT. The one thing that has actually cleared the checks is
+;;; supplying `r >= 0` syntactically. Nothing about how rot is bound, called,
+;;; inlined or copied has reproduced that effect. The next attempt should start
+;;; from the interval domain's transfer functions for the operations that
+;;; produce r's value, rather than from the program's call structure -- three
+;;; separate structural theories have now failed.
+
 (define v (make-vector 8 0))
 (define (rot r)
   (let ((p0 (vector-ref v 0)))
