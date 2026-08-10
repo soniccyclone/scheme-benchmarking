@@ -116,10 +116,32 @@
   ;; outside every loop, and costs the analysis more than it buys.
   ;;
   ;; So it is off by evidence, not by accident, and the knob is the pass's own.
-  ;; A benchmark with many small procedures -- fannkuchredux, milestone 6 -- is
-  ;; where to ask again, and the number to raise it to is 12: an ANF'd accessor
-  ;; of nbody's shape counts 8 to 12 under `expr-size`, and nbody's own
-  ;; procedures measure 28 to 129, so 12 admits helpers and refuses kernels.
+  ;;
+  ;; ASKED AGAIN ON FANNKUCH-REDUX, 2026-08-10, which is the benchmark this note
+  ;; nominated. THE ANSWER IS NO, and for a reason worth writing down rather
+  ;; than re-deriving:
+  ;;
+  ;;     fannkuch  budget 0   448 instructions, 4 bounds checks
+  ;;     fannkuch  budget 12  448 instructions, 4 bounds checks
+  ;;     fannkuch  budget 24  448 instructions, 4 bounds checks
+  ;;     nbody     budget 12  878 instructions, 14 bounds checks (from 810, 0)
+  ;;
+  ;; Byte-identical at every budget. fannkuch HAS many small procedures --
+  ;; `flip-prefix`, `count-flips`, `copy-perm`, `fill-counts`, `rotate`, `init`
+  ;; -- and every one of them is SELF-RECURSIVE, because a loop in this
+  ;; compiler is a procedure that tail-calls itself. Rule 4 refuses recursion,
+  ;; so there is nothing here to inline at any size.
+  ;;
+  ;; "Many small procedures" was the wrong predictor. The one that matters is
+  ;; many small NON-LOOP procedures, and a Scheme benchmark written in the
+  ;; natural style has few: the small things are loops and the big things are
+  ;; kernels. That is a property of the language rather than of these two
+  ;; programs, so raising this budget is unlikely to pay on the next benchmark
+  ;; either -- ask with a measurement, not with an intuition.
+  ;;
+  ;; nbody at 12 is the same result the note above records, now with the
+  ;; elision cost in instructions: one call boundary removed, 68 more
+  ;; instructions, and fourteen bounds checks that used to be discharged.
   (define inline-size-budget (make-parameter 0))
 
   ;; DEPTH, 2. Inlining a callee into an already-inlined callee is where growth
