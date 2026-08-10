@@ -1347,3 +1347,54 @@ so it is not a result. Budget 1 makes two copies of the cheap loops and never
 reaches the reversal, which is where D43's 8.4% lives. The point is not that
 this is shippable; it is that the path to the 8.4% is no longer blocked on an
 unsolved ordering problem, only on peeling the right loop to the right depth.
+
+## D50 -- the peel lands: fannkuch 1.318x -> 1.198x, and instructions went UP
+
+specialize.ss is on. Three changes, each of which had to be true:
+
+  1. `eligible?` requires ONE literal argument rather than all of them. The
+     reversal is entered as `(loop 0 k)` -- i literal, j the runtime perm[0] --
+     so under the old rule the pass never saw the loop that matters and spent
+     its budget on the cheap ones.
+
+  2. The copy keeps its non-literal parameters instead of being a thunk, and
+     the call passes them. This is PEELING, and peeling needs no trip count:
+     the copies are the first K iterations counted from entry, so their literal
+     index is exactly right, and the residual loop still handles everything
+     past K.
+
+  3. repr.ss's "a procedure nothing calls gets raw-word parameters" step moved
+     BEFORE the class fixpoint instead of after it. `called` comes from `sites`,
+     which is complete before any propagation runs, so nothing about that step
+     ever needed the fixpoint's results -- but running it afterwards meant a
+     parameter defaulted there could never be the SOURCE of another parameter's
+     class. Harmless while every procedure was called or a leaf; fatal once a
+     pass introduces copies that call each other.
+
+The third was the whole blocker and it took the longest to find, because every
+input to the propagation was present and correct -- the copy in the table, the
+site recorded, the argument classified raw-word -- and the propagation simply
+did not run.
+
+MEASURED, n=11, bit-exact 556355/51, zero surviving bounds checks:
+
+    fannkuch    10.891G -> 9.877G cycles     -9.3%     1.318x -> 1.198x
+                27.161G -> 27.616G instr     +1.7%
+    nbody        188.08M -> 187.99M cycles   unchanged, bit-exact
+
+INSTRUCTIONS WENT UP AND CYCLES WENT DOWN. That is D46 stated as a measurement
+rather than a claim, and it is the second time this session the two moved in
+opposite directions -- qaq.13 removed 22.4% of the instructions for nothing,
+and this adds 1.7% for 9.3%. Anybody tuning this pass by instruction count will
+tune it backwards.
+
+THE BUDGET IS 1 AND THAT IS ALSO MEASURED. Larger budgets copy the loop past
+the point the program can reach; those copies index out of range, their checks
+are correctly kept, and both currencies get worse: 0 / 8 / 34 surviving checks
+and 9.832G / 9.864G / 9.999G cycles at budgets 1 / 2 / 4.
+
+WHAT IS STILL ON THE TABLE. The residual loop is still emitted -- deleting it
+needs the trip count this issue was originally filed for, and D43's probe says
+the fully-unrolled form reaches 1.196x with the call still in place and 1.176x
+without it. So the remaining unroll work is worth about two more points, and
+rule 5 (qaq.7.21) is worth 2.2 of them.

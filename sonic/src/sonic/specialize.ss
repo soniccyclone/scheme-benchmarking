@@ -151,7 +151,30 @@
   ;; trip count it never established. qaq.23 is where that gets fixed, and the
   ;; transformation is measured at 8.4% of fannkuch's cycles (LEDGER D43), so
   ;; it is worth the work once it stops manufacturing checks.
-  (define specialize-enabled? (make-parameter #f))
+  ;; ON, at last, and the two things that had to be true are now both measured.
+  ;;
+  ;; It was off because enabling it collapsed bounds-check elision -- fannkuch
+  ;; 0 surviving checks to 79, nbody 0 to 97 -- and because it unrolled the
+  ;; cheap loops and not the expensive one. Both are fixed:
+  ;;
+  ;;   qaq.25  an empty index interval now discharges its check, which was most
+  ;;           of the collapse; nbody went back to 0 and fannkuch to 34.
+  ;;   D49     the rest of the collapse is copies generated past what the
+  ;;           program can execute, and the growth budget bounds them. At
+  ;;           budget 1 there are none.
+  ;;   here    `eligible?` takes ONE literal argument rather than all of them,
+  ;;           so the loop that matters becomes reachable at all.
+  ;;
+  ;; MEASURED at n=11, bit-exact 556355/51, zero surviving bounds checks:
+  ;;
+  ;;     fannkuch   10.891G -> 9.832G cycles    -9.7%
+  ;;                27.161G -> 27.616G instr    +1.7%
+  ;;     nbody       188.08M -> 187.99M cycles  unchanged, bit-exact
+  ;;
+  ;; INSTRUCTIONS WENT UP AND CYCLES WENT DOWN, which is D46 in one line: this
+  ;; part absorbs work and does not absorb control flow. Anyone tempted to tune
+  ;; this pass by instruction count should read D42 first.
+  (define specialize-enabled? (make-parameter #t))
 
   ;; The most a single loop body may be, in Lanf nodes, before this refuses to
   ;; copy it at all. nbody's pair body is well under; a body larger than this is
@@ -168,7 +191,12 @@
   ;;
   ;; Program size is the thing actually worth bounding, and unlike a name it
   ;; cannot be reset by renaming.
-  (define specialize-growth-budget (make-parameter 4))
+  ;; ONE, not four, and the number is measured rather than chosen. Bigger
+  ;; budgets copy the loop past the point the program can reach, and those
+  ;; copies index out of range, so their checks are correctly kept and never
+  ;; go: 0, 8, 34 surviving checks at budgets 1, 2, 4. Cycles follow --
+  ;; 9.832G, 9.864G, 9.999G -- so more copying is worse in both currencies.
+  (define specialize-growth-budget (make-parameter 1))
 
   (define (self-tail-recursive? f body)
     (let walk ((e body))
@@ -290,12 +318,14 @@
         (string->symbol (string-append (symbol->string f) "@"
                                        (number->string copy-counter))))
 
+      (define (kept-args x*) (filter (lambda (a) (not (literal? a))) x*))
+
       (define (eligible? f x*)
         (let ((p (hashtable-ref loops f #f)))
           (and p
                (= (length (car p)) (length x*))
                (specialize-enabled?)
-               (for-all literal? x*)
+               (exists literal? x*)
                (<= (+ copies-made 1) (* (specialize-growth-budget) 8)))))
 
       ;; THE PARAMETERS ARE BOUND INSIDE THE COPY, to the literal VALUES, and
@@ -330,15 +360,18 @@
                                                 (number->string copy-counter))))
                               params))
                (b (freshen (cdr p) (map cons params fresh-ps)))
-               (vals (map (lambda (a) (car (hashtable-ref lits a '(#f)))) args)))
+               (pairs (map cons fresh-ps args))
+               (bound (filter (lambda (pr) (literal? (cdr pr))) pairs))
+               (kept  (map car (filter (lambda (pr) (not (literal? (cdr pr)))) pairs))))
           (with-output-language (Lanf Expr)
-            `(lambda ()
-               ,(let wrap ((ps fresh-ps) (vs vals))
-                  (if (null? ps)
+            `(lambda (,kept ...)
+               ,(let wrap ((bs bound))
+                  (if (null? bs)
                       b
                       (with-output-language (Lanf Expr)
-                        `(let ([,(car ps) (quote ,(car vs))])
-                           ,(wrap (cdr ps) (cdr vs))))))))))
+                        `(let ([,(car (car bs))
+                                (quote ,(car (hashtable-ref lits (cdr (car bs)) '(#f))))])
+                           ,(wrap (cdr bs))))))))))
 
       ;; A COPY PER CALL SITE, never shared.
       ;;
@@ -368,7 +401,7 @@
           (nanopass-case (Lanf Expr) e
             [(tailcall ,x ,x* ...)
              (if (eligible? x x*)
-                 `(tailcall ,(copy-for x x*))
+                 `(tailcall ,(copy-for x x*) ,(kept-args x*) ...)
                  e)]
             [(if ,x ,e0 ,e1) `(if ,x ,(Expr e0) ,(Expr e1))]
             [(seq ,e0 ,e1) `(seq ,(Expr e0) ,(Expr e1))]
@@ -405,7 +438,7 @@
             ;; A NON-TAIL ENTRY, which is how nbody's pair nest is reached and
             ;; what the splice-based version could not touch at all.
             [(call ,x ,x* ...)
-             (if (eligible? x x*) `(call ,(copy-for x x*)) se)]
+             (if (eligible? x x*) `(call ,(copy-for x x*) ,(kept-args x*) ...) se)]
             [else se])))
 
       ;; --- the copies must form a CHAIN, never a ring ------------------------

@@ -172,8 +172,18 @@
                                (string=? (substring s 0 6) "inner%")))
                         (collect (cdr fs) (cons (car fs) acc)))
                        (else (collect (cdr fs) acc))))))
+  ;; THREE, NOT TWO, SINCE SPECIALISATION WAS SWITCHED ON. unroll-by-two gives
+  ;; two callers; specialize.ss then peels the enclosing loop and its copy
+  ;; carries an inner of its own. The assertion's intent is unchanged -- one
+  ;; force loop per unrolled caller, none lost and none duplicated beyond the
+  ;; callers that exist -- and the number tracks how many callers there are.
   (ck! "the force loop survives to code generation, once per unrolled caller"
-       (= 2 (length inners)))
+       (= 3 (length inners)))
+  ;; AND THE PRESSURE WENT DOWN RATHER THAN UP, which is worth asserting
+  ;; because the opposite was expected. The doubled body used to spill one
+  ;; value; with the peel in place every copy spills NONE. Kept as `at most
+  ;; one` so a future change that reintroduces a single spill is a warning
+  ;; rather than a failure, but the measured value today is zero.
   (ck! "and the doubled body costs at most one spill"
        (for-all (lambda (f) (<= (length (finalized-spills f)) 1)) inners)))
 

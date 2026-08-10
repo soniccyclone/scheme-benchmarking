@@ -539,6 +539,56 @@
       ;; fails rather than spinning. What changed is that the number now scales
       ;; with the thing it is bounding, and the message says which of the two
       ;; things went wrong.
+      ;; BEFORE THE FIXPOINT, NOT AFTER IT.
+      ;;
+      ;; `called` comes from `sites`, which is complete before any propagation
+      ;; runs, so nothing about this step needs the fixpoint's results. Running
+      ;; it afterwards meant a parameter defaulted here could never be the
+      ;; SOURCE of anybody else's class: the round that would have carried it
+      ;; onward had already finished. Harmless while every procedure was either
+      ;; called or a leaf, and not harmless once a pass introduces copies that
+      ;; call each other (qaq.23).
+      ;; A PROCEDURE NOTHING CALLS CONSTRAINS NOTHING, so its parameters are
+      ;; free rather than unknown, and the difference is the whole point.
+      ;;
+      ;; A parameter's class comes from the call sites, as the note above this
+      ;; function says. A procedure with NO call sites therefore leaves its
+      ;; parameters unclassified, and lower.ss then hits an `if` in its body
+      ;; and cannot say how to copy either arm into the join destination -- so
+      ;; a program is REFUSED because of code that cannot run. fannkuch-redux
+      ;; shrunk to test `count-flips` alone did exactly that: `rotate` was
+      ;; still defined, nothing called it, and `r%10.17` had no class.
+      ;;
+      ;; UNREACHABLE, not merely uncalled-so-far. Every procedure here is
+      ;; top-level or letrec-bound and every call names it directly -- closures
+      ;; are a later bead -- so `sites` is the complete set of calls in the
+      ;; program. A name absent from it cannot be reached, including the entry,
+      ;; which the top-level body calls by name like anything else.
+      ;;
+      ;; `raw-word` because an unconstrained choice should be the one that
+      ;; cannot make work for the collector: a register in the value class is
+      ;; scavenged unconditionally under D21, and this code never runs to put
+      ;; anything meaningful in it. It is not a default in the sense this
+      ;; file's header refuses -- there is no constraint to violate.
+      ;;
+      ;; The better answer is not to COMPILE an unreachable procedure at all,
+      ;; which would save the bytes as well; that needs a reachability pass
+      ;; this one is not, and is filed separately.
+      (let ((called '()))
+        (for-each (lambda (site)
+                    (unless (memq (car site) called)
+                      (set! called (cons (car site) called))))
+                  sites)
+        (for-each
+         (lambda (f)
+           (unless (memq f called)
+             (for-each (lambda (p)
+                         (unless (hashtable-ref classes p #f)
+                           (hashtable-set! classes p 'raw-word)))
+                       (hashtable-ref params f '()))))
+         (sorted-key-list params)))
+
+
       (let fix ((round 0))
         (when (> round ceiling)
           (error 'select-representations
@@ -685,46 +735,6 @@
                               (car site) (car as) ac (car cs))))
                    (loop (cdr as) (cdr cs) (+ i 1))))))))
        sites)
-
-      ;; A PROCEDURE NOTHING CALLS CONSTRAINS NOTHING, so its parameters are
-      ;; free rather than unknown, and the difference is the whole point.
-      ;;
-      ;; A parameter's class comes from the call sites, as the note above this
-      ;; function says. A procedure with NO call sites therefore leaves its
-      ;; parameters unclassified, and lower.ss then hits an `if` in its body
-      ;; and cannot say how to copy either arm into the join destination -- so
-      ;; a program is REFUSED because of code that cannot run. fannkuch-redux
-      ;; shrunk to test `count-flips` alone did exactly that: `rotate` was
-      ;; still defined, nothing called it, and `r%10.17` had no class.
-      ;;
-      ;; UNREACHABLE, not merely uncalled-so-far. Every procedure here is
-      ;; top-level or letrec-bound and every call names it directly -- closures
-      ;; are a later bead -- so `sites` is the complete set of calls in the
-      ;; program. A name absent from it cannot be reached, including the entry,
-      ;; which the top-level body calls by name like anything else.
-      ;;
-      ;; `raw-word` because an unconstrained choice should be the one that
-      ;; cannot make work for the collector: a register in the value class is
-      ;; scavenged unconditionally under D21, and this code never runs to put
-      ;; anything meaningful in it. It is not a default in the sense this
-      ;; file's header refuses -- there is no constraint to violate.
-      ;;
-      ;; The better answer is not to COMPILE an unreachable procedure at all,
-      ;; which would save the bytes as well; that needs a reachability pass
-      ;; this one is not, and is filed separately.
-      (let ((called '()))
-        (for-each (lambda (site)
-                    (unless (memq (car site) called)
-                      (set! called (cons (car site) called))))
-                  sites)
-        (for-each
-         (lambda (f)
-           (unless (memq f called)
-             (for-each (lambda (p)
-                         (unless (hashtable-ref classes p #f)
-                           (hashtable-set! classes p 'raw-word)))
-                       (hashtable-ref params f '()))))
-         (sorted-key-list params)))
 
       (values classes naturals booleans)))
 
