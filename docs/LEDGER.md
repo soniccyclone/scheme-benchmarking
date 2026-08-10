@@ -752,3 +752,52 @@ Kept because they are implementation hazards, not trivia.
 - **Pre-2000 papers may exist only as `.ps` or `.ps.gz`.** A PDF-shaped search reports them missing. Recovered Bigloo, Allen & Kennedy and all three Blanchet papers this way.
 - **Guessing filenames is not a search surface.** It failed every time. Enumerate the directory via the Wayback CDX index instead.
 - **Four search surfaces, not one**: per-paper web search, CDX directory enumeration, OpenAlex by DOI (the only way to learn a paywalled-looking ACM paper is open), and archive.org scanned periodicals.
+
+## D41 -- fannkuch's gap is an unroller, and the note that said "inlining" was wrong
+
+qaq.13 closed with a pointer: after check elimination "the remaining gap is call
+structure and inlining, which is qaq.7.21's territory." Both halves are wrong,
+and the pointer would have cost the next reader a pass.
+
+MEASURED, in this order.
+
+Rule 5 refuses NOTHING. Instrumenting the `(= 1 (tail-count b))` test that
+gates the non-tail splice and compiling both benchmarks produced not one
+refusal. qaq.7.21's ceiling is 0, not the 0.4% recorded from hand-inlining
+`flip-prefix` -- and that number was stale anyway, because rule 2' now inlines
+a once-named callee whatever its size.
+
+Cycles at n=11 are 77.3% in three places: the two flip loops at 30.2% and
+25.8%, and `count-flips` at 21.3%. `next` is 8.7%. Of `next`'s ten call sites
+eight are `display`/`newline` for the first-thirty-permutations print and are
+cold; the two hot ones reach `shift`. Every hot callee here -- `shift`,
+`loop%2` -- is a named let, so it is RECURSIVE, so rule 4 refuses it and always
+will. The calls that remain in the hot path are the ones no inliner is
+permitted to touch, which is why rule 5 finding nothing is not a surprise.
+
+WHAT GCC ACTUALLY DID. Its reversal is fully unrolled to N swaps, the low side
+addressed by literal displacement and only the high side indexed:
+
+    mov 0x8(%rbx),%r9d ; mov (%rbx,%rdx,4),%r10d
+    mov %r10d,0x8(%rbx) ; mov %r9d,(%rbx,%rdx,4)
+    lea -0x3(%rax),%edx ; cmp $0x3,%edx ; jle <done>
+
+About seven instructions per swap, no low-side counter, no back edge -- an
+exit chain instead. Its main is 198 instructions with 11 vector ops, so this is
+not vectorisation; it is knowing the trip count. `#define N 11` bounds the
+reversal at compile time and gcc spent the bound on unrolling.
+
+So the missing transformation is a LOOP UNROLLER against a constant bound, and
+inline.ss says in rule 4's own comment that it is deliberately not one:
+"unrolling a loop is a different transformation with a different cost model and
+this pass is not it." That was the right call and it is still right. It just
+means the work does not live behind any inlining rule.
+
+THE CEILING IS ALREADY MEASURED AND IT DOES NOT REACH PARITY. qaq.13's
+no-checks variant runs the flip loop at roughly eight instructions per swap,
+within one of gcc's seven, and it lands at 10.578G cycles against gcc's 8.273G
+-- 1.28x. Matching gcc's instruction density in the hottest loop in the program
+does not match gcc. At IPC 3.57 against gcc's 1.35 this machine is absorbing
+our extra instructions, which is the same thing D37 said about nbody from the
+other direction: on neither benchmark does the instruction count predict the
+cycles, and on neither is the fix the one the instruction count suggests.
