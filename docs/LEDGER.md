@@ -443,6 +443,70 @@ and every `bi = i*3` folded. That is a structural difference and not an incremen
 is tracked on its own bead rather than here.
 
 
+### D37 --- the remaining nbody gap is divider occupancy, and instruction count cannot reach it
+
+D34 said instruction count stopped predicting cycles. This is the cause, measured rather
+than inferred.
+
+**THE INSTRUMENT.** `bench/micro/divider-width.c`, independent chains so the number is
+throughput and not a latency chain, on the Zen 5 part this project measures on:
+
+| form | cycles per sqrt+div lane |
+|---|---:|
+| scalar | 7.601 |
+| 128-bit | 4.220 |
+| 256-bit | 2.109 |
+
+Clean 1:2:4. **The floating-point divider does not care how wide the operand is.** A
+256-bit `vsqrtpd`/`vdivpd` retires four lanes for about what one scalar lane costs.
+
+**WHAT THAT MAKES OF nbody.** Ten pairs a step, each needing one square root and one
+divide. Scalar, that is about 76 cycles of pure divider occupancy against a 188-cycle
+step. Four-wide it would be about 21. Against gcc we run 717.5 instructions to its 333 and
+take 188 cycles to its 169 --- IPC 3.81 against 1.97. We are not short of throughput; we
+are waiting on one unit and on a dependence chain.
+
+**THE EXPERIMENT THAT PROVES INSTRUCTIONS ARE NOT THE LEVER.** qaq.7.16 removed 92
+instructions per step from nbody and bought 0.04 cycles: 188.58 to 188.54. Anything that
+counts instructions and calls the count progress is measuring the wrong quantity on this
+benchmark.
+
+**TWO ROUTES CLOSED BY MEASUREMENT, BOTH BEFORE BUILDING ANYTHING.**
+
+*Approximating the reciprocal is worthless.* A D24-style `fp-reciprocal` permission ---
+`rsqrt` plus Newton refinement, which is what gcc's `-mrecip` buys --- would have removed
+the divider work entirely. At 256 bits it measures 2.371 cycles a lane against the exact
+form's 2.042. It LOSES. Once packed, the divider costs about two cycles a lane and
+Newton's multiplies cost more than that. So bit-exactness stays and no new rounding
+permission is introduced. The alternative was to build a lexically scoped permission, and
+teach the differential oracle to expect divergence, in order to buy a regression.
+
+*Staging the work through memory is worse than the divider.* Splitting nbody's pair loop
+so the divides land in adjacent memory, where slp.ss's store-rooted seeding can reach
+them, measured 274.89 cycles a step against a 189.59 baseline, bit-identical answers and
+double the instructions. The third pass recomputes the distances the first pass had, which
+costs 85 cycles against the ~55 packing ten divides four-wide is worth.
+
+**SO THE ONLY LEVER LEFT ON nbody IS CROSS-ITERATION VECTORISATION WITH THE VALUES KEPT IN
+REGISTERS.** slp.ss packs the three COORDINATES of one pair; the square root and the divide
+are on that pair's scalar distance, one each, so nothing adjacent exists to pack them with.
+Packing them needs the other axis --- pair 0 against pair 1, 2 and 3 --- which is loop
+vectorisation of a triangular nest, not superword packing inside one expression.
+
+**AND gcc LEAVES IT ON THE TABLE.** Its `main` has four scalar `vsqrtsd` and seven scalar
+`vdivsd`, alongside 43 FMAs and 128-bit `vmovddup` packing that mirrors ours. This is the
+first item in this project that is not catching up.
+
+**A SECOND HARDWARE FACT, FROM THE SAME INVESTIGATION.** A masked 256-bit STORE does not
+store-to-load forward on this part. nbody's inner loop holds `bi` invariant, so each
+iteration stores `v[bi]` and the next reloads that address; `ls_stlf` per step is 132.34
+unmasked against 63.48 masked, and the 65 lost forwards cost 7.6 cycles each --- which was
+the whole of a 495-cycle regression, and looked for a while like a penalty for being
+256 bits wide. It is not. Pad the layout and use the unmasked form. Cache-line splits were
+ruled out separately: aligning every body to 64 bytes changed nothing, 682.89 against
+683.88.
+
+
 ### D35 --- a call destroys what its callee writes, not the whole register file
 
 regalloc.ss spilled every value live across a call, and said why:
