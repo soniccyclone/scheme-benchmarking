@@ -105,22 +105,44 @@
        (cadr prog))
       t))
 
+  ;; --- one table, two widths --------------------------------------------------
+  ;;
+  ;; A pair fuses exactly as a scalar does: `vfmadd231pd` is two independent
+  ;; fused multiply-adds, lane by lane, each rounding once where the two packed
+  ;; instructions it replaces round twice. Same permission, same argument, so
+  ;; the same rewrite -- and writing it twice is how the two would drift.
+  ;;
+  ;; Each row is (marked-mul marked-add marked-sub fma fnma fma132 fnma132).
+  (define fuse-table
+    '((mul-c   add-c   sub-c   fma   fnma   fma132   fnma132)
+      (p2mul-c p2add-c p2sub-c p2fma p2fnma p2fma132 p2fnma132)))
+
+  (define (row-for-mul op) (assq op fuse-table))
+  (define (row-of i) (and (instr? i) (row-for-mul (car i))))
+  (define (row-add r) (cadr r))
+  (define (row-sub r) (caddr r))
+  (define (row-fma r) (cadddr r))
+  (define (row-fnma r) (list-ref r 4))
+  (define (row-fma132 r) (list-ref r 5))
+  (define (row-fnma132 r) (list-ref r 6))
+
   ;; The unmarked spelling, for a marked op that did not fuse. Nothing
   ;; downstream should have to know the mark existed.
-  (define (unmark op)
-    (case op ((mul-c) 'mul) ((add-c) 'add) ((sub-c) 'sub) (else op)))
+  (define unmark-table
+    '((mul-c . mul) (add-c . add) (sub-c . sub)
+      (p2mul-c . p2mul) (p2add-c . p2add) (p2sub-c . p2sub)))
 
   (define (unmark-instr i)
-    (if (and (instr? i) (memq (car i) '(mul-c add-c sub-c)))
-        (cons (unmark (car i)) (cdr i))
-        i))
+    (let ((m (and (instr? i) (assq (car i) unmark-table))))
+      (if m (cons (cdr m) (cdr i)) i)))
 
   (define (f64? i) (and (instr? i) (>= (length i) 3) (eq? (caddr i) 'raw-f64)))
 
-  ;; `(mul-c t raw-f64 a b)` -> (t a b), or #f.
+  ;; A marked multiply of either width -> (row t a b), or #f.
   (define (product i)
-    (and (instr? i) (eq? (car i) 'mul-c) (= (length i) 5) (f64? i)
-         (list (cadr i) (cadddr i) (car (cddddr i)))))
+    (let ((r (row-of i)))
+      (and r (= (length i) 5) (f64? i)
+           (list r (cadr i) (cadddr i) (car (cddddr i))))))
 
   (define (fuse-block instrs counts stats)
     (let loop ((xs instrs) (out '()))
@@ -131,19 +153,24 @@
         (let ((p (product (car xs))) (nxt (cadr xs)))
           (cond
            ((and p
-                 (eqv? 1 (hashtable-ref counts (car p) 0))
+                 (eqv? 1 (hashtable-ref counts (cadr p) 0))
                  (instr? nxt) (f64? nxt) (= (length nxt) 5)
-                 (memq (car nxt) '(add-c sub-c))
+                 ;; the SAME WIDTH: a packed product does not fuse into a scalar
+                 ;; sum, and the row is what says which is which.
+                 (memq (car nxt) (list (row-add (car p)) (row-sub (car p))))
                  ;; the addend is whichever operand is not the product
-                 (let* ((t (car p)) (x (cadddr nxt)) (y (car (cddddr nxt))))
+                 (let* ((r (car p)) (t (cadr p))
+                        (x (cadddr nxt)) (y (car (cddddr nxt))))
                    (cond
                     ;; a*b + c, either operand order: addition commutes and the
                     ;; fused form computes the same sum.
-                    ((eq? (car nxt) 'add-c)
-                     (cond ((eq? x t) (list 'fma y)) ((eq? y t) (list 'fma x)) (else #f)))
+                    ((eq? (car nxt) (row-add r))
+                     (cond ((eq? x t) (list (row-fma r) y))
+                           ((eq? y t) (list (row-fma r) x))
+                           (else #f)))
                     ;; c - a*b ONLY. `a*b - c` negates the addend instead of the
                     ;; product and is a different instruction.
-                    (else (and (eq? y t) (list 'fnma x))))))
+                    (else (and (eq? y t) (list (row-fnma r) x))))))
             => (lambda (kind0)
                  (contract-stats-fused-set! stats (+ 1 (contract-stats-fused stats)))
                  ;; THE ADDEND HAS TO REACH THE DESTINATION, and the copy is
@@ -174,9 +201,10 @@
                  ;; exactly what coalescing needs. So when a factor has a single
                  ;; use, it goes in the destination and the ordering becomes
                  ;; `132`; otherwise fall back to `231` and the addend.
-                 (let* ((v (cadr nxt))
+                 (let* ((r (car p)) (v (cadr nxt))
                         (kind (car kind0)) (addend (cadr kind0))
-                        (a (cadr p)) (b (caddr p))
+                        (a (caddr p)) (b (cadddr p))
+                        (fma? (eq? kind (row-fma r)))
                         (once? (lambda (x) (eqv? 1 (hashtable-ref counts x 0))))
                         (plan (cond ((once? a) (list 'f132 a b))
                                     ((once? b) (list 'f132 b a))
@@ -184,7 +212,7 @@
                    (loop (cddr xs)
                          (cons (if (eq? (car plan) 'f132)
                                    ;; v holds a factor: v = v * other + addend
-                                   (list (if (eq? kind 'fma) 'fma132 'fnma132)
+                                   (list (if fma? (row-fma132 r) (row-fnma132 r))
                                          v 'raw-f64 (caddr plan) addend)
                                    ;; v holds the addend: v = a*b + v
                                    (list kind v 'raw-f64 a b v))

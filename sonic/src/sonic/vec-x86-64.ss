@@ -254,6 +254,10 @@
       (vfmadd213pd  2 #xA8 1 1 1 rvm)
       (vfmadd231pd  2 #xB8 1 1 1 rvm)
       (vfnmadd231pd 2 #xBC 1 1 1 rvm)
+      ;; The 132 ordering of the negated form, so the packed path has the same
+      ;; choice of which operand lands in the destination that the scalar one
+      ;; has -- see contract.ss, where that choice was worth 30 cycles.
+      (vfnmadd132pd 2 #x9C 1 1 1 rvm)
       ;; scalar double, for the tail the fixed width leaves behind
       (vaddsd       1 #x58 3 0 1 rvm)
       (vsubsd       1 #x5C 3 0 1 rvm)

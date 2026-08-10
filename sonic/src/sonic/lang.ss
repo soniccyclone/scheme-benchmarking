@@ -177,6 +177,17 @@
       ;; `fma132`/`fnma132` put a FACTOR there. Same arithmetic, different
       ;; coalescing -- contract.ss picks by which operand dies at the copy.
       fma fnma fma132 fnma132 mul-c add-c sub-c
+      ;; THE PACKED FORMS OF ALL OF THE ABOVE. A pair fuses exactly as a scalar
+      ;; does -- `vfmadd231pd` is two independent fused multiply-adds, lane by
+      ;; lane, each rounding once where the two packed instructions it replaces
+      ;; round twice. Same permission, same argument, two lanes.
+      ;;
+      ;; They exist because CONTRACTION AND PACKING ARE NOT ALTERNATIVES and
+      ;; making them so cost the whole benefit of the first: slp.ss packs
+      ;; add/sub/mul/div, so once contraction rewrote a multiply-add into `fma`
+      ;; there was nothing left for it to pack, and nbody's velocity updates
+      ;; went from `vsubpd`/`vmulpd` back to six scalar sequences.
+      p2mul-c p2add-c p2sub-c p2fma p2fnma p2fma132 p2fnma132
       ;; Comparison is split by OPERAND type, not result type. The `sc` a
       ;; selection rule receives is the class of the boolean RESULT, so a single
       ;; cmp-lt cannot tell whether it is comparing two fixnums or two flonums,

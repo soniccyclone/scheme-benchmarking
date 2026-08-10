@@ -114,12 +114,21 @@
                ;; values are ordinary raw-f64 vregs -- a 128-bit pair lives in
                ;; one float register -- so nothing downstream changes.
                ((dprog dce-st) (dce-program aprog))
-               ;; D24 CONTRACTION, after DCE and before SLP. After DCE because
-               ;; fusing a product whose only reader is dead work would be work
-               ;; too; before SLP because a fused multiply-add is one
-               ;; instruction and the packer counts instructions.
-               ((kprog contract-st) (contract-program dprog))
-               ((prog slp-st) (slp-program kprog classes)))
+               ;; SLP THEN CONTRACTION, and the order is the whole point.
+               ;;
+               ;; Contraction first was the obvious reading -- fuse, then pack
+               ;; what is left -- and it silently turned the two passes into
+               ;; alternatives: slp.ss packs add/sub/mul/div, so a multiply-add
+               ;; already rewritten to `fma` is nothing it can pack. nbody's
+               ;; velocity updates went from `vsubpd`/`vmulpd` back to six
+               ;; scalar load/fma/store sequences, and contraction measured 4.5
+               ;; cycles instead of the 15 the two together are worth.
+               ;;
+               ;; Packing first, and packing the MARKED spellings, leaves
+               ;; contract.ss a packed multiply and a packed add to fuse into
+               ;; one `vfmadd231pd` -- two lanes, one rounding each.
+               ((sprog slp-st) (slp-program dprog classes))
+               ((prog contract-st) (contract-program sprog)))
           (let* ((entry (caddr prog))
                  ;; SORTED: this list decides each global's ADDRESS, so an
                  ;; unstable order moved every global between runs.

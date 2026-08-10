@@ -498,6 +498,9 @@
     (vfmadd132pd xmm0 xmm1 xmm2)
     (vfmadd213pd ymm8 ymm9 ymm10)
     (vfnmadd231pd ymm4 ymm5 ymm6)
+    (vfnmadd132pd xmm1 xmm2 xmm3)
+    (vfmadd231pd xmm7 xmm8 xmm9)
+    (vfmadd132pd xmm4 xmm5 (mem r8 rcx 8 16))
     ;; scalar double, which is what the tail is made of
     (vmovsd xmm0 (mem r8 rcx 8 0))
     (vmovsd (mem r8 rcx 8 8) xmm0)

@@ -60,11 +60,23 @@
   ;; Packable arithmetic. `div` is here and `sqrt` is not: sqrt is unary and the
   ;; shape below is binary, and a one-operand pack saves one instruction where
   ;; the plumbing costs more than that.
-  (define pack-op '((add . p2add) (sub . p2sub) (mul . p2mul) (div . p2div)))
+  ;; PACKING PRESERVES THE CONTRACTION MARK. The `-c` spellings are the same
+  ;; operations standing inside a granted `fp-contract` scope (see lang.ss), and
+  ;; packing a pair of them has to produce a marked PAIR -- otherwise contract.ss
+  ;; cannot fuse what this pass just packed, and the program gets one
+  ;; optimisation or the other rather than both.
+  ;;
+  ;; That is not hypothetical. This pass ran AFTER contraction at first, so it
+  ;; saw `fma` where it wanted `mul`, packed nothing, and nbody's velocity
+  ;; updates went from `vsubpd`/`vmulpd` back to six scalar load/fma/store
+  ;; sequences. Contraction bought 4.5 cycles instead of the 15 it should have.
+  (define pack-op '((add . p2add) (sub . p2sub) (mul . p2mul) (div . p2div)
+                    (add-c . p2add-c) (sub-c . p2sub-c) (mul-c . p2mul-c)))
 
-  ;; The same four, as name STEMS, so the arity is a prefix rather than a second
+  ;; The same, as name STEMS, so the arity is a prefix rather than a second
   ;; table that could disagree with the first.
-  (define pack-op-stem '((add . "add") (sub . "sub") (mul . "mul") (div . "div")))
+  (define pack-op-stem '((add . "add") (sub . "sub") (mul . "mul") (div . "div")
+                         (add-c . "add-c") (sub-c . "sub-c") (mul-c . "mul-c")))
 
   ;; --- reading a block --------------------------------------------------------
 

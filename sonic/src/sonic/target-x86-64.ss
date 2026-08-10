@@ -485,6 +485,40 @@
                (error 'x86-64-selector "fnma132 expects the other factor and the addend" srcs))
              `((vfnmadd132sd ,dst ,(cadr srcs) ,(car srcs)))))
 
+     ;; --- packed contraction -------------------------------------------------
+     ;;
+     ;; Two lanes, one rounding each -- exactly the scalar argument twice over,
+     ;; which is why `vfmadd231pd` needs the same D24 permission `vfmadd231sd`
+     ;; does and gets it from the same `(policy ([fp-contract #f]) ...)`.
+     ;;
+     ;; The addend is the destination here too, and contract.ss emits the Lmach
+     ;; `move` that puts it there so `move-hints` can coalesce it away.
+     (cons 'p2fma
+           (lambda (dst sc srcs)
+             (unless (and (= (length srcs) 3) (eq? (caddr srcs) dst))
+               (error 'x86-64-selector
+                      "p2fma's addend must be its destination; contract.ss emits the move"
+                      dst srcs))
+             `((vfmadd231pd ,dst ,(car srcs) ,(cadr srcs)))))
+     (cons 'p2fnma
+           (lambda (dst sc srcs)
+             (unless (and (= (length srcs) 3) (eq? (caddr srcs) dst))
+               (error 'x86-64-selector
+                      "p2fnma's addend must be its destination; contract.ss emits the move"
+                      dst srcs))
+             `((vfnmadd231pd ,dst ,(car srcs) ,(cadr srcs)))))
+     ;; v = v * other + addend, the ordering whose destination is a FACTOR.
+     (cons 'p2fma132
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'x86-64-selector "p2fma132 expects the other factor and the addend" srcs))
+             `((vfmadd132pd ,dst ,(cadr srcs) ,(car srcs)))))
+     (cons 'p2fnma132
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'x86-64-selector "p2fnma132 expects the other factor and the addend" srcs))
+             `((vfnmadd132pd ,dst ,(cadr srcs) ,(car srcs)))))
+
      (cons 'p2add (packed 'vaddpd))
      (cons 'p2sub (packed 'vsubpd))
      (cons 'p2mul (packed 'vmulpd))
