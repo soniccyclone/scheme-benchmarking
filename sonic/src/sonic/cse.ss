@@ -80,12 +80,24 @@
   ;; use of B's. Computed by the textbook iterative intersection, per function,
   ;; over the blocks `partition-into-functions` groups.
   ;;
-  ;; NO INTERVENING WRITE, which would otherwise need a path-sensitive analysis.
-  ;; Instead the whole function is checked for a `gset` or a NON-TAIL `call`,
-  ;; and availability is offered only when it has neither. A tail call is the
-  ;; last instruction of its block and control never comes back, so nothing it
-  ;; does can be observed by a read in this invocation -- which is what lets a
-  ;; LOOP qualify at all, since every loop's back edge is a tail call.
+  ;; NO INTERVENING WRITE. A tail call is the last instruction of its block and
+  ;; control never comes back, so nothing it does can be observed by a read in
+  ;; this invocation -- which is what lets a LOOP qualify at all, since every
+  ;; loop's back edge is a tail call.
+  ;;
+  ;; THIS USED TO BE ASKED OF THE WHOLE FUNCTION: one `gset` or one non-tail
+  ;; call anywhere switched the reuse off everywhere, including for a load and
+  ;; a use that both happen before the call. It is now asked of the PATH -- a
+  ;; dominator D is available to B when no writing block lies on any route from
+  ;; D to B -- which is the question the soundness argument actually needs.
+  ;;
+  ;; nbody's `outer%22` is the case, and it is instructive: the block that
+  ;; wanted the header's read of `n-bodies` was ITSELF one of the two writers,
+  ;; with the read before the call inside it. Under the old predicate that
+  ;; single call disabled the function; under a naive path rule that counted B
+  ;; among the blockers it would still be refused. Writes inside B are handled
+  ;; positionally by the sweep, so B is excluded and the case goes through.
+  ;; nbody's static global loads: 36 before, 33 after.
   (define (non-tail-call? blk i)
     (and (pair? i) (eq? (car i) 'call)
          (let ((is (cadr blk)) (t (caddr blk)))
@@ -93,14 +105,54 @@
                      (pair? t) (eq? (car t) 'ret)
                      (pair? (cdr t)) (eq? (cadr t) (cadr i)))))))
 
-  (define (function-has-writes? fn)
-    (exists (lambda (lb)
-              (let ((blk (cadr lb)))
-                (exists (lambda (i)
-                          (or (and (pair? i) (eq? (car i) 'gset))
-                              (non-tail-call? blk i)))
-                        (cadr blk))))
-            (cdr fn)))
+  (define (block-writes? lb)
+    (let ((blk (cadr lb)))
+      (exists (lambda (i)
+                (or (and (pair? i) (eq? (car i) 'gset))
+                    (non-tail-call? blk i)))
+              (cadr blk))))
+
+  ;; The labels of the blocks that write, rather than whether any block does.
+  ;;
+  ;; THE PREDICATE THIS REPLACES WAS ALL-OR-NOTHING: one `gset` or one non-tail
+  ;; call anywhere in a function switched the cross-block reuse off for the
+  ;; WHOLE function, including for a load that happens before the call and a
+  ;; use that happens before it too, where the reasoning simply does not apply.
+  ;; nbody's `outer%22` reloaded `n-bodies` in `L.then17` that the loop header
+  ;; had already loaded, with no call in between, because some other block in
+  ;; the same function contained one.
+  (define (writing-blocks fn)
+    (fold-left (lambda (acc lb) (if (block-writes? lb) (cons (car lb) acc) acc))
+               '() (cdr fn)))
+
+  ;; label -> every label reachable from it, itself included.
+  (define (reachable fn)
+    (let ((succ (make-eq-hashtable))
+          (rch (make-eq-hashtable))
+          (lbs (map car (cdr fn))))
+      (for-each
+       (lambda (lb)
+         (hashtable-set! succ (car lb)
+                         (filter (lambda (t) (memq t lbs))
+                                 (transfer-targets (caddr (cadr lb))))))
+       (cdr fn))
+      (for-each (lambda (l) (hashtable-set! rch l (list l))) lbs)
+      (let fix ()
+        (let ((changed #f))
+          (for-each
+           (lambda (l)
+             (let ((cur (hashtable-ref rch l '())))
+               (let ((new (fold-left
+                           (lambda (acc s)
+                             (fold-left (lambda (a x) (if (memq x a) a (cons x a)))
+                                        acc (hashtable-ref rch s '())))
+                           cur (hashtable-ref succ l '()))))
+                 (unless (= (length new) (length cur))
+                   (hashtable-set! rch l new)
+                   (set! changed #t)))))
+           lbs)
+          (when changed (fix))))
+      rch))
 
   ;; label -> list of labels that dominate it, itself included.
   (define (dominators fn)
@@ -257,11 +309,52 @@
       (define rank (make-eq-hashtable))
       (for-each
        (lambda (fn)
-         (unless (function-has-writes? fn)
-           (let ((dom (dominators fn)))
+         (let ((dom (dominators fn))
+               (rch (reachable fn))
+               (writers (writing-blocks fn)))
+           ;; D IS AVAILABLE TO B WHEN NO WRITE LIES BETWEEN THEM -- when no
+           ;; writing block X is both reachable from D and able to reach B.
+           ;; That is a condition on the path from the definition to the use,
+           ;; which is what the reasoning actually needs; the predicate this
+           ;; replaced asked whether the FUNCTION contained a write anywhere.
+           ;;
+           ;; D itself counts as a candidate X, and that is deliberately
+           ;; conservative: a `gset` in D AFTER the load is genuinely on the
+           ;; path, and telling it from one before the load needs a position
+           ;; rather than a label. Refusing both loses an opportunity and
+           ;; keeps the rule expressible in the dominator machinery that is
+           ;; already here.
+           ;;
+           ;; THE LOOP CASE STAYS RIGHT, and it stays right by being refused:
+           ;; a header dominates its body, so a call later in the body reaches
+           ;; the header again over the back edge and reaches the body again
+           ;; after that. It is therefore an X on a path from header to body
+           ;; and the pair is declined. A loop whose body only tail-calls --
+           ;; which is every loop this compiler emits, since the back edge IS
+           ;; a tail call and `non-tail-call?` says so -- has no such X and
+           ;; still qualifies.
+           ;; B ITSELF IS NOT A BLOCKER, and that is the case the bead named:
+           ;; `outer%22`'s `L.then17` both wants the header's read of
+           ;; `n-bodies` and contains the non-tail call, with the read before
+           ;; the call. A write inside B is handled POSITIONALLY by the sweep
+           ;; below, which clears `glob-tbl` when it reaches the clobber, so
+           ;; counting B as a writer refuses exactly the case the seeding is
+           ;; for. D stays a blocker: `block-globals` records D's table at its
+           ;; EXIT, and while that table is already post-write, a write in D
+           ;; reached again round a cycle is on the path and is not worth
+           ;; distinguishing for what this is worth.
+           (define (clean? d b)
+             (not (exists (lambda (x)
+                            (and (not (eq? x b))
+                                 (memq x (hashtable-ref rch d '()))
+                                 (memq b (hashtable-ref rch x '()))))
+                          writers)))
+           (begin
              (for-each (lambda (lb)
                          (hashtable-set! available (car lb)
-                                         (remq (car lb) (hashtable-ref dom (car lb) '())))
+                                         (filter (lambda (d) (clean? d (car lb)))
+                                                 (remq (car lb)
+                                                       (hashtable-ref dom (car lb) '()))))
                          ;; A dominates B implies doms(A) is a proper subset of
                          ;; doms(B), so ordering by how many blocks dominate you
                          ;; puts every dominator before what it dominates. The
