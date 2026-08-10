@@ -73,9 +73,15 @@
 (let-values (((form st) (front (polymorphic "(fx< 1 2)"))))
   (ck! "a boolean merged with a tagged value no longer refuses"
        (convert-report? st))
-  (ck! "and it inserts exactly one retag, of kind `boolean`"
-       (and (= 1 (convert-report-inserted st))
-            (eq? 'boolean (cdar (convert-report-sites st))))))
+  ;; THREE RETAGS, NOT ONE, and two of them are the fixture's own. Every
+  ;; program here also contains `(cons 1 2)`, whose fields repr.ss now requires
+  ;; tagged -- both fields of a pair are scanned by the collector -- so the two
+  ;; literals are retagged as well as the joined value. Asserting membership
+  ;; rather than `cdar` because the site list is built by consing and its order
+  ;; is not part of what this is testing.
+  (ck! "and it inserts a `boolean` retag, alongside the fixture's two literals"
+       (and (= 3 (convert-report-inserted st))
+            (memq 'boolean (map cdr (convert-report-sites st))))))
 
 ;; --- the fixnum case, which used to be SILENT -----------------------------
 ;;
@@ -83,18 +89,26 @@
 ;; program compiled to an untagged word sitting in the value class.
 (let-values (((form st) (front (polymorphic "(fx+ 1 2)"))))
   (ck! "a computed fixnum merged with a tagged value inserts a retag"
-       (= 1 (convert-report-inserted st)))
+       (= 3 (convert-report-inserted st)))
   (ck! "and its kind is `fixnum`, not `boolean`"
-       (eq? 'fixnum (cdar (convert-report-sites st)))))
+       (memq 'fixnum (map cdr (convert-report-sites st)))))
 
-;; --- a LITERAL still costs nothing ----------------------------------------
+;; --- a LITERAL COSTS A RETAG, and used to be exempted ----------------------
 ;;
-;; Under numeric.ss a tagged fixnum's machine word is the value shifted left 3,
-;; so a constant is materialised already shifted. Emitting a retag here would
-;; be two instructions to compute a constant.
+;; This test asserted the opposite, on the grounds the header gave: "a tagged
+;; fixnum's machine word is the value shifted left 3, so a constant is
+;; materialised already shifted". Neither selector shifted. Both end their
+;; const rule with the value as written, whatever the storage class, so a
+;; tagged 5 was the machine word 5 -- low bits 101, which is not a fixnum tag,
+;; not a heap tag and not an immediate tag.
+;;
+;; Nothing caught it because nothing inspected a tag, and nothing inspected a
+;; tag because the two encodings coincided everywhere they met. `(fixnum? 5)`
+;; answering false about the number five is what finally read one.
 (let-values (((form st) (front (polymorphic "5"))))
-  (ck! "a literal reaching `tagged` needs no conversion"
-       (= 0 (convert-report-inserted st))))
+  (ck! "a literal reaching `tagged` is retagged like anything else"
+       (and (= 3 (convert-report-inserted st))
+            (memq 'fixnum (map cdr (convert-report-sites st))))))
 
 ;; --- the double case: BOXED, and it used to raise --------------------------
 ;;
@@ -104,9 +118,9 @@
 ;; facility and is why this arrived after the other two.
 (let-values (((form st) (front (polymorphic "(fl+ 1.0 2.0)"))))
   (ck! "a double merged with a tagged value no longer refuses"
-       (= 1 (convert-report-inserted st)))
+       (= 3 (convert-report-inserted st)))
   (ck! "and its kind is `boxed`, not an arithmetic retag"
-       (eq? 'boxed (cdar (convert-report-sites st)))))
+       (memq 'boxed (map cdr (convert-report-sites st)))))
 
 ;; --- the arithmetic, which is where a plausible wrong answer lives --------
 ;;

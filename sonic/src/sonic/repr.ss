@@ -158,10 +158,24 @@
   ;; is not needed until those routines exist. `make-vector`'s fill is the
   ;; other real case and belongs here too, but changing it moves every existing
   ;; program's codegen, so it goes with the routine that consumes it.
+  ;; THE PREDICATES TAKE TAGGED VALUES TOO, and the reason is not uniformity.
+  ;; "Is this a pair" is a question about a SCHEME VALUE; a raw machine word is
+  ;; a representation this compiler chose, not a value. Asking it of an untagged
+  ;; register asks about the bits rather than about the object, and the routine
+  ;; has no way to tell the two apart. For a fixnum the retag is a shift, which
+  ;; is what makes the declaration affordable; for a double it is a heap box,
+  ;; which is the honest price of asking.
   (define prim-arg-classes
     '((cons tagged tagged)
       (car  tagged)
-      (cdr  tagged)))
+      (cdr  tagged)
+      (null?     tagged)
+      (pair?     tagged)
+      (fixnum?   tagged)
+      (flonum?   tagged)
+      (vector?   tagged)
+      (flvector? tagged)
+      (eq?       tagged tagged)))
 
   ;; --- what the runtime externs RETURN --------------------------------------
   ;;
@@ -284,6 +298,7 @@
           (merges '())                      ; (x . (expr ...)) from phi/sigma
           (booleans (make-eq-hashtable))    ; raw words that hold 0/1, not a fixnum
           (sites '())                       ; (name . (arg ...))
+          (prims '())                       ; every primcall, anywhere
           ;; An upper bound on the variables this fixpoint can classify. See
           ;; the note on the ceiling below: it decides how many rounds are
           ;; possible, so it is computed from the program and not chosen.
@@ -480,6 +495,10 @@
              ;; refinement of x-in and therefore the same representation.
              (set! merges (cons (cons (cadr x) (list (caddr x))) merges)))
             ((letrec top) (note-procs! (cadr x)))
+            ;; EVERY primcall, not only a let-bound one: a conditional's TEST
+            ;; holds its primcall inline, and that is the shape every predicate
+            ;; is written in, so scanning `lets` misses exactly those.
+            ((primcall) (set! prims (cons x prims)))
             ((call tailcall) (set! sites (cons (cons (cadr x) (cddr x)) sites))))
           (for-each walk x)))
 
@@ -542,18 +561,44 @@
           ;; call-site rule below, except that the callee here is hand-written
           ;; assembly and cannot adapt to what it is handed. See
           ;; `prim-arg-classes`.
+          ;; WHEN A GENERAL VECTOR HOLDS SCHEME OBJECTS, what goes into it must
+          ;; BE one. `vector-element-class` is computed from the program and
+          ;; then verified, so by here it is known; when it says `tagged`, the
+          ;; value written by a `vector-set!` is a field the collector will
+          ;; scan and has to be a real object.
+          ;;
+          ;; This is one half of a pair, and neither half works alone. Nothing
+          ;; tagged what it stored and nothing untagged what it read, so a raw
+          ;; fixnum round-tripped through a tagged-element vector unharmed --
+          ;; true only while BOTH halves are missing. lower.ss's `untag-args`
+          ;; is the other half.
+          ;;
+          ;; `make-vector`'s FILL is deliberately not included. runtime.ss's
+          ;; %make-vector takes it in rdx, a RAW-word argument register, so
+          ;; requiring it tagged would route it to r8 and the routine would
+          ;; fill with whatever rdx happened to hold. The fill is 0 in every
+          ;; program here and 0 is the same word tagged or raw, which is why
+          ;; that hazard stays latent; it belongs with the change that gives
+          ;; %make-vector a fill argument it can trust.
+          (when (eq? (vector-element-class) 'tagged)
+            (for-each
+             (lambda (se)
+               (when (eq? (cadr se) 'vector-set!)
+                 (let ((args (cdddr se)))
+                   (when (and (>= (length args) 3) (symbol? (caddr args))
+                              (note! (caddr args) 'tagged))
+                     (set! changed #t)))))
+             prims))
           (for-each
-           (lambda (l)
-             (let ((se (cdr l)))
-               (when (and (pair? se) (eq? (car se) 'primcall) (pair? (cddr se)))
-                 (let ((req (assq (cadr se) prim-arg-classes)))
-                   (when req
-                     (let loop ((as (cdddr se)) (cs (cdr req)))
-                       (unless (or (null? as) (null? cs))
-                         (when (and (symbol? (car as)) (note! (car as) (car cs)))
-                           (set! changed #t))
-                         (loop (cdr as) (cdr cs)))))))))
-           lets)
+           (lambda (se)
+             (let ((req (assq (cadr se) prim-arg-classes)))
+               (when req
+                 (let loop ((as (cdddr se)) (cs (cdr req)))
+                   (unless (or (null? as) (null? cs))
+                     (when (and (symbol? (car as)) (note! (car as) (car cs)))
+                       (set! changed #t))
+                     (loop (cdr as) (cdr cs)))))))
+           prims)
           (for-each (lambda (m)
                       (for-each (lambda (op)
                                   (when (note! (car m) (tail-class op))

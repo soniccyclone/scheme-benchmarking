@@ -75,24 +75,27 @@
 
   ;; Initializers that reach `tagged` for free, or that are not values at all.
   ;;
-  ;; A FLONUM LITERAL IS NOT FREE, and this used to say every literal was. The
-  ;; reasoning in the header holds only for a fixnum: its tagged machine word is
-  ;; the value shifted left 3, so the constant is materialised already shifted
-  ;; and costs nothing. A tagged DOUBLE is a pointer to a heap box and has no
-  ;; immediate encoding at all, so leaving it alone hands the selector a tagged
-  ;; flonum literal it cannot represent -- "only exact integer and flonum
-  ;; literals are selectable", raised on the literal itself.
+  ;; ONLY A LAMBDA IS FREE, and this used to include every literal. The header's
+  ;; ground for that -- "a tagged fixnum's machine word is the value shifted
+  ;; left 3, so the constant is materialised already shifted and the selectors
+  ;; honour that" -- is false. Both selectors end their const rule with the
+  ;; value UNSHIFTED whatever the storage class, so a tagged 5 was the machine
+  ;; word 5: low bits 101, which is neither a fixnum (000) nor a heap pointer
+  ;; (001) nor an immediate (111).
   ;;
-  ;; Nothing reached this before. A flonum literal is only ever REQUIRED tagged
-  ;; by something that stores Scheme objects, and until `prim-arg-classes`
-  ;; declared `(cons tagged tagged)` there was no such requirement a literal
-  ;; could land on: `(cons 1.5 2.5)` is the first program to ask.
+  ;; Nothing noticed because nothing read the tag, and nothing read the tag
+  ;; because the two encodings coincided everywhere it mattered. Removing the
+  ;; exemption is what makes them differ, which is why it cannot be done alone:
+  ;; see lower.ss's `untag-args` and repr.ss's `vector-set!` rule, both of which
+  ;; are the other side of this and all three of which land together.
+  ;;
+  ;; Nothing new was needed to emit the conversion. `retag fixnum` already
+  ;; lowers to a multiply by 8 and `retag boxed` to a call to %box-flonum. The
+  ;; cost the old comment worried about -- two instructions to compute a
+  ;; constant -- is real and is paid only where a literal is genuinely REQUIRED
+  ;; tagged, which before `prim-arg-classes` existed was nowhere.
   (define (free-form? se)
-    (and (pair? se)
-         (or (eq? (car se) 'lambda)
-             (and (eq? (car se) 'quote)
-                  (pair? (cdr se))
-                  (not (flonum? (cadr se)))))))
+    (and (pair? se) (eq? (car se) 'lambda)))
 
   ;; `form` is an Lrepr `top` datum. `classes` is the vreg -> class table lower.ss
   ;; will read, and it is MUTATED here: the raw temporaries this pass introduces

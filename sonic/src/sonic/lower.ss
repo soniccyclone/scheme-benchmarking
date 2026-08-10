@@ -138,6 +138,34 @@
           ((and (integer? d) (exact? d)) 'raw-word)
           (else 'tagged)))
 
+  ;; --- what a primitive requires of its arguments, in the RAW direction ------
+  ;;
+  ;; repr.ss's `prim-arg-classes` declares the TAGGED requirements and pushes
+  ;; them backward, so convert.ss can retag at the definition. A `raw-word`
+  ;; requirement cannot travel that way: the join only ever moves a class UP
+  ;; toward `tagged`, so asking a tagged value to become a machine word changes
+  ;; nothing and the program compiles with the mismatch intact.
+  ;;
+  ;; So this one is read at the CONSUMER and the conversion lands at the USE.
+  ;; That is deliberately not D31's rule. convert.ss's header states the
+  ;; definition placement as though it were general; it is general only for the
+  ;; direction a requirement can be propagated in, and this is the other one.
+  ;;
+  ;; A row lists one entry per argument -- `raw-word` where a machine word is
+  ;; required, `#f` where anything goes. `vector-ref` is why the distinction is
+  ;; per position: the vector is a tagged pointer and the index is a machine
+  ;; word, in the same call.
+  (define prim-raw-args
+    '((fx+ raw-word raw-word) (fx- raw-word raw-word) (fx* raw-word raw-word)
+      (fxneg raw-word)
+      (fxquotient raw-word raw-word) (fxremainder raw-word raw-word)
+      (fxmodulo raw-word raw-word)
+      (fx< raw-word raw-word) (fx<= raw-word raw-word) (fx= raw-word raw-word)
+      (fx>= raw-word raw-word) (fx> raw-word raw-word)
+      (fx->fl raw-word)
+      (vector-ref #f raw-word) (flvector-ref #f raw-word)
+      (vector-set! #f raw-word #f) (flvector-set! #f raw-word #f)))
+
   (define (op-for pr)
     (let ((p (assq pr prim->op)))
       (unless p (error 'lower "primitive has no machine op" pr))
@@ -349,6 +377,36 @@
   (define (reset-params!) (set! fn-params (make-eq-hashtable)))
   (define (note-params! lbl ps) (hashtable-set! fn-params lbl ps))
   (define (lowered-params) fn-params)
+
+  ;; Untag every argument a primitive needs as a machine word that arrives
+  ;; tagged. Returns the instructions to prepend and the rewritten sources.
+  ;;
+  ;; A fixnum's tagged form is the value shifted left by the tag width, so the
+  ;; inverse is an ARITHMETIC shift right -- `ashr-imm`, which exists for this
+  ;; and nothing else. Signed, because a negative fixnum's tagged word has its
+  ;; sign bit set and a logical shift would turn it into a large positive one.
+  ;;
+  ;; Only a SYMBOL is converted. A literal in an argument position carries its
+  ;; own class from `const-class` and is materialised directly, so there is
+  ;; nothing to shift back.
+  (define (untag-args pr srcs)
+    (let ((req (assq pr prim-raw-args)))
+      (if (not req)
+          (values '() srcs)
+          (let loop ((ss srcs) (rs (cdr req)) (acc '()) (out '()))
+            (if (null? ss)
+                (values (reverse acc) (reverse out))
+                (let ((s (car ss))
+                      (r (and (pair? rs) (car rs)))
+                      (rest (if (pair? rs) (cdr rs) '())))
+                  (if (and (eq? r 'raw-word) (symbol? s)
+                           (eq? (hashtable-ref vreg-classes s #f) 'tagged))
+                      (let ((t (fresh! "u")))
+                        (note-class! t 'raw-word)
+                        (loop (cdr ss) rest
+                              (cons `(ashr-imm ,t raw-word ,fx-tag-bits ,s) acc)
+                              (cons t out)))
+                      (loop (cdr ss) rest acc (cons s out)))))))))
 
   (define (vreg-class-of v)
     (or (hashtable-ref vreg-classes v #f)
@@ -726,10 +784,14 @@
         ((primcall)
          (let* ((pr (cadr se))
                 (controls (caddr se))
-                (srcs (cdddr se))
+                (srcs0 (cdddr se))
                 (op (op-for/controls pr sc controls)))
-           (let-values (((pre post) (checks->instrs controls srcs dst stats)))
-             (values (append pre
+           ;; BEFORE the checks rather than between them and the op: a bounds
+           ;; check compares the index against the vector's RAW length, so it
+           ;; has to see the machine word too.
+           (let*-values (((untags srcs) (untag-args pr srcs0))
+                         ((pre post) (checks->instrs controls srcs dst stats)))
+             (values (append untags pre
                              (list (cond
                                     ((eq? op 'call)
                                      `(call ,dst ,sc ,(runtime-entry pr) ,@srcs))

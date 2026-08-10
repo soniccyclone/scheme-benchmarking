@@ -734,6 +734,46 @@
     (display "       exit=") (display code)
     (display " got=") (write out) (newline)))
 
+;; TYPE PREDICATES AND eq?, END TO END.
+;;
+;; These are what finally read a tag. `%fixnum?` masks the low three bits and
+;; compares against 000, so it is the first expression in this compiler's
+;; history whose answer depends on a fixnum actually being SHIFTED -- and it
+;; answered false about the number five until the representation was made
+;; honest. The interlock that fixed it is in convert.ss (literals are retagged),
+;; lower.ss (`untag-args` shifts back at the use) and repr.ss (a tagged-element
+;; vector requires tagged values); none of the three works without the others.
+;;
+;; So the last two lines are the ones to watch. `(fx->fl (car p))` reads a
+;; fixnum out of a pair, which stores it tagged and hands it to a primitive
+;; that needs a machine word: it is the round trip, and it is 1.0 only if both
+;; directions are present.
+(let-values (((code out)
+              (compile-and-run
+               (string-append
+                "(define p (cons 1 2))\n"
+                "(define v (make-vector 2 0))\n"
+                "(define f (make-flvector 2 0.0))\n"
+                "(display (if (pair? p) 1.0 0.0)) (newline)\n"
+                "(display (if (pair? v) 1.0 0.0)) (newline)\n"
+                "(display (if (vector? v) 1.0 0.0)) (newline)\n"
+                "(display (if (flvector? f) 1.0 0.0)) (newline)\n"
+                "(display (if (fixnum? 5) 1.0 0.0)) (newline)\n"
+                "(display (if (fixnum? p) 1.0 0.0)) (newline)\n"
+                "(display (if (null? p) 1.0 0.0)) (newline)\n"
+                "(display (if (eq? p p) 1.0 0.0)) (newline)\n"
+                "(display (if (eq? p v) 1.0 0.0)) (newline)\n"
+                "(display (fx->fl (car p))) (newline)\n"
+                "(display (fx->fl (cdr p))) (newline)\n")
+               '(display newline))))
+  (ck! "type predicates, eq?, and a fixnum round-tripping through a pair"
+       (and (zero? code)
+            (equal? out '(1.0 0.0 1.0 1.0 1.0 0.0 0.0 1.0 0.0 1.0 2.0))))
+  (unless (and (zero? code)
+               (equal? out '(1.0 0.0 1.0 1.0 1.0 0.0 0.0 1.0 0.0 1.0 2.0)))
+    (display "       exit=") (display code)
+    (display " got=") (write out) (newline)))
+
 ;; THE BENCHMARK ITSELF, as far as it currently gets.
 ;;
 ;; nbody's initial energy is the first oracle check in docs/METHOD.md, and it

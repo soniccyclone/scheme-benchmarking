@@ -93,6 +93,10 @@
   (define exit-bounds-error   102)
   (define exit-overflow-error 103)
   (define exit-unimplemented  104)
+  ;; `(error ...)` reached at run time. Distinct from `unimplemented`, which
+  ;; means this compiler has not written the routine yet: this one means the
+  ;; PROGRAM asked to stop.
+  (define exit-user-error     105)
 
   (define (abs-mem addr) `(mem #f #f 1 ,addr))
 
@@ -277,6 +281,110 @@
       %cdr
       (mov rax (mem r8 #f 1 ,(- 8 heap-tag)))
       (ret)
+
+      ;; ---- type predicates and eq? ----
+      ;;
+      ;; The rest of the names lower.ss has always mapped and nothing defined.
+      ;; Like %cons, each failed at LINK, so `(pair? x)` was not a slow path or
+      ;; a wrong answer -- it was a program that would not build.
+      ;;
+      ;; THE ARGUMENT IS TAGGED, declared in repr.ss, and that declaration is
+      ;; what these depend on. Until the representation was made honest -- see
+      ;; the interlock of convert.ss's literals, lower.ss's untag and repr.ss's
+      ;; vector-set! rule -- a tagged fixnum was stored unshifted, and
+      ;; `%fixnum?` answered FALSE about the number five.
+      ;;
+      ;; THE RESULT IS A RAW WORD, 0 or 1, and NOT sonic-false/sonic-true.
+      ;; repr.ss lists all seven in `boolean-word-prims`, so `branch-if`
+      ;; compares against zero. Returning the tagged booleans would make every
+      ;; predicate read as true, since 7 and 15 are both non-zero.
+      ;;
+      ;; numeric.ss's encoding, which these only read:
+      ;;   fixnum        low three bits 000
+      ;;   heap pointer  low three bits 001, TYPE in the header word
+      ;;   immediate     low three bits 111, secondary tag above it
+      ;;
+      ;; D29 is why the heap cases pay a load: one pointer tag for every heap
+      ;; type, so the predicates pay for the distinction and indexing does not.
+      %fixnum?
+      (mov rax r8)
+      (and rax (imm 7))
+      (cmp rax (imm 0))
+      (je (label %pred-true))
+      (jmp (label %pred-false))
+
+      %null?
+      (cmp r8 (imm ,sonic-null))
+      (je (label %pred-true))
+      (jmp (label %pred-false))
+
+      ;; eq? IS IDENTITY ON THE MACHINE WORD, which is right for exactly what
+      ;; R6RS lets it be right for: immediates, fixnums and pointers compare as
+      ;; themselves. Two distinct boxed flonums holding the same double are not
+      ;; `eq?`, which is permitted and is why `fl=` exists.
+      %eq?
+      (cmp r8 r9)
+      (je (label %pred-true))
+      (jmp (label %pred-false))
+
+      %pair?
+      (mov rax r8)
+      (and rax (imm 7))
+      (cmp rax (imm ,heap-tag))
+      (jne (label %pred-false))
+      (mov rax (mem r8 #f 1 ,heap-type-disp))
+      (cmp rax (imm ,heap-type-pair))
+      (je (label %pred-true))
+      (jmp (label %pred-false))
+
+      %vector?
+      (mov rax r8)
+      (and rax (imm 7))
+      (cmp rax (imm ,heap-tag))
+      (jne (label %pred-false))
+      (mov rax (mem r8 #f 1 ,heap-type-disp))
+      (cmp rax (imm ,heap-type-vector))
+      (je (label %pred-true))
+      (jmp (label %pred-false))
+
+      %flvector?
+      (mov rax r8)
+      (and rax (imm 7))
+      (cmp rax (imm ,heap-tag))
+      (jne (label %pred-false))
+      (mov rax (mem r8 #f 1 ,heap-type-disp))
+      (cmp rax (imm ,heap-type-flvector))
+      (je (label %pred-true))
+      (jmp (label %pred-false))
+
+      ;; A FLONUM IS THE BOXED ONE. An unboxed double is `raw-f64`, a
+      ;; representation this cannot be handed; by the time a value reaches here
+      ;; it is tagged, so the only flonum that exists at this point is a box.
+      %flonum?
+      (mov rax r8)
+      (and rax (imm 7))
+      (cmp rax (imm ,heap-tag))
+      (jne (label %pred-false))
+      (mov rax (mem r8 #f 1 ,heap-type-disp))
+      (cmp rax (imm ,heap-type-flonum))
+      (je (label %pred-true))
+      (jmp (label %pred-false))
+
+      %pred-true
+      (mov rax (imm 1))
+      (ret)
+      %pred-false
+      (mov rax (imm 0))
+      (ret)
+
+      ;; `error` STOPS THE PROGRAM and gets its own exit code, so a failure
+      ;; names itself in $? like every other trap here. It does not print its
+      ;; arguments: that needs strings, which a real `command-line` and
+      ;; `string->number` are also waiting on.
+      %error
+      (mov rdi (imm ,exit-user-error))
+      (mov rax (imm ,sys-exit))
+      (syscall)
 
       ;; ---- box a flonum ----
       ;;
