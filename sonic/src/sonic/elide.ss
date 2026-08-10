@@ -309,22 +309,6 @@
         (values #f #f)
         (let* ([v (car args)] [i (cadr args)] [n (len-of env v)])
           (cond
-            ;; AN EMPTY INTERVAL MEANS NO VALUE REACHES HERE.
-            ;;
-            ;; Bottom is not "an index we know nothing about" -- that is top.
-            ;; It is the meet of disjoint constraints, so the path carrying
-            ;; this access cannot be taken, and a check on it can never fire.
-            ;; Discharging is sound for the same reason unreachable code may be
-            ;; deleted, and it is sound in the SAFE direction if the emptiness
-            ;; were ever spurious: the worst case is a check removed from code
-            ;; that does not run.
-            ;;
-            ;; Found while diagnosing qaq.23, where a specialized copy carried
-            ;; a site with an empty index interval and kept its check because
-            ;; every rule below asks a question about a value that does not
-            ;; exist -- `iv-within?` on bottom is false, and so is ABCD's
-            ;; query, so the site fell through to `kept`.
-            [(iv-bot? (iv-of env i)) (values #t 'unreachable)]
             [(holds? env (list 'bounds v i)) (values #t 'dominating-check)]
             [(and n (iv-within? (iv-of env i) (iv-const n))) (values #t 'interval)]
             [(abcd-in-bounds? (eenv-graph env) i (or n (abcd-length-vertex v)))
@@ -367,7 +351,36 @@
         (values #t 'interval)
         (values #f #f)))
 
+  ;; AN EMPTY INTERVAL ON ANY OPERAND MEANS NO VALUE REACHES HERE.
+  ;;
+  ;; Bottom is not "we know nothing about this operand" -- that is top. It is
+  ;; the meet of disjoint constraints, so nothing arrives, the operation cannot
+  ;; execute, and a check guarding it can never fire. Discharging is sound for
+  ;; the same reason unreachable code may be deleted, and sound in the SAFE
+  ;; direction even if the emptiness were spurious: the worst case is a check
+  ;; removed from code that does not run.
+  ;;
+  ;; THIS SITS AT THE DISPATCH RATHER THAN IN ONE RULE, because the defect is
+  ;; not specific to bounds. Every family below consults a VALUE and returns
+  ;; "not discharged" when no rule matches, so each of them read bottom as
+  ;; though it were top. Writing it once means a family added later inherits
+  ;; the answer instead of re-acquiring the bug.
+  ;;
+  ;; ALL operands, not just the one a given rule inspects: an operation needs
+  ;; every argument to have a value before it can run.
+  ;;
+  ;; Found while diagnosing qaq.23. See LEDGER D44 -- nine hypotheses about the
+  ;; PROGRAM died before anyone asked what the rules do at each lattice point.
+  (define (any-operand-empty? args env)
+    (exists (lambda (x) (and (symbol? x) (iv-bot? (iv-of env x)))) args))
+
   (define (discharge? pr check args env)
+    (if (and (memq check '(bounds-check type-check overflow-check div-check))
+             (any-operand-empty? args env))
+        (values #t 'unreachable)
+        (discharge-by-rule pr check args env)))
+
+  (define (discharge-by-rule pr check args env)
     (case check
       [(bounds-check) (bounds-ok? pr args env)]
       [(type-check) (type-ok? pr args env)]

@@ -1003,3 +1003,25 @@ sigma was on. The defect was in the analysis's own algebra and would have been
 found by asking what each rule does at each lattice point, which is a question
 about twenty lines of `elide.ss` and no program at all. When a fact is missing
 from an abstract interpretation, interrogate the domain before the input.
+
+### D44 addendum -- the rule belongs at the dispatch, and the extension is free
+
+`type-ok?`, `overflow-ok?` and `div-ok?` are written exactly like `bounds-ok?`:
+consult a value, return "not discharged" when no rule matches. So all four had
+the same gap, and the fix was moved up to `discharge?` where it governs the
+family list at once and tests EVERY operand rather than the one a given rule
+inspects -- an operation needs all its arguments to have values before it can
+run.
+
+THE EXTENSION MEASURES NOTHING. fannkuch keeps its six overflow checks with the
+pass off and on, and neither benchmark has a type check left to discharge; the
+numbers are identical to what the bounds-only rule gave.
+
+It is kept anyway, and the distinction from D43's retracted compare-swap is
+worth stating because both measured zero. That one was eighty lines of new pass
+justified entirely by a performance win that did not appear, and it was
+reverted. This is five lines generalising a rule already in the tree and
+already load-bearing, justified by three sibling families carrying an identical
+latent defect that a fourth would have acquired on arrival. The test is whether
+the change would be worth making if it never appeared in any measurement: for a
+defect class, yes; for a speculative optimisation, no.
