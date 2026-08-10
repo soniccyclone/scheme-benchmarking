@@ -763,12 +763,16 @@
               [(lambda (,x* ...) ,body) 'tagged]
               [(primcall ,pr ([,pn* ,c*] ...) ,x* ...) (prim-result-class pr)]
               [else
+               ;; THE INITIALIZER IS REPORTED, not just the name. A bare
+               ;; `t.94` says a binding was missed and nothing about which
+               ;; shape the fixpoint failed to reach, and the two candidates --
+               ;; a copy of a variable and a call -- want different fixes.
                (error 'select-representations
                       (string-append
                        "no storage class for this binding; classifying it "
                        "wrongly would either lose a GC root or put a double in "
                        "an integer register, and there is no safe default")
-                      x)])))
+                      x (unparse-Lssa se))])))
       (define (Expr e)
         (with-output-language (Lrepr Expr)
           (nanopass-case (Lssa Expr) e
