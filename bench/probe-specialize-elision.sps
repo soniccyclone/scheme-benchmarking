@@ -63,6 +63,36 @@
 ;;; that binding's right-hand side in both runs and compare. Not to theorise
 ;;; about which pass is responsible; two theories have already been wrong.
 
+;;; --- THE PROOF CHAIN, READ OUT OF THE Lssa ITSELF ------------------------
+;;;
+;;; Dumping the datum and reading it beats guessing at binder shapes, which is
+;;; how the two dead hypotheses above were produced.
+;;;
+;;; The else branch's write is guarded by two nested e-SSA sigmas:
+;;;
+;;;   (sigma i.N i.M fx< r.K #f            ; the false edge of (fx< i r)
+;;;     (sigma r.J r.K fx> i.N #f          ; so r <= i
+;;;       ... (vector-set! v r.J p0) ...))
+;;;
+;;; SO r's UPPER BOUND NEVER COMES FROM r. `rot` is `(lambda (r.K) ...)`, a
+;;; perfectly ordinary letrec-bound procedure, and r.K carries NO interval fact
+;;; in EITHER run -- checked, the only r-named fact in the program is a
+;;; different variable entirely. The bound arrives through the second sigma:
+;;; r <= i, so whatever upper bound `i` has becomes r's.
+;;;
+;;; THAT is what the copies lose. Not a fact, not a premise, not parameter
+;;; status -- the refinement chain that carries `i`'s bound across to `r`.
+;;;
+;;; NEXT: check `i`'s interval at that sigma in both runs. In the copies `i` is
+;;; let-bound to a literal, which ought to make the bound BETTER, so if it is
+;;; absent there the reason is structural -- the phi/entry wrapper around the
+;;; copy's parameter is the first thing to look at, since the original reads
+;;; `(phi ((i.M (entry i.L))) ...)` and a copy binding a literal may not
+;;; produce the same shape.
+;;;
+;;; Three hypotheses have now died on this issue. Read the IR before forming a
+;;; fourth.
+
 (define v (make-vector 8 0))
 (define (rot r)
   (let ((p0 (vector-ref v 0)))
