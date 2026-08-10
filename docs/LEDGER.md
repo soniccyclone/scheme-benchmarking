@@ -1025,3 +1025,36 @@ already load-bearing, justified by three sibling families carrying an identical
 latent defect that a fourth would have acquired on arrival. The test is whether
 the change would be worth making if it never appeared in any measurement: for a
 defect class, yes; for a speculative optimisation, no.
+
+## D45 -- every estimate denominated in instructions is now suspect
+
+D42 killed the exchange rate the project had been using. It is worth saying
+plainly what that invalidates, because the rate is buried inside estimates that
+still read as if they were measurements.
+
+D38 recorded fannkuch converting instructions to cycles at somewhere between
+1:3 and 1:9, and several issues priced their prizes by multiplying an
+instruction saving by it. D42 measured the conversion end to end -- 22.4% of
+fannkuch's instructions removed, 35.005G to 27.161G, and the cycles moved from
+10.880G to 10.885G, which is nothing. IPC fell 3.22 to 2.50. The machine had
+been absorbing the instructions all along.
+
+So: an estimate of the form "this removes N% of instructions, therefore about
+M% of cycles" is not an estimate. It is an instruction count with a
+multiplier attached that no longer has evidence behind it.
+
+WHAT ACTUALLY CONVERTED, once, and it is the only case so far: D43's unroll
+probe removed 8.6% of instructions and 8.4% of cycles. The difference between
+that and D42 is what was removed -- a loop back edge in one case, bounds checks
+the machine was already hiding in the other. Removing control flow converts.
+Removing absorbed work does not.
+
+Applied immediately to qaq.7.23, whose recorded prize of "a third of a percent
+of cycles" was 1.1% of instructions times D38's rate; restated as
+approximately nothing, which strengthens a recommendation that was already to
+leave it alone.
+
+THE RULE GOING FORWARD. Price in cycles or do not price. If only an instruction
+count is available, say so and say that the cycle effect is unknown -- on this
+part, for these programs, the honest prior is zero unless a branch is going
+away.
