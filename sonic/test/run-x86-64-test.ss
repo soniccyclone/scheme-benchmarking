@@ -543,6 +543,42 @@
      (= 4 (surviving-bounds-checks "../bench/fannkuch/config-sonic.sps"
                                    '(display newline))))
 
+;; A PROCEDURE NOTHING CALLS IS NOT COMPILED.
+;;
+;; `partition-into-functions` gathers blocks no entry reaches under
+;; `<unreachable>` and finalize drops that bucket -- but a top-level procedure
+;; with no callers is not in it. It is a well-formed function that simply
+;; cannot run, and it was being lowered, allocated, finalized and emitted.
+;;
+;; Reachability is EXACT rather than conservative: every call names its target
+;; directly (closures are a later bead), so the call graph is the set of
+;; procedures that can run.
+(ck! "a procedure nothing calls is dropped, with its inner loop"
+     (let* ((f (string-append tmp "-dead.sps"))
+            (_ (let ((p (open-file-output-port f (file-options no-fail)
+                                               (buffer-mode block)
+                                               (native-transcoder))))
+                 (put-string p (string-append
+                   "(define v (make-vector 4 0))\n"
+                   "(define (dead r)\n"
+                   "  (let loop ((i 0))\n"
+                   "    (if (fx< i r) (begin (vector-set! v i i) (loop (fx+ i 1))) 0)))\n"
+                   "(define (live x) (fx+ x 1))\n"
+                   "(define (main) (begin (display (fx->fl (live 41))) (newline)))\n"
+                   "(main)\n"))
+                 (close-port p)))
+            (names (map finalized-name
+                        (compiled-functions (compile-sonic f '(display newline))))))
+       (and (memq 'live names) (memq 'main names)
+            (not (memq 'dead names))
+            ;; the loop inside it goes too, which is the case that would
+            ;; survive a check that only looked at top-level names
+            (not (exists (lambda (n)
+                           (let ((s (symbol->string n)))
+                             (and (>= (string-length s) 4)
+                                  (string=? (substring s 0 4) "loop"))))
+                         names)))))
+
 ;; A PROCEDURE NOTHING CALLS MUST NOT REFUSE THE PROGRAM.
 ;;
 ;; A parameter's class comes from the call sites (repr.ss), so a procedure with

@@ -1445,6 +1445,44 @@
        (filter pair? xs))
       acc))
 
+  ;; --- a procedure nothing calls is not compiled -----------------------------
+  ;;
+  ;; `partition-into-functions` already gathers blocks no entry reaches under
+  ;; `<unreachable>`, and finalize already drops that bucket -- but a top-level
+  ;; procedure with no callers is not in it. It is a perfectly well-formed
+  ;; function that simply cannot run, and it was being lowered, allocated,
+  ;; finalized and emitted.
+  ;;
+  ;; It costs more than bytes. repr.ss has to classify such a procedure's
+  ;; parameters, and it cannot: a parameter's class comes from its call sites,
+  ;; so a procedure with none leaves them unknown and lower.ss then refuses the
+  ;; whole program over code that cannot execute. That was a real bug, and the
+  ;; fix there -- call the parameters `raw-word` because an unconstrained choice
+  ;; is free -- is a workaround for compiling something nobody should compile.
+  ;;
+  ;; REACHABILITY IS EXACT HERE, not conservative. Every call in this compiler
+  ;; names its target directly -- closures are a later bead -- so `callees-of`
+  ;; over the call graph IS the set of procedures that can run, and a name it
+  ;; does not reach cannot be entered by any means. The runtime's own routines
+  ;; are not in this list at all: they live in `runtime-listing`, and the entry
+  ;; reaches them through it.
+  (define (reachable-functions fns entry)
+    (let ((by-name (make-eq-hashtable)) (seen (make-eq-hashtable)))
+      (for-each (lambda (fn) (hashtable-set! by-name (car fn) fn)) fns)
+      (let walk ((work (list entry)))
+        (unless (null? work)
+          (let ((nm (car work)))
+            (cond
+             ((hashtable-ref seen nm #f) (walk (cdr work)))
+             (else
+              (hashtable-set! seen nm #t)
+              (let ((fn (hashtable-ref by-name nm #f)))
+                (walk (append (if fn (callees-of (cdr fn)) '()) (cdr work)))))))))
+      ;; IN THE ORIGINAL ORDER. The image's layout is not the call graph's
+      ;; business, and reordering it would move every function in the object
+      ;; file for a reason that has nothing to do with them.
+      (filter (lambda (fn) (hashtable-ref seen (car fn) #f)) fns)))
+
   ;; The functions this one CALLS, tail calls included. A tail call transfers
   ;; control, so from a caller's point of view calling f runs whatever f jumps
   ;; to, and its writes are f's writes.
@@ -1513,8 +1551,10 @@
              ;; It became reachable when inline.ss started working: inlining a
              ;; procedure at its every call site leaves the original with no
              ;; callers, which is exactly what this bucket collects.
-             (fns (filter (lambda (fn) (not (eq? (car fn) '<unreachable>)))
-                          (partition-into-functions blocks entry)))
+             (fns (reachable-functions
+                   (filter (lambda (fn) (not (eq? (car fn) '<unreachable>)))
+                           (partition-into-functions blocks entry))
+                   entry))
              (out (make-eq-hashtable)))
 
         (define (finalize-one fn)
