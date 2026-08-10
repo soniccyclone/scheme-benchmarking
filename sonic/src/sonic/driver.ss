@@ -41,7 +41,7 @@
           (sonic anf) (sonic assign) (sonic inline) (sonic unroll)
           (sonic essa) (sonic elide)
           (sonic repr) (sonic lift) (sonic convert) (sonic lower) (sonic globals)
-          (sonic shapes) (sonic interval) (sonic cse) (sonic dce) (sonic contract) (sonic fold) (sonic addrfold) (sonic slp)
+          (sonic shapes) (sonic interval) (sonic cse) (sonic dce) (sonic contract) (sonic fold) (sonic specialize) (sonic addrfold) (sonic slp)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
           (sonic order)
@@ -61,14 +61,21 @@
            ;; CONSTANT FOLDING BEFORE UNROLLING, because the unroller's copies
            ;; are what folding has to chew on -- and after inlining, so a
            ;; literal passed to a procedure is a literal inside it.
+           ;;
+           ;; `unroll-fully` is the alternation of specialization and folding:
+           ;; substituting a loop body at a call with literal arguments makes
+           ;; the guard foldable, folding the guard makes the NEXT call's
+           ;; argument a literal, and the loop disappears when the guard turns.
+           ;; Neither pass can do it alone -- see specialize.ss.
            (p0 (unroll-program
+                (unroll-fully
                 (fold-program
                 (inline-program
                 (assign-convert-program
                  (anf-program
                   (resolve-policy-program
                    (parse-program (expand-program (read-all-from-file path))
-                                  externs)))))))))
+                                  externs))))))))))
       ;; SHAPES BEFORE ELISION. The interval domain can discharge nbody's inner
       ;; loop arithmetically and never had the premises: a vector's length was
       ;; never connected to the `make-flvector` that produced it, and a
@@ -182,6 +189,19 @@
   ;; premises on the callees' parameters. Facts only ever get added, and each is
   ;; a bounded integer range over a finite lattice, so it settles; the bound is
   ;; there because an argument for termination is not a guard.
+  ;; Specialize, fold, repeat. Bounded twice over: specialize.ss has its own
+  ;; size and copy budgets, and this stops as soon as a round substitutes
+  ;; nothing -- which is what happens the moment every remaining loop has a
+  ;; guard that will not fold or an argument that is not a literal.
+  (define (unroll-fully p)
+    (let loop ((p p) (round 0))
+      (if (> round 24)
+          p
+          (let-values (((p1 st) (specialize-program/report p)))
+            (if (zero? (specialize-stats-specialized st))
+                p
+                (loop (fold-program p1) (+ round 1)))))))
+
   (define (elide-to-fixpoint ssa)
     (let* ((datum (unparse-Lssa ssa))
            (base (shape-facts datum))
