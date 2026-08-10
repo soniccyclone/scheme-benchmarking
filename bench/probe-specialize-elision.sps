@@ -93,40 +93,46 @@
 ;;; Three hypotheses have now died on this issue. Read the IR before forming a
 ;;; fourth.
 
-;;; --- FOUND IT: THE REFINEMENT HAS THE WRONG POLARITY IN A COPY ----------
+;;; --- A RETRACTION: THE POLARITY CLAIM WAS WRONG -------------------------
 ;;;
-;;; BASELINE. The else branch's write sits under the FALSE edge of the guard:
+;;; A previous revision of this header announced the cause: that the baseline
+;;; put the else-branch write under the guard's FALSE edge, giving `r <= i` and
+;;; an upper bound, while the copies put it under the TRUE edge, giving `r > i`
+;;; and only a lower bound.
 ;;;
-;;;   (sigma i.101 i.99  fx< r.94  #f      ; i < r is FALSE, so i >= r
-;;;     (sigma r.102 r.94 fx> i.101 #f     ; therefore r <= i
-;;;       ... (vector-set! v r.102 p0) ...))
+;;; IT IS NOT TRUE. Checked properly, by matching the p0 write itself in both
+;;; dumps rather than matching the first sigma chain in the file:
 ;;;
-;;; r <= i supplies an UPPER bound, which is what a bounds check needs, and the
-;;; site comes out proved why=interval.
+;;;     baseline      6 p0-writes, EVERY ONE under a #t sigma, all PROVED
+;;;     specialized  20 p0-writes, EVERY ONE under a #t sigma, many KEPT
 ;;;
-;;; SPECIALIZED. The same write sits under the TRUE edge:
+;;; Same polarity on both sides. It explains nothing.
 ;;;
-;;;   (sigma t.416 t.412 fx< r.403 #t      ; i < r is TRUE
-;;;     (sigma r.417 r.403 fx> t.416 #t    ; therefore r > i
-;;;       ... (vector-set! v r.417 p0) ...))
+;;; HOW THE MISTAKE HAPPENED, because it is the reusable part. I searched each
+;;; dump for the first `(sigma ... fx< ... #f (sigma ... fx> ... #f` and
+;;; compared what I found. In the baseline that pattern matched a DIFFERENT
+;;; access than the one under investigation. Two different sites, read as one
+;;; site changing. The fix is to match the site by its own operands -- here the
+;;; `p0` argument, which is unique to the write in question -- and only then
+;;; look up what guards it.
 ;;;
-;;; r > i is a LOWER bound and nothing else. There is no upper bound anywhere
-;;; on that path, so the check cannot be discharged and is kept. One per copy.
+;;; ALSO CHECKED AND EQUAL: the Lanf before essa runs. The copy's `if` has the
+;;; same arm order as the original's, differing only in that the loop bound is
+;;; renamed from r%5 to the inlined argument t.18. So essa is not being handed
+;;; a swapped conditional either.
 ;;;
-;;; THAT IS THE COLLAPSE. Not a lost fact, not a missing premise, not parameter
-;;; status, not the trip count, and not a broken refinement chain -- the chain
-;;; is intact and carries a refinement of the WRONG DIRECTION.
+;;; WHAT REMAINS TRUE. Baseline proves every one of these writes; with
+;;; specialization on, one per copy survives. The structure around them --
+;;; sigma chain, edge polarity, arm order -- is the same in both. So the
+;;; difference is in what the interval domain can DERIVE along that chain, not
+;;; in the chain's shape. The next thing to print is the interval elide
+;;; actually computes for each operand of the surviving check, at the check,
+;;; in both runs. Nothing short of that has settled anything on this issue.
 ;;;
-;;; The program still answers correctly, so this is not a miscompilation of
-;;; control flow; the else action is not being executed on the then path. What
-;;; it means is that the copy's guard arms and the e-SSA edge polarity have
-;;; come apart, so the sigma attached to that occurrence describes the other
-;;; edge.
-;;;
-;;; NEXT: find where they come apart. specialize.ss copies the body and essa
-;;; runs afterwards over the enlarged program, so the suspects are the order of
-;;; the copy's `if` arms and whatever essa uses to decide which edge is which.
-;;; Compare the copy's `if` against the original's before assuming either.
+;;; SCOREBOARD, kept deliberately: five hypotheses have now died here --
+;;; out-of-range copies, lost declare premises, missing parameter status, a
+;;; broken refinement chain, and edge polarity. The two that survived longest
+;;; were the ones I did not check against the specific site.
 
 (define v (make-vector 8 0))
 (define (rot r)
