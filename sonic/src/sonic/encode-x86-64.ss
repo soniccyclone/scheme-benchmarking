@@ -343,7 +343,7 @@
     (or (assq m int-alu) (assq m sse-arith) (assq m sse-bitwise)
         (assq m vex-arith) (assq m vex-packed) (memq m '(vmovupd vmovddup))
         (assq m jcc-table) (assq m setcc-table)
-        (memq m '(mov movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
+        (memq m '(mov movb movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
                   syscall cqo idiv))
         #f))
 
@@ -353,7 +353,7 @@
     (append (map car int-alu) (map car sse-arith) (map car sse-bitwise)
             (map car vex-arith) (map car vex-packed) '(vmovupd vmovddup cqo idiv)
             (map car jcc-table) (map car setcc-table)
-            '(mov movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
+            '(mov movb movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
               syscall)))
 
   ;; --- the baseline guard ---------------------------------------------------
@@ -552,6 +552,21 @@
           (unless (gpr? dst) (error 'encode-instr "setcc destination must be a GPR" i))
           (asm 'encode-instr '() 0 (list #x0F (cdr (assq m setcc-table))) 0 dst '()
                (needs-rex-for-byte? dst))))
+       ;; AN 8-BIT STORE, which is the one thing missing before a string can be
+       ;; built. `mov` here is 64-bit only, so copying a C string out of argv
+       ;; into a heap object could not be written at all -- and the tempting way
+       ;; round it, storing one character per WORD, would decide what
+       ;; `heap-type-string` means by an accident of the encoder.
+       ;;
+       ;; Opcode 0x88 /r, REX.W CLEAR: this writes one byte. REX is forced for
+       ;; the four registers whose 8-bit encoding is ambiguous without it, which
+       ;; is the same rule `setcc` already applies and the same helper.
+       ((eq? m 'movb)
+        (let ((dst (arg 0)) (src (arg 1)))
+          (unless (mem? dst) (error 'encode-instr "movb destination must be memory" i))
+          (unless (gpr? src) (error 'encode-instr "movb source must be a GPR" i))
+          (asm 'encode-instr '() 0 '(#x88) (reg-number src) dst '()
+               (needs-rex-for-byte? src))))
        ((eq? m 'movzx)
         (let ((dst (arg 0)) (src (arg 1)))
           (unless (gpr? dst) (error 'encode-instr "movzx destination must be a GPR" i))

@@ -286,6 +286,11 @@
      ((eq? m 'movzx)
       (string-append "movzx " (gas-op (car ops) #f) ", "
                      (symbol->string (gpr-8bit-name (cadr ops)))))
+     ;; An 8-bit store. gas wants the size on the memory operand and the 8-bit
+     ;; spelling of the register, exactly as it does for setcc.
+     ((eq? m 'movb)
+      (string-append "mov BYTE PTR " (gas-mem (car ops) #f) ", "
+                     (symbol->string (gpr-8bit-name (cadr ops)))))
      ((eq? m 'lea)
       ;; no size prefix: lea computes an address, it does not access memory
       (string-append "lea " (gas-op (car ops) #f) ", " (gas-op (cadr ops) #f)))
@@ -393,6 +398,15 @@
     (lea rbx (mem r14 r9 8 24))
     (lea r10 (mem rax #f 1 8))
     (shl r12 (imm 3))
+    ;; AN 8-BIT STORE. Verified against gas because the REX rule is the thing
+    ;; that goes wrong quietly: without REX, encodings 4..7 mean ah/ch/dh/bh
+    ;; rather than spl/bpl/sil/dil, so a store through rsi would write the wrong
+    ;; register's high byte and decode as something plausible. rax and r10 do
+    ;; not need it; rsi and rbp do.
+    (movb (mem rbx #f 1 0) rax)
+    (movb (mem rbx rcx 1 16) r10)
+    (movb (mem r14 #f 1 8) rsi)
+    (movb (mem rax rdx 8 -1) rbp)
     ;; ARITHMETIC shift right, which `ashr-imm` selects to. Verified against
     ;; gas alongside `shl` because the two differ by one ModRM extension field
     ;; (4 against 7) and a transposition would be a silently wrong DIRECTION
