@@ -175,6 +175,42 @@
 ;;; true and derivable; the question is which mechanism carries it and whether
 ;;; the copies break it or merely outnumber it.
 
+;;; --- CONFIRMED BY EXPERIMENT: IT IS THE LOWER BOUND, AND ONLY THAT -------
+;;;
+;;; Wrap the else branch's write in a guard that states what is already true --
+;;;
+;;;     (if (fx< r 0) 0 (vector-set! v r p0))
+;;;
+;;; -- and the collapse disappears entirely:
+;;;
+;;;     plain      off: 0 checks / 4 fns      on: 3 checks / 18 fns
+;;;     r >= 0     off: 0 checks / 4 fns      on: 0 checks / 18 fns
+;;;
+;;; Same eighteen functions, same copies, zero checks. Establishing that r is
+;;; NON-NEGATIVE is sufficient on its own. Nothing about the upper bound, the
+;;; trip count, the copies being out of range, or the refinement chain needed
+;;; to change.
+;;;
+;;; WHERE THE MISSING FACT SHOULD COME FROM. `drive` starts r at 1 and only
+;;; ever increments it, and its own parameter carries [1,8] as an
+;;; interprocedural fact. `rot`'s parameter, which is what indexes the write,
+;;; carries nothing -- it never receives the interval its caller already has.
+;;; That is the gap. It is an interprocedural propagation failure, not anything
+;;; specialisation does wrong.
+;;;
+;;; WHY THAT IS GOOD NEWS FOR qaq.23. The elision collapse is not inherent to
+;;; unrolling. Unrolling only multiplies an unproven site that was already
+;;; unproven -- in the baseline the same site is kept by elide too (r%1.116,
+;;; [-inf,+inf]) and merely never reaches the emitted code. Fix the propagation
+;;; and the copies inherit the fix; the transformation itself was never the
+;;; problem.
+;;;
+;;; NEXT: find why rot's parameter does not receive its call site's interval,
+;;; when drive's does. interval-facts-from keys facts by callee and parameter
+;;; position, so the two candidates are that rot has no surviving call site by
+;;; the time the facts are gathered, or that it is not in the procedure table
+;;; the pass consults.
+
 (define v (make-vector 8 0))
 (define (rot r)
   (let ((p0 (vector-ref v 0)))
