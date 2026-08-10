@@ -198,17 +198,52 @@
           [(policy ([,pn* ,b*] ...) ,body) (scan-expr body)]
           [else (void)]))
 
-      ;; --- pass two: substitute at every eligible call ------------------------
+      ;; --- pass two: a specialized COPY, not a splice -------------------------
       ;;
-      ;; ONE substitution per call site per round. The copy contains the next
-      ;; self call, whose argument is a primcall over a literal and not yet a
-      ;; literal itself -- fold.ss makes it one, and the driver runs the two
-      ;; alternately. Substituting again here would loop forever on an argument
-      ;; that has not been folded.
-      ;; A running estimate of what this round has added, checked per
-      ;; substitution so one round cannot blow the budget by the number of
-      ;; eligible sites.
-      (define grown 0)
+      ;; The call is REDIRECTED to a nullary sibling binding whose body is the
+      ;; original with the parameters replaced by the literals:
+      ;;
+      ;;     (letrec ([f (lambda (x) body)])
+      ;;       (let ([r (call f zero)]) rest))
+      ;;   =>
+      ;;     (letrec ([f   (lambda (x) body)]
+      ;;              [f@0 (lambda () body[x := zero])])
+      ;;       (let ([r (call f@0)]) rest))
+      ;;
+      ;; SPLICING WOULD NOT WORK AND THAT IS THE POINT. Inlining a body at a
+      ;; non-tail call site means its value has to reach `r`, which inline.ss's
+      ;; `splice` does only for a body with ONE tail position -- rule 5 -- and a
+      ;; loop body is an `if` with two arms. Measured: nbody's pair nest,
+      ;; `outer%22` and `inner%24`, is entered by `call` and not by `tailcall`,
+      ;; so an earlier version of this pass could not touch it and unrolled the
+      ;; position loops instead. Redirecting a call needs no value to travel, so
+      ;; a non-tail entry is handled exactly like a tail one.
+      ;;
+      ;; The recursion then chains rather than nests: inside `f@0` the guard and
+      ;; the index arithmetic fold, and the self call `(tailcall f (fx+ 0 1))`
+      ;; has a literal argument, so the next round redirects it to `f@1`. The
+      ;; loop becomes f@0 -> f@1 -> ... -> exit, joined by TAIL calls, which are
+      ;; jumps with no frame.
+      ;;
+      ;; KEYED BY (name . literals), so two call sites with the same argument
+      ;; share one copy and the budget counts copies that exist rather than
+      ;; substitutions performed. That is also what makes the count meaningful
+      ;; where a per-name budget was not: `freshen` mints a new name per copy,
+      ;; and a key made of the ORIGINAL name and the literals does not move.
+      (define pending '())        ; (key name args) awaiting a binding
+      (define made (make-hashtable equal-hash equal?))   ; key -> new name
+
+      ;; The ORIGINAL name and the literal VALUES, so two call sites with the
+      ;; same arguments share a copy -- and so the key does not move when
+      ;; `freshen` renames things.
+      (define (key-of f x*)
+        (cons f (map (lambda (v) (car (hashtable-ref lits v '(#f)))) x*)))
+
+      (define counter 0)
+      (define (copy-name f)
+        (set! counter (+ counter 1))
+        (string->symbol (string-append (symbol->string f) "@"
+                                       (number->string counter))))
 
       (define (eligible? f x*)
         (let ((p (hashtable-ref loops f #f)))
@@ -216,29 +251,93 @@
                (= (length (car p)) (length x*))
                (specialize-enabled?)
                (for-all literal? x*)
-               (<= (+ grown (expr-size (cdr p)))
-                   (* (- (specialize-growth-budget) 1) start-size)))))
+               (or (hashtable-ref made (key-of f x*) #f)
+                   (<= (+ (hashtable-size made) 1)
+                       (* (specialize-growth-budget) 8))))))
+
+      ;; THE PARAMETERS ARE BOUND INSIDE THE COPY, to the literal VALUES, and
+      ;; that is forced by where the copy lives rather than by taste.
+      ;;
+      ;; A copy is a SIBLING BINDING of the loop it copies, so it is evaluated
+      ;; in the letrec's scope -- which does not include anything bound in the
+      ;; letrec's BODY. The call site's argument variable is bound there:
+      ;;
+      ;;     (letrec ([f (lambda (x) body)])
+      ;;       (let ([zero (quote 0)]) (call f zero)))
+      ;;
+      ;; so substituting `zero` for `x` inside a sibling binding references a
+      ;; variable that is not in scope. Measured, when I did exactly that:
+      ;; "no storage class for this vreg, so an `if` cannot say how to copy it
+      ;; into the join destination" -- the class fixpoint had nothing to say
+      ;; about a name with no binding anywhere.
+      ;;
+      ;; Binding the literal inside the copy needs no outer scope at all, and
+      ;; fold.ss then propagates it exactly as it would have propagated the
+      ;; argument.
+      (define (copy-body f args)
+        (let* ((p (hashtable-ref loops f #f))
+               (params (car p))
+               ;; Fresh names for the parameters, because two copies of one loop
+               ;; are two bindings and every pass after this assumes names are
+               ;; unique program-wide.
+               (fresh-ps (map (lambda (q)
+                                (set! counter (+ counter 1))
+                                (string->symbol
+                                 (string-append (symbol->string q) "."
+                                                (number->string counter))))
+                              params))
+               (b (freshen (cdr p) (map cons params fresh-ps)))
+               (vals (map (lambda (a) (car (hashtable-ref lits a '(#f)))) args)))
+          (with-output-language (Lanf Expr)
+            `(lambda ()
+               ,(let wrap ((ps fresh-ps) (vs vals))
+                  (if (null? ps)
+                      b
+                      (with-output-language (Lanf Expr)
+                        `(let ([,(car ps) (quote ,(car vs))])
+                           ,(wrap (cdr ps) (cdr vs))))))))))
+
+      ;; The name to call, making the copy if this is the first request for it.
+      (define (copy-for f x*)
+        (let ((k (key-of f x*)))
+          (or (hashtable-ref made k #f)
+              (let ((nm (copy-name f)))
+                (hashtable-set! made k nm)
+                (set! pending (cons (list nm f x*) pending))
+                (specialize-stats-specialized-set!
+                 stats (+ 1 (specialize-stats-specialized stats)))
+                (unless (memq f (specialize-stats-names stats))
+                  (specialize-stats-names-set!
+                   stats (cons f (specialize-stats-names stats))))
+                nm))))
 
       (define (Expr e)
         (with-output-language (Lanf Expr)
           (nanopass-case (Lanf Expr) e
             [(tailcall ,x ,x* ...)
              (if (eligible? x x*)
-                 (let ((p (hashtable-ref loops x #f)))
-                   (set! grown (+ grown (expr-size (cdr p))))
-                   (specialize-stats-specialized-set!
-                    stats (+ 1 (specialize-stats-specialized stats)))
-                   (unless (memq x (specialize-stats-names stats))
-                     (specialize-stats-names-set!
-                      stats (cons x (specialize-stats-names stats))))
-                   (freshen (cdr p) (map cons (car p) x*)))
+                 `(tailcall ,(copy-for x x*))
                  e)]
             [(if ,x ,e0 ,e1) `(if ,x ,(Expr e0) ,(Expr e1))]
             [(seq ,e0 ,e1) `(seq ,(Expr e0) ,(Expr e1))]
             [(let ([,x ,se]) ,body) `(let ([,x ,(SimpleExpr se)]) ,(Expr body))]
             [(lambda (,x* ...) ,body) `(lambda (,x* ...) ,(Expr body))]
+            ;; THE COPIES LAND HERE, in the letrec that binds what they are
+            ;; copies of -- which is the only place they are certainly in
+            ;; scope, and where a self call inside them still resolves.
             [(letrec ([,x* ,e*] ...) ,body)
-             (let ((e1* (map Expr e*))) `(letrec ([,x* ,e1*] ...) ,(Expr body)))]
+             (let* ((before pending)
+                    (_ (set! pending '()))
+                    (e1* (map Expr e*))
+                    (b1 (Expr body))
+                    (mine (filter (lambda (r) (memq (cadr r) x*)) pending))
+                    (theirs (filter (lambda (r) (not (memq (cadr r) x*))) pending)))
+               (set! pending (append theirs before))
+               (if (null? mine)
+                   `(letrec ([,x* ,e1*] ...) ,b1)
+                   (let ((nm* (map car mine))
+                         (bd* (map (lambda (r) (copy-body (cadr r) (caddr r))) mine)))
+                     `(letrec ([,(append x* nm*) ,(append e1* bd*)] ...) ,b1))))]
             [(declare ([,x* ,prem*] ...) ,body)
              `(declare ([,x* ,prem*] ...) ,(Expr body))]
             [(declare-distinct (,x* ...) ,body)
@@ -251,6 +350,10 @@
         (with-output-language (Lanf SimpleExpr)
           (nanopass-case (Lanf SimpleExpr) se
             [(lambda (,x* ...) ,body) `(lambda (,x* ...) ,(Expr body))]
+            ;; A NON-TAIL ENTRY, which is how nbody's pair nest is reached and
+            ;; what the splice-based version could not touch at all.
+            [(call ,x ,x* ...)
+             (if (eligible? x x*) `(call ,(copy-for x x*)) se)]
             [else se])))
 
       ;; D32: the pipeline hands a Program, and a pass matching only Expr falls
