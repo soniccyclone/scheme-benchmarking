@@ -1058,3 +1058,34 @@ THE RULE GOING FORWARD. Price in cycles or do not price. If only an instruction
 count is available, say so and say that the cycle effect is unknown -- on this
 part, for these programs, the honest prior is zero unless a branch is going
 away.
+
+## D46 -- control flow converts; work does not
+
+Three results from one session, on one machine, that only make sense together.
+
+    qaq.13   removed every surviving bounds check   -22.4% instr    0 cycles
+    qaq.24   folded a materialised compare constant   0    instr    0 cycles
+    D43      unrolled a loop, removing its back edge  -8.6% instr   -8.4% cycles
+
+The first two look like bad luck and the third like a lucky guess. They are one
+fact. This part issues wide enough to absorb arithmetic the program does not
+need -- fannkuch was running at IPC 3.22 and fell to 2.50 when a fifth of its
+instructions went, which is the machine reclaiming slots it had been filling
+with checks. What it cannot absorb is a branch it has to predict and a loop it
+has to close.
+
+So the useful question about any proposed optimisation here is not "how many
+instructions does this remove" but "does this remove control flow". Only the
+second predicts anything. gcc's advantage on both benchmarks is of the second
+kind: it deleted loops, and every index became a displacement because there was
+no longer an induction variable to compute.
+
+This subsumes D34 and D45 rather than repeating them. D34 observed that
+instruction count had stopped predicting cycles; D45 said stop pricing in
+instructions; D46 says what to price in instead.
+
+A caveat that keeps this honest: three points is three points. The claim is
+calibrated to this microarchitecture and these two programs, both of which are
+small-working-set integer or FP kernels with predictable branches. A program
+that misses cache or mispredicts would report a different exchange rate, and
+the first such benchmark added here should be expected to overturn this.
