@@ -1538,3 +1538,44 @@ collector lowered, not a bigger nursery.
 The constraint on going further is now stated in the source: the allocator
 guards compare against base-plus-size using a signed 32-bit immediate, so the
 heap has to stay under 2 GB until the encoder grows a 64-bit compare.
+
+
+## D53 -- lowering the collector is smaller than it sounds, and one line is why
+
+D52 says the collector is not lowered. Read rather than estimated, what is
+actually missing is narrower than that phrasing suggests, and the narrowest
+piece is the one nobody would guess.
+
+ALREADY PRESENT. `gc.ss` models the whole collector in Scheme -- two
+generations, bump allocation, Cheney scan, roots from stack maps -- and says in
+its header that a later bead lowers exactly these steps. `gcmeta.ss` is the
+stack-map format WITH an emitter and a decoder, wired into `object.ss`, so
+`assemble-function` already produces a function object carrying its metadata.
+`alloc.ss` has the allocation-check design including the reserved collection
+worst case. And since qaq.31 the allocator stubs compare against the heap limit
+and jump to a label.
+
+So the model exists, the metadata format exists and is tested, and the trigger
+point exists. Three of the four hard parts are done.
+
+WHAT IS MISSING, AND THE FIRST ONE IS ONE LINE. driver.ss builds the executable
+with
+
+    (build-executable 'x86-64 (function-object-code o) pool ...)
+
+-- the CODE of the function object, and nothing else. The metadata is computed,
+sits on the same object, and is dropped one accessor away from where the
+collector will need it. driver.ss does not mention metadata or gcmeta anywhere.
+
+The other two are real work: emit the collector's steps as code, and turn the
+allocator's `jmp sonic-heap-error` into a call and a retry, which is the
+restart-region design 6cm.2 already closed.
+
+WHY THIS ENTRY EXISTS RATHER THAN A BEAD ALONE. "The collector is not lowered"
+sounds like a subsystem is absent. It is not. A model, a metadata format, an
+emitter, a decoder, a check design and a trigger label are all present and
+tested, and the executable simply never carries the roots. That is worth
+recording because the phrasing in D52 would otherwise price the work an order
+of magnitude too high -- and because the same shape recurs: this session found
+the elision collapse to be one missing lattice case, the peel blocker to be one
+misordered step, and the segfault to be one absent comparison.
