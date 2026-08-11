@@ -1650,3 +1650,51 @@ import graph that the collector was unlowered (right, but unverified until a
 program segfaulted); I inferred from a size that the maps might be fine (wrong);
 and both times the deciding measurement was one command against the artefact
 rather than the source. Read the bytes, not the build.
+
+
+## D54 -- the stack half of D21 now has data in it
+
+D53 and its addenda tracked one claim through three corrections: the collector
+is not lowered; the maps are carried but might be blank; the maps ARE blank.
+This is the end of that thread.
+
+`assemble-function` had accepted an option all along --
+
+    (frame-bits . (<boolean> ...))   one per stack slot, set if it is tagged
+
+-- and driver.ss passed `constants` and `extra-labels` and not that. The format
+existed, the emitter existed, the decoder existed and object.ss tested all
+three. They carried nothing because nobody handed them anything.
+
+THE ONE REAL OBSTACLE was that `frame-bits` describes ONE frame while driver.ss
+assembles the entire program as a single listing, so every procedure in it has
+a different frame and a different spill set. The emitter's field is mutable, so
+the bits now arrive as (instruction-index . bits) in order and the emitter is
+re-pointed as emission crosses each boundary. Indices rather than labels because
+`resolve-labels` has already consumed the labels by then, and the caller knows
+the boundaries anyway -- it built the listing by appending one function's to the
+next.
+
+The bits themselves need nothing new computed. `finalized-spills` returns the
+spilled vregs IN SLOT ORDER, which is the order `build-frame` numbers them in,
+so a slot is tagged exactly when its vreg's class is.
+
+    probe, nine tagged values live       (0 0 0)  ->  (0 0 0 192 10 0 18 255 255 1)
+    fannkuch                             3 bytes  ->  35 bytes
+
+Eighteen slots and a bitmap with most of them set, which is what a function
+spilling eight pairs should say. 54 suites green, fannkuch bit-exact and
+unchanged at 1.191x -- the metadata is data after the constant pool and no
+address moves.
+
+WHAT THIS IS AND IS NOT. It is the roots half of D21, which was a design with
+one side unbuilt: the register side was always real, since the static partition
+means the collector scavenges the value class unconditionally and needs no
+bitmap, and the stack side was a format with zeros in it. It is NOT a collector.
+Nothing reclaims yet; qaq.32 still wants the scan emitted and the allocator's
+`jmp sonic-heap-error` turned into a call and a retry.
+
+The test asserts a nonzero byte, not merely a present blob. Asserting presence
+would have passed throughout the entire period the maps were blank -- which is
+the same failure the size comparison made two entries ago, in a different
+costume.

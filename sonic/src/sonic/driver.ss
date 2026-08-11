@@ -166,9 +166,30 @@
                                    (cons (pool-label (lit-offset l))
                                          (+ pad (lit-offset l))))
                                  (pool-entries (current-litpool))))
+                     ;; WHICH FRAME SLOTS HOLD TAGGED VALUES, per function.
+                     ;; `finalized-spills` is the spilled vregs IN SLOT ORDER --
+                     ;; the order build-frame assigns indices in -- so the
+                     ;; bitmap is a map over it against the class table. This is
+                     ;; the stack half of D21; without it the collector has no
+                     ;; roots and a Cheney scan collects the whole heap.
+                     (n-instrs (lambda (l) (length (filter (lambda (i) (not (symbol? i))) l))))
+                     (fb-at
+                      (let walk ((fs fns)
+                                 (i (n-instrs (runtime-listing 'x86-64 entry)))
+                                 (acc '()))
+                        (if (null? fs)
+                            (reverse acc)
+                            (walk (cdr fs)
+                                  (+ i (n-instrs (finalized-listing (car fs))))
+                                  (cons (cons i
+                                              (map (lambda (v)
+                                                     (eq? (hashtable-ref classes v #f) 'tagged))
+                                                   (finalized-spills (car fs))))
+                                        acc)))))
                      (o (assemble-function 'x86-64 'program listing
                                            (list (cons 'constants pool)
-                                                 (cons 'extra-labels extra))))
+                                                 (cons 'extra-labels extra)
+                                                 (cons 'frame-bits-at fb-at))))
                      (start (label-offset listing '_start))
                      ;; THE METADATA GOES IN. It was computed here and thrown
                      ;; away: `assemble-function` hangs the GC stack maps on

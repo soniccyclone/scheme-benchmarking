@@ -22,6 +22,7 @@
   (export make-emitter emitter? emitter-target
           emit! emit-bytes! current-state set-state!
           emitter-code emitter-entries emitter-offset
+          emitter-frame-bits emitter-frame-bits-set!
           finish-function
           make-function function? function-name function-code
           function-metadata function-frame-slots)

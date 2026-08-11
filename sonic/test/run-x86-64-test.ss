@@ -904,12 +904,21 @@
 ;; of D21, which is why this is asserted about the BINARY rather than about
 ;; object.ss -- the latter was always true and told nobody anything.
 ;;
-;; The blob is small on these programs and that is expected rather than
-;; suspicious: gcmeta drops an entry that says the same thing as the one before
-;; it, D21 scavenges the value REGISTERS unconditionally so they need no
-;; bitmap, and neither benchmark spills a tagged value to its frame. What is
-;; asserted is that whatever was computed is present and byte-identical, at the
-;; offset the layout says it should be.
+;; AND IT CARRIES ROOTS, which is the half that was missing for longer. The
+;; blob was three zero bytes on every program -- fannkuch, nbody, a loop that
+;; conses, a probe holding nine tagged values live across allocations -- because
+;; `assemble-function` accepts a `frame-bits` option that driver.ss never
+;; passed. The format, the emitter and the decoder had all been there and
+;; carried nothing.
+;;
+;; The bits are per FUNCTION and the program is assembled as one listing, so
+;; they arrive as (instruction-index . bits) and the emitter is re-pointed at
+;; each boundary. `finalized-spills` gives the spilled vregs in slot order --
+;; the order build-frame numbers them in -- so a slot is tagged exactly when
+;; its vreg's class is.
+;;
+;; A nonzero byte is what distinguishes a map from a placeholder. Asserting only
+;; that the blob is present would have passed for the whole time it was blank.
 (let* ((c (compile-sonic "../bench/fannkuch/config-sonic.sps" '(display newline)))
        (meta (compiled-metadata c))
        (img (compiled-image c))
@@ -918,7 +927,12 @@
        (back (make-bytevector (bytevector-length meta))))
   (bytevector-copy! img off back 0 (bytevector-length meta))
   (ck! "the GC stack maps are carried into the executable, byte for byte"
-       (and (> (bytevector-length meta) 0) (equal? back meta))))
+       (and (> (bytevector-length meta) 0) (equal? back meta)))
+  (ck! "and they carry roots rather than zeros"
+       (let loop ((i 0))
+         (cond ((= i (bytevector-length meta)) #f)
+               ((not (zero? (bytevector-u8-ref meta i))) #t)
+               (else (loop (+ i 1)))))))
 
 ;; RUNNING OUT OF HEAP IS A DIAGNOSIS, NOT A SEGMENTATION FAULT.
 ;;

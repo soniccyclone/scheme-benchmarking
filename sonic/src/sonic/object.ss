@@ -409,6 +409,19 @@
        (let* ((opt (lambda (k d) (let ((p (assq k opts))) (if p (cdr p) d))))
               (consts (opt 'constants '()))
               (frame-bits (opt 'frame-bits '()))
+              ;; PER-FUNCTION FRAME BITS, as (instruction-index . bits) in
+              ;; order. `frame-bits` alone describes ONE frame, and driver.ss
+              ;; assembles the whole program as a single listing, so every
+              ;; procedure in it has a different frame and a different spill
+              ;; set. The emitter's field is mutable precisely so it can be
+              ;; re-pointed as emission crosses from one function into the
+              ;; next; this option says where those crossings are.
+              ;;
+              ;; Indices rather than labels because `resolve-labels` hands back
+              ;; instructions with the labels already consumed, and the caller
+              ;; knows the boundaries anyway -- it built the listing by
+              ;; appending one function's listing to the next.
+              (frame-bits-at (opt 'frame-bits-at '()))
               (state-of (opt 'state-of (lambda (i n) #f)))
               ;; The ENCODER, supplied by the caller for the vector path.
               ;;
@@ -441,12 +454,16 @@
                                           (and (assq 'encoder opts)
                                                (lambda (i) (length (encode i)))))))
               (e (make-emitter (gcmeta-target-for target) frame-bits)))
-         (let loop ((is instrs) (n 0))
+         (let loop ((is instrs) (n 0) (fb frame-bits-at))
            (unless (null? is)
-             (let ((bytes (encode (car is)))
-                   (flags (state-of (car is) n)))
-               (if flags (emit! e bytes flags) (emit! e bytes)))
-             (loop (cdr is) (+ n 1))))
+             (let ((fb (if (and (pair? fb) (= n (car (car fb))))
+                           (begin (emitter-frame-bits-set! e (cdr (car fb)))
+                                  (cdr fb))
+                           fb)))
+               (let ((bytes (encode (car is)))
+                     (flags (state-of (car is) n)))
+                 (if flags (emit! e bytes flags) (emit! e bytes)))
+               (loop (cdr is) (+ n 1) fb))))
          (let* ((f (finish-function e name))
                 (code (function-code f))
                 (meta (function-metadata f))
