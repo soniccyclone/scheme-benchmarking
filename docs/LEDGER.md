@@ -1698,3 +1698,33 @@ The test asserts a nonzero byte, not merely a present blob. Asserting presence
 would have passed throughout the entire period the maps were blank -- which is
 the same failure the size comparison made two entries ago, in a different
 costume.
+
+### D54 addendum -- a nonzero byte was still the wrong assertion
+
+Decoding the blob rather than counting its bytes moves the claim again, and
+this time in a direction worth keeping.
+
+    fannkuch      8 entries, slot counts 0, 2, 0, 2, 0, 15 ... tagged 0 EVERYWHERE
+    the probe     18 slots, 17 tagged
+
+fannkuch's frame bits are all clear and that is CORRECT: it spills raw words and
+doubles and never a pair, so it has no roots in its frames. The nonzero bytes
+the previous test was satisfied by are offsets and slot counts, not roots. A
+test written against either benchmark would have passed throughout the period
+the maps were blank -- the third time in this thread that an assertion has been
+weaker than it looked.
+
+What fannkuch DOES demonstrate is the thing that was hardest to get right: its
+slot counts differ between entries, which is the evidence that the bits are
+re-pointed at each function boundary rather than set once for the listing. That
+is now what the test asserts about it.
+
+The root claim needs a program that spills a pair, and neither benchmark does,
+so `bench/probe-tagged-spills.sps` is committed as a fixture -- nine tagged
+values live across allocations against a four-register value class. It reports
+17 tagged slots of 18, seventeen rather than eight because fixnums are tagged
+too.
+
+The general lesson, stated because it has now cost three corrections in one
+thread: an assertion about a compiler artefact should fail on the artefact that
+was wrong. "Nonzero", "present", "three bytes" all passed on blank maps.

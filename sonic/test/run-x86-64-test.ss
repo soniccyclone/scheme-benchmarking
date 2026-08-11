@@ -18,7 +18,7 @@
         (sonic repr) (sonic lower) (sonic select) (sonic regs) (sonic regalloc)
         (sonic finalize) (sonic litpool) (sonic object) (sonic runtime)
         (sonic elfexec) (sonic globals) (sonic target-x86-64) (sonic driver) (sonic pipeline)
-        (sonic specialize))
+        (sonic specialize) (sonic gcmeta))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -932,7 +932,36 @@
        (let loop ((i 0))
          (cond ((= i (bytevector-length meta)) #f)
                ((not (zero? (bytevector-u8-ref meta i))) #t)
-               (else (loop (+ i 1)))))))
+               (else (loop (+ i 1))))))
+  ;; AND THEY DECODE, WITH THE FRAME DESCRIPTION CHANGING PER FUNCTION. fannkuch
+  ;; gives eight entries whose slot counts run 0, 2, 0, 2, 0, 15 -- which is the
+  ;; evidence that the bits are re-pointed at each boundary rather than set once
+  ;; for the whole listing. Its tagged counts are all ZERO and that is correct:
+  ;; it spills raw words and doubles, never a pair.
+  (let ((es (decode-metadata target-x86-64 meta)))
+    (ck! "the maps decode, and the frame description changes between functions"
+         (and (pair? es)
+              (let loop ((ns (map (lambda (e) (length (entry-frame-bits e))) es))
+                         (seen '()))
+                (cond ((null? ns) (> (length seen) 1))
+                      ((memv (car ns) seen) (loop (cdr ns) seen))
+                      (else (loop (cdr ns) (cons (car ns) seen)))))))
+    (ck! "and a lookup by code offset lands at or before it"
+         (let ((e (metadata-lookup es 2879)))
+           (and e (<= (entry-offset e) 2879))))))
+
+;; AND A PROGRAM THAT ACTUALLY SPILLS A ROOT SAYS SO.
+;;
+;; Neither benchmark does -- see above -- so a test written against either would
+;; have passed for the whole period the maps were blank. This fixture holds nine
+;; tagged values live across allocations against a four-register value class, so
+;; some must land in the frame, and a frame slot holding a pair is exactly what
+;; the collector will have to find.
+(let* ((c (compile-sonic "../bench/probe-tagged-spills.sps" '(display newline)))
+       (es (decode-metadata target-x86-64 (compiled-metadata c)))
+       (tagged (filter (lambda (e) (exists (lambda (b) b) (entry-frame-bits e))) es)))
+  (ck! "a frame slot holding a pair is reported as a root"
+       (pair? tagged)))
 
 ;; RUNNING OUT OF HEAP IS A DIAGNOSIS, NOT A SEGMENTATION FAULT.
 ;;
