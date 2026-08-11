@@ -97,6 +97,13 @@
   (define exit-type-error     101)
   (define exit-bounds-error   102)
   (define exit-overflow-error 103)
+  ;; OUT OF HEAP. Distinct from the other three because it is not the program's
+  ;; fault: the program is correct and the runtime cannot serve it. See D52 --
+  ;; the collector is written but not lowered, so the heap is a 1 MB bump
+  ;; region and nothing reclaims. Before this exit existed, exhausting it wrote
+  ;; past the mapping and the process took SIGSEGV, which reads as a compiler
+  ;; bug rather than as a limit being reached.
+  (define exit-heap-error     104)
   (define exit-unimplemented  104)
   ;; `(error ...)` reached at run time. Distinct from `unimplemented`, which
   ;; means this compiler has not written the routine yet: this one means the
@@ -179,6 +186,18 @@
       ;; aimed at element zero and carrying the heap tag.
       %make-flvector
       (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN. The header goes to
+      ;; [rax] and [rax+8], so a base within 16 bytes of the limit would fault
+      ;; on the write itself and never reach the end check below.
+      ;;
+      ;; `jg` AND NOT `ja`, which is the unsigned form an address comparison
+      ;; would normally want. The encoder has only the signed conditionals, and
+      ;; that is sound here rather than a compromise: the heap sits at 6.3 MB
+      ;; and ends at 7.3 MB, so every value compared is a small positive number
+      ;; and the two orderings agree. A heap placed above 2^63 would need the
+      ;; unsigned form and the encoder would have to grow it.
+      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (jg (label sonic-heap-error))
       (mov rdx (imm ,heap-type-flvector))
       (mov (mem rax #f 1 0) rdx)                 ; [raw+0] = type
       (mov (mem rax #f 1 8) rcx)                 ; [raw+8] = length, a raw count
@@ -187,6 +206,11 @@
       (shl rsi (imm 3))
       (add rsi (imm ,heap-header-bytes))
       (add rsi rax)
+      ;; AND ON THE END, before the payload is written. A single large
+      ;; allocation can clear the base check and still run off the end.
+      (cmp rsi (imm ,(+ heap-base-address heap-size)))
+      (jg (label sonic-heap-error))
+
       (mov ,(abs-mem heap-pointer-cell) rsi)
       ;; fill the elements
       (lea rdi (mem rax #f 1 ,heap-header-bytes))
@@ -231,6 +255,11 @@
       ;; %make-vector` -- loudly, and at link time, which is the right place.
       %make-vector
       (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN. The header goes to
+      ;; [rax] and [rax+8], so a base within 16 bytes of the limit would fault
+      ;; on the write itself and never reach the end check below.
+      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (jg (label sonic-heap-error))
       ;; THE TYPE GOES THROUGH rdi, NOT rdx. rdx holds the FILL for the whole
       ;; routine, and %make-flvector's shape -- which this one is copied from --
       ;; stages the type word through rdx because its fill is in xmm0 and rdx is
@@ -246,6 +275,11 @@
       (shl rsi (imm 3))
       (add rsi (imm ,heap-header-bytes))
       (add rsi rax)
+      ;; AND ON THE END, before the payload is written. A single large
+      ;; allocation can clear the base check and still run off the end.
+      (cmp rsi (imm ,(+ heap-base-address heap-size)))
+      (jg (label sonic-heap-error))
+
       (mov ,(abs-mem heap-pointer-cell) rsi)
       ;; fill the elements
       (lea rdi (mem rax #f 1 ,heap-header-bytes))
@@ -282,6 +316,11 @@
       (jmp (label %c2s-len))
       %c2s-alloc
       (mov rax ,(abs-mem heap-pointer-cell))
+      ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN. The header goes to
+      ;; [rax] and [rax+8], so a base within 16 bytes of the limit would fault
+      ;; on the write itself and never reach the end check below.
+      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (jg (label sonic-heap-error))
       (mov rdi (imm ,heap-type-string))
       (mov (mem rax #f 1 0) rdi)                 ; [raw+0] = type
       (mov (mem rax #f 1 8) rcx)                 ; [raw+8] = byte count
@@ -300,6 +339,11 @@
       (shl rdi (imm 3))
       (add rdi (imm ,heap-header-bytes))
       (add rdi rax)
+      ;; AND ON THE END, before the payload is written. A single large
+      ;; allocation can clear the base check and still run off the end.
+      (cmp rdi (imm ,(+ heap-base-address heap-size)))
+      (jg (label sonic-heap-error))
+
       (mov ,(abs-mem heap-pointer-cell) rdi)
       (add rax (imm ,(+ heap-header-bytes heap-tag)))
       (ret)
@@ -329,6 +373,11 @@
       ;; a pair's two fields are exactly what it must follow.
       %cons
       (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN. The header goes to
+      ;; [rax] and [rax+8], so a base within 16 bytes of the limit would fault
+      ;; on the write itself and never reach the end check below.
+      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (jg (label sonic-heap-error))
       (mov rsi (imm ,heap-type-pair))
       (mov (mem rax #f 1 0) rsi)                 ; [raw+0] = type
       (mov rsi (imm 2))
@@ -336,6 +385,11 @@
       (mov (mem rax #f 1 ,heap-header-bytes) r8)         ; car, first tagged arg
       (mov (mem rax #f 1 ,(+ heap-header-bytes 8)) r9)   ; cdr, second
       (lea rsi (mem rax #f 1 ,(+ heap-header-bytes 16)))
+      ;; AND ON THE END, before the payload is written. A single large
+      ;; allocation can clear the base check and still run off the end.
+      (cmp rsi (imm ,(+ heap-base-address heap-size)))
+      (jg (label sonic-heap-error))
+
       (mov ,(abs-mem heap-pointer-cell) rsi)
       (add rax (imm ,(+ heap-header-bytes heap-tag)))
       (ret)
@@ -477,6 +531,11 @@
       ;; be a real object like every other field the collector scans.
       %make-vector-tagged
       (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN. The header goes to
+      ;; [rax] and [rax+8], so a base within 16 bytes of the limit would fault
+      ;; on the write itself and never reach the end check below.
+      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (jg (label sonic-heap-error))
       (mov rdi (imm ,heap-type-vector))
       (mov (mem rax #f 1 0) rdi)                 ; [raw+0] = type
       (mov (mem rax #f 1 8) rcx)                 ; [raw+8] = length, a raw count
@@ -484,6 +543,11 @@
       (shl rsi (imm 3))
       (add rsi (imm ,heap-header-bytes))
       (add rsi rax)
+      ;; AND ON THE END, before the payload is written. A single large
+      ;; allocation can clear the base check and still run off the end.
+      (cmp rsi (imm ,(+ heap-base-address heap-size)))
+      (jg (label sonic-heap-error))
+
       (mov ,(abs-mem heap-pointer-cell) rsi)
       (lea rdi (mem rax #f 1 ,heap-header-bytes))
       (mov rsi (imm 0))
@@ -576,6 +640,11 @@
 
       %box-flonum
       (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN. The header goes to
+      ;; [rax] and [rax+8], so a base within 16 bytes of the limit would fault
+      ;; on the write itself and never reach the end check below.
+      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (jg (label sonic-heap-error))
       (mov rdx (imm ,heap-type-flonum))
       (mov (mem rax #f 1 0) rdx)                 ; [raw+0] = type
       (mov rdx (imm 1))
@@ -583,6 +652,11 @@
       (movsd (mem rax #f 1 ,heap-header-bytes) xmm0)
       (mov rsi rax)
       (add rsi (imm ,(+ heap-header-bytes 8)))
+      ;; AND ON THE END, before the payload is written. A single large
+      ;; allocation can clear the base check and still run off the end.
+      (cmp rsi (imm ,(+ heap-base-address heap-size)))
+      (jg (label sonic-heap-error))
+
       (mov ,(abs-mem heap-pointer-cell) rsi)
       (add rax (imm ,(+ heap-header-bytes heap-tag)))
       (ret)
@@ -710,6 +784,10 @@
       (syscall)
       sonic-div-error
       (mov rdi (imm ,exit-overflow-error))
+      (mov rax (imm ,sys-exit))
+      (syscall)
+      sonic-heap-error
+      (mov rdi (imm ,exit-heap-error))
       (mov rax (imm ,sys-exit))
       (syscall)))
 

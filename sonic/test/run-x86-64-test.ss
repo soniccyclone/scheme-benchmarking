@@ -896,6 +896,44 @@
   (ck! "a bounds check still traps on a tagged index that is out of range"
        (= 102 code)))
 
+;; RUNNING OUT OF HEAP IS A DIAGNOSIS, NOT A SEGMENTATION FAULT.
+;;
+;; The collector is written but not lowered (D52), so the heap is a one-megabyte
+;; bump region and nothing reclaims. That is a limitation. What it must not be
+;; is a crash: before the guards in runtime.ss, a program allocating past the
+;; end wrote into unmapped memory and took SIGSEGV, which reads to anyone
+;; running it as a compiler bug rather than as a limit being reached.
+;;
+;; Measured at the time: 30,000 pairs completed and 60,000 segfaulted.
+;;
+;; 104 is the heap trap, alongside 101 type, 102 bounds, 103 overflow.
+(let-values (((code out)
+              (compile-and-run
+               (string-append "(define (burn i acc)\n"
+                              "  (if (fx< i 3000000)\n"
+                              "      (burn (fx+ i 1) (cons i (quote ())))\n"
+                              "      acc))\n"
+                              "(define r (burn 0 (quote ())))\n"
+                              "(display (fx->fl (car r))) (newline)\n")
+               '(display newline))))
+  (ck! "exhausting the heap exits 104 rather than taking a segmentation fault"
+       (= 104 code)))
+
+;; AND THE HEADROOM BELOW IT STILL WORKS, which is the half of this that a
+;; guard can easily break: a check placed one object too early would turn every
+;; allocating program into a heap error.
+(let-values (((code out)
+              (compile-and-run
+               (string-append "(define (burn i acc)\n"
+                              "  (if (fx< i 30000)\n"
+                              "      (burn (fx+ i 1) (cons i (quote ())))\n"
+                              "      acc))\n"
+                              "(define r (burn 0 (quote ())))\n"
+                              "(display (fx->fl (car r))) (newline)\n")
+               '(display newline))))
+  (ck! "and a program that fits in the heap still runs"
+       (and (zero? code) (equal? out '(29999.0)))))
+
 ;; TWO GROUPS OF ADJACENT STORES IN ONE BLOCK.
 ;;
 ;; slp.ss seeds a pack from adjacent stores and used to find its partners by
