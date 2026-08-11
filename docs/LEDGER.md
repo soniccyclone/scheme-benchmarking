@@ -1808,3 +1808,41 @@ come from checking the artefact against something INDEPENDENT of how it was
 built. Nonzero bytes, present blobs, matching sizes and a passing fixture all
 agreed with the bug. The slot count came from finalize and the map came from
 the driver, and only comparing the two settled it.
+
+
+## D57 -- the standing drifted 1% with the code byte-identical
+
+Re-measured fannkuch at the end of a long session, nine samples per binary:
+
+    gcc      min 8.239G   median 8.251G   max 8.276G
+    sonic    min 9.945G   median 9.964G   max 9.977G     1.207x
+
+Earlier the same day, with the same peel and the same everything that matters,
+it measured 9.835G, 9.846G and 9.877G -- around 1.191x to 1.198x. The
+instruction count across all of those readings is IDENTICAL to the digit
+(27,615,516,6xx, the tens varying with process startup), so no code change
+explains the difference.
+
+WHAT CHANGED IS THE MACHINE, not the compiler. A single seven-sample run during
+this check produced a max of 11.076G against a min of 9.936G -- an 11.5% spread
+from one outlier -- while a nine-sample run minutes later held inside 0.3%. The
+box is shared with the container doing the compiling, and a long session of it
+leaves the part in a different state than a fresh one.
+
+CONSEQUENCES, and they are practical rather than philosophical:
+
+  - A 1% result measured hours apart from its baseline is not a result. Both
+    arms have to be measured in the same run, on the same binaries, close
+    together. `harness/measure-fannkuch.sh` does that and it is why its numbers
+    have been the reliable ones all session.
+  - A five-sample spread can miss an outlier entirely and report ±0.5% while
+    the true range is 11%. Report the MIN alongside the median: it is the least
+    contaminated estimator, and a min that moves is a real change while a
+    median that moves might be the neighbours.
+  - The standing figures in this ledger carry roughly a point of uncertainty
+    against each other. 1.318x -> 1.198x from the peel is far outside that and
+    stands; the difference between 1.191x and 1.207x is not a difference.
+
+Recorded because several entries here turn on differences of a few percent, and
+because the honest version of the current standing is "fannkuch is a little
+over 1.2x" rather than any particular three-digit number.
