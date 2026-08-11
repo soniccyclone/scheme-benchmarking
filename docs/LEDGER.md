@@ -1579,3 +1579,35 @@ recording because the phrasing in D52 would otherwise price the work an order
 of magnitude too high -- and because the same shape recurs: this session found
 the elision collapse to be one missing lattice case, the peel blocker to be one
 misordered step, and the segfault to be one absent comparison.
+
+
+### D53 addendum -- the maps are carried now, and one claim in D53 is unverified
+
+The one-line piece is done: `build-executable` takes the metadata and places it
+after the constant pool in the R+X segment, driver.ss passes
+`(function-object-metadata o)` instead of dropping it, and a test reads it back
+out of a compiled binary at the offset the layout gives and compares byte for
+byte. The image grew by exactly the blob: 7,856 to 7,859. Nothing moved,
+because the code is first and the pool is aligned after it.
+
+WHAT I CANNOT YET SHOW, and D53 asserted more confidently than the evidence
+supports. The blob is THREE BYTES on every program tried -- fannkuch, nbody, a
+loop that conses, and a probe written to hold several tagged values live across
+an allocation. Three bytes is a header and one entry.
+
+There are two readings and this session could not separate them:
+
+  - It is correct and expected. `gcmeta` drops an entry that says the same
+    thing as its predecessor, D21 scavenges the value REGISTERS unconditionally
+    so they need no bitmap at all, and none of these programs spills a TAGGED
+    value to its frame. Under this reading the maps are right and small.
+  - The frame bits are never populated, and the entries collapse because they
+    are all empty rather than because they all agree.
+
+The probe that would separate them needs more than four simultaneously live
+tagged values, since that is how many value registers there are, and the one I
+wrote fit in them. Writing that probe is the next step and it is small.
+
+Until then, "the metadata format exists and is tested" is true of `object.ss`
+and unproven of what codegen actually records. The carrying is done and is
+worth having either way; the roots half of D21 is not established.

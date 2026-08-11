@@ -34,7 +34,7 @@
           ;; checks the compiled program does not contain.
           elide-to-fixpoint unroll-fully-rounds
           compiled? compiled-image compiled-code compiled-pool
-          compiled-entry compiled-listing compiled-functions
+          compiled-entry compiled-listing compiled-functions compiled-metadata
           compiled-globals compiled-lift-report)
   (import (chezscheme) (nanopass)
           (sonic lang) (sonic read) (sonic expand) (sonic parse) (sonic policy)
@@ -48,7 +48,7 @@
           (sonic target-x86-64))
 
   (define-record-type (compiled make-compiled compiled?)
-    (fields image code pool entry listing functions globals lift-report))
+    (fields image code pool entry listing functions globals lift-report metadata))
 
   (define (compile-sonic path externs)
     (let* (;; UNROLL AFTER INLINING, BEFORE SSA. After inlining, because a loop
@@ -170,12 +170,17 @@
                                            (list (cons 'constants pool)
                                                  (cons 'extra-labels extra))))
                      (start (label-offset listing '_start))
+                     ;; THE METADATA GOES IN. It was computed here and thrown
+                     ;; away: `assemble-function` hangs the GC stack maps on
+                     ;; the function object and this call took only the code.
+                     ;; Nothing else was missing for the roots half of D21.
+                     (meta (function-object-metadata o))
                      (img (build-executable 'x86-64 (function-object-code o) pool
                                             (+ elf-text-vaddr start)
-                                            #x600000 runtime-data-size)))
+                                            #x600000 runtime-data-size meta)))
                 (make-compiled img (function-object-code o) pool
                                (+ elf-text-vaddr start) listing fns
-                               gnames lrep)))))))))
+                               gnames lrep meta)))))))))
 
   ;; Run the elision analysis until the parameter intervals stop improving.
   ;;

@@ -14,7 +14,7 @@
 ;;; the kernel. That is why the image is a few kilobytes rather than a megabyte.
 
 (library (sonic elfexec)
-  (export build-executable write-executable pool-offset-for
+  (export metadata-offset-for build-executable write-executable pool-offset-for
           elf-load-base elf-text-vaddr elf-page-size)
   (import (chezscheme))
 
@@ -57,7 +57,32 @@
   ;; entry   : absolute virtual address of _start
   ;; data-va : virtual address of the writable segment
   ;; data-sz : its size in memory (filesz is 0; it is .bss)
-  (define (build-executable target code pool entry data-va data-sz)
+  ;; `meta` is the GC stack-map blob. It rides in the R+X segment after the
+  ;; constant pool, which is the only place it can go without a section table:
+  ;; this writer emits two program headers and nothing else, so there is no
+  ;; .rodata to put it in and no symbol to find it by.
+  ;;
+  ;; IT WAS BEING DROPPED. driver.ss built the image from
+  ;; `(function-object-code o)` alone, while `assemble-function` had already
+  ;; computed the metadata and hung it on the same object. Nothing else was
+  ;; missing for the roots half of D21 -- see LEDGER D53.
+  ;;
+  ;; Appending it cannot move anything: the code is first, the pool is aligned
+  ;; after the code, and the metadata goes after the pool, so every address the
+  ;; assembler resolved stays put.
+  (define build-executable
+    (case-lambda
+      [(target code pool entry data-va data-sz)
+       (build-executable target code pool entry data-va data-sz (make-bytevector 0))]
+      [(target code pool entry data-va data-sz meta)
+       (build-executable/meta target code pool entry data-va data-sz meta)]))
+
+  ;; Where the metadata sits in the file, given the code and pool sizes. Exposed
+  ;; so a reader can find it without re-deriving the layout.
+  (define (metadata-offset-for code-size pool-size)
+    (+ text-file-offset (pool-offset-for code-size) pool-size))
+
+  (define (build-executable/meta target code pool entry data-va data-sz meta)
     (unless (eq? target 'x86-64)
       (error 'build-executable
              "only x86-64 is emitted as a runnable image; RV64 output is
@@ -66,7 +91,8 @@
     (let* ((code-size (bytevector-length code))
            (pool-size (bytevector-length pool))
            (pool-at (pool-offset-for code-size))
-           (text-size (+ pool-at pool-size))
+           (meta-size (bytevector-length meta))
+           (text-size (+ pool-at pool-size meta-size))
            (phdrs
             (append
              ;; PT_LOAD, R+X: the headers, the code, and the constants. The
@@ -107,6 +133,7 @@
       ;; The gap between the code and the pool stays zero, which is what
       ;; `make-bytevector` already gave us.
       (bytevector-copy! pool 0 bv (+ text-file-offset pool-at) pool-size)
+      (bytevector-copy! meta 0 bv (+ text-file-offset pool-at pool-size) meta-size)
       bv))
 
   (define (write-executable path bv)

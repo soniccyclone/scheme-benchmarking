@@ -896,6 +896,30 @@
   (ck! "a bounds check still traps on a tagged index that is out of range"
        (= 102 code)))
 
+;; THE GC STACK MAPS REACH THE EXECUTABLE.
+;;
+;; They were computed and thrown away: `assemble-function` hangs the metadata on
+;; the function object and driver.ss built the image from
+;; `(function-object-code o)` alone. Nothing else was missing for the roots half
+;; of D21, which is why this is asserted about the BINARY rather than about
+;; object.ss -- the latter was always true and told nobody anything.
+;;
+;; The blob is small on these programs and that is expected rather than
+;; suspicious: gcmeta drops an entry that says the same thing as the one before
+;; it, D21 scavenges the value REGISTERS unconditionally so they need no
+;; bitmap, and neither benchmark spills a tagged value to its frame. What is
+;; asserted is that whatever was computed is present and byte-identical, at the
+;; offset the layout says it should be.
+(let* ((c (compile-sonic "../bench/fannkuch/config-sonic.sps" '(display newline)))
+       (meta (compiled-metadata c))
+       (img (compiled-image c))
+       (off (metadata-offset-for (bytevector-length (compiled-code c))
+                                 (bytevector-length (compiled-pool c))))
+       (back (make-bytevector (bytevector-length meta))))
+  (bytevector-copy! img off back 0 (bytevector-length meta))
+  (ck! "the GC stack maps are carried into the executable, byte for byte"
+       (and (> (bytevector-length meta) 0) (equal? back meta))))
+
 ;; RUNNING OUT OF HEAP IS A DIAGNOSIS, NOT A SEGMENTATION FAULT.
 ;;
 ;; The collector is written but not lowered (D52), so the heap is a one-megabyte
