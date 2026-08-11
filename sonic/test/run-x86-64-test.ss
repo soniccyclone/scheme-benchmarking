@@ -950,6 +950,32 @@
          (let ((e (metadata-lookup es 2879)))
            (and e (<= (entry-offset e) 2879))))))
 
+;; EVERY RECORDED OFFSET IS AN INSTRUCTION START, AND THE MAPS COVER FROM ZERO.
+;;
+;; Two more agreements the collector's walk will rest on, checked against the
+;; code layout rather than against the emitter that produced the offsets --
+;; asking the emitter would only confirm it agrees with itself.
+;;
+;; An offset landing mid-instruction would make a lookup by return address
+;; describe the wrong frame; a first entry after zero would make a lookup in the
+;; runtime stubs fall off the front and find nothing. Both are silent failures
+;; and neither is visible in a decoded blob that otherwise looks well formed.
+(let* ((c (compile-sonic "../bench/fannkuch/config-sonic.sps" '(display newline)))
+       (es (decode-metadata target-x86-64 (compiled-metadata c)))
+       ;; instruction starts, walked independently from the listing
+       (starts (let loop ((xs (compiled-listing c)) (pc 0) (acc '()))
+                 (cond ((null? xs) acc)
+                       ((symbol? (car xs)) (loop (cdr xs) pc acc))
+                       (else (loop (cdr xs)
+                                   (+ pc (instruction-size 'x86-64 (car xs)))
+                                   (cons pc acc))))))
+       (tbl (make-eqv-hashtable)))
+  (for-each (lambda (p) (hashtable-set! tbl p #t)) starts)
+  (ck! "every stack-map offset lands on an instruction start"
+       (for-all (lambda (e) (hashtable-ref tbl (entry-offset e) #f)) es))
+  (ck! "and the maps cover from offset zero, so a lookup never falls off the front"
+       (and (pair? es) (= 0 (entry-offset (car es))) (metadata-lookup es 0) #t)))
+
 ;; EVERY PROLOGUE SUBTRACTS EXACTLY WHAT THE FRAME LAYOUT SAYS.
 ;;
 ;; Pinned before the collector exists rather than after. A stack walk steps from
