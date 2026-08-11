@@ -1611,3 +1611,42 @@ wrote fit in them. Writing that probe is the next step and it is small.
 Until then, "the metadata format exists and is tested" is true of `object.ss`
 and unproven of what codegen actually records. The carrying is done and is
 worth having either way; the roots half of D21 is not established.
+
+
+### D53 second addendum -- the maps are empty, and D53 was wrong about it
+
+The previous addendum said the blob is three bytes on every program and offered
+two readings: correct-and-small, or never-populated. Comparing SIZES could not
+separate them, because a single entry with nonzero frame bits is also three
+bytes. Comparing CONTENT settles it immediately.
+
+    nine live tagged values across allocations   (0 0 0)
+    a loop that conses                           (0 0 0)
+    fannkuch                                     (0 0 0)
+    nbody                                        (0 0 0)
+
+Three zero bytes, everywhere. The emitter runs, `emit!` makes an entry per
+instruction, and every entry carries flags of zero and frame bits of zero, so
+gcmeta collapses them all into one empty record. The maps are not small; they
+are blank.
+
+SO D53 WAS WRONG WHERE IT MATTERED. It said the metadata format "exists and is
+tested" and that only the carrying was missing. The FORMAT exists, the emitter
+exists, the decoder exists and object.ss tests them -- and nothing in codegen
+ever records a live tagged frame slot, so what they emit and decode is nothing.
+Lowering the collector needs the roots to be computed, not merely delivered.
+
+WHAT THAT ADDS TO qaq.32. Between "the model exists" and "a collection can run"
+there is now a fourth item, and it is the one with real content: at every
+safepoint, codegen has to state which frame slots hold tagged values. That is
+liveness crossed with storage class at spill sites, which regalloc and finalize
+know and currently never report. D21's argument -- PC-total metadata for the
+stack, a static partition for the registers, therefore no shadow stack -- is a
+design that is half built: the register half is real, and the stack half is a
+format with no data in it.
+
+THE METHOD NOTE, because it is the third time this session. I inferred from an
+import graph that the collector was unlowered (right, but unverified until a
+program segfaulted); I inferred from a size that the maps might be fine (wrong);
+and both times the deciding measurement was one command against the artefact
+rather than the source. Read the bytes, not the build.
