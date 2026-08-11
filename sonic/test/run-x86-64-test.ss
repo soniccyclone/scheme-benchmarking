@@ -950,6 +950,40 @@
          (let ((e (metadata-lookup es 2879)))
            (and e (<= (entry-offset e) 2879))))))
 
+;; EVERY PROLOGUE SUBTRACTS EXACTLY WHAT THE FRAME LAYOUT SAYS.
+;;
+;; Pinned before the collector exists rather than after. A stack walk steps from
+;; one frame to the next by the size the metadata implies, so if a prologue and
+;; its layout ever disagree the walk reads the wrong words for every frame below
+;; the offender -- and it would do so silently, exactly like the shared-slot bug
+;; two entries up, which also came from two structures that were supposed to
+;; agree and did not.
+;;
+;; Checked across every function of both benchmarks and the tagged fixture: 36
+;; functions, no mismatches. Cheap to keep, and it fails loudly the day someone
+;; changes how a frame is sized without changing how it is described.
+(let* ((progs (list (cons "../bench/fannkuch/config-sonic.sps" '(display newline))
+                    (cons "../bench/probe-tagged-spills.sps" '(display newline))))
+       (bad
+        (fold-left
+         (lambda (acc pr)
+           (let ((c (compile-sonic (car pr) (cdr pr))))
+             (fold-left
+              (lambda (acc f)
+                (let ((want (frame-layout-bytes (finalized-frame f)))
+                      (got (let scan ((is (finalized-listing f)))
+                             (cond ((null? is) 0)
+                                   ((and (pair? (car is)) (eq? (car (car is)) 'sub)
+                                         (eq? (cadr (car is)) 'rsp)
+                                         (pair? (caddr (car is)))
+                                         (eq? (car (caddr (car is))) 'imm))
+                                    (cadr (caddr (car is))))
+                                   (else (scan (cdr is)))))))
+                  (if (equal? want got) acc (+ acc 1))))
+              acc (compiled-functions c))))
+         0 progs)))
+  (ck! "every prologue subtracts exactly what its frame layout says" (= 0 bad)))
+
 ;; AND NO MAP DESCRIBES MORE SLOTS THAN THE FRAME HAS.
 ;;
 ;; The bits are per frame SLOT, and `build-frame` shares a slot between a vreg
