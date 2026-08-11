@@ -904,13 +904,17 @@
 ;; end wrote into unmapped memory and took SIGSEGV, which reads to anyone
 ;; running it as a compiler bug rather than as a limit being reached.
 ;;
-;; Measured at the time: 30,000 pairs completed and 60,000 segfaulted.
+;; Measured at the time: 30,000 pairs completed and 60,000 segfaulted, on a
+;; heap that was then 1 MB. The heap is 256 MB now -- it is .bss, so the size
+;; costs nothing on disk -- which is why this asks for fifty million pairs.
+;; Eight hundred megabytes of them against a two hundred and fifty six megabyte
+;; heap; the loop trips the guard about a third of the way in.
 ;;
 ;; 104 is the heap trap, alongside 101 type, 102 bounds, 103 overflow.
 (let-values (((code out)
               (compile-and-run
                (string-append "(define (burn i acc)\n"
-                              "  (if (fx< i 3000000)\n"
+                              "  (if (fx< i 50000000)\n"
                               "      (burn (fx+ i 1) (cons i (quote ())))\n"
                               "      acc))\n"
                               "(define r (burn 0 (quote ())))\n"

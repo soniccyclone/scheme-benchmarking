@@ -72,7 +72,24 @@
   (define globals-base      (+ data-base 64))
   (define globals-span      1024)                   ; 128 cells
   (define heap-base-address (+ globals-base globals-span))
-  (define heap-size      (* 1 1024 1024))
+  ;; 256 MB, AND IT COSTS NOTHING ON DISK. The heap is its own PT_LOAD with
+  ;; filesz 0 and a nonzero memsz -- .bss -- so the kernel zeroes it lazily and
+  ;; only the pages a program actually touches become resident. The emitted
+  ;; binary is the same size at 256 MB as at 1 MB.
+  ;;
+  ;; It was 1 MB, which was not a decision so much as a number nobody had
+  ;; needed to revisit: with nothing reclaiming, that is about 65,000 pairs,
+  ;; and a program consing in a loop hit the end almost immediately. Raising it
+  ;; does not fix that -- see D52, the collector is written but not lowered --
+  ;; but it moves the wall from "any program that allocates" to "a program that
+  ;; allocates more than a real machine would hold", which is a different class
+  ;; of complaint.
+  ;;
+  ;; The guards in the allocator stubs compare against base plus this, and the
+  ;; sum has to stay inside a signed 32-bit immediate because those comparisons
+  ;; use one. 6.3 MB + 256 MB is comfortably inside it; a gigabyte would not be,
+  ;; and would need the encoder to grow a 64-bit compare.
+  (define heap-size      (* 256 1024 1024))
   (define runtime-data-size (+ 64 globals-span heap-size))
 
   ;; cell name -> absolute address, in the order the program declares them.

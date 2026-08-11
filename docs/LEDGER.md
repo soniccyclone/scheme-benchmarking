@@ -1506,3 +1506,35 @@ make nursery exhaustion fail loudly. A program out of heap should say so and
 exit non-zero, the way a failed bounds check does. That converts a segfault
 into a diagnosis, which is the difference between "the compiler is broken" and
 "this program needs more heap than this runtime has".
+
+
+### D52 second addendum -- the 1 MB heap was a number, not a decision
+
+Two changes followed from the segfault, and the second is nearly free.
+
+The guards (qaq.31) turn exhaustion into exit 104 rather than SIGSEGV. That is
+the honest minimum: the runtime says it is out of heap instead of the process
+dying in a way that reads as a compiler bug.
+
+Then the heap went from 1 MB to 256 MB, and the interesting part is that this
+costs NOTHING. The heap is its own PT_LOAD with filesz 0 and a nonzero memsz --
+it is .bss -- so the kernel zeroes it lazily and only touched pages become
+resident. The emitted binary is 5,824 bytes at either size, byte for byte.
+
+    before   1 MB     ~65,000 pairs      a loop consing anything hit the wall
+    after    256 MB   ~16.7M pairs       3,000,000 pairs now completes correctly
+
+1 MB was not a judgement anyone made against a cost; it was a number nobody had
+had reason to revisit, in a runtime whose header says plainly "the allocator is
+a bump pointer and nothing reclaims". The cost it was implicitly trading against
+does not exist.
+
+WHAT THIS DOES NOT CHANGE. Nothing reclaims, so a program whose live set is
+bounded but whose allocation is not still fails -- just later, and with a
+diagnosis. binary-trees at the sizes the Benchmarks Game uses allocates far past
+256 MB, so qaq.30's conclusion stands: the allocation-heavy benchmarks need the
+collector lowered, not a bigger nursery.
+
+The constraint on going further is now stated in the source: the allocator
+guards compare against base-plus-size using a signed 32-bit immediate, so the
+heap has to stay under 2 GB until the encoder grows a 64-bit compare.
