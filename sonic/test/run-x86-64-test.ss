@@ -950,6 +950,39 @@
          (let ((e (metadata-lookup es 2879)))
            (and e (<= (entry-offset e) 2879))))))
 
+;; AND _start LEAVES THE MAPS' ADDRESS WHERE THE COLLECTOR WILL LOOK.
+;;
+;; The blob's address is a link-time fact -- it sits after the constant pool,
+;; whose size depends on the program -- so the entry code computes it
+;; RIP-relatively against a label the assembler resolves, exactly as a pooled
+;; constant load does, and stores it in `gcmeta-cell`.
+;;
+;; Asserted against the LAYOUT rather than against itself: the address the lea
+;; computes has to equal elf-text-vaddr plus the offset `metadata-offset-for`
+;; gives. Checking only that a lea exists would pass if it pointed anywhere.
+(let* ((c (compile-sonic "../bench/probe-tagged-spills.sps" '(display newline)))
+       ;; elf-load-base, not elf-text-vaddr: `metadata-offset-for` returns a
+       ;; FILE offset and already carries the text segment's own offset, so
+       ;; adding the text vaddr would count that page twice.
+       (want (+ elf-load-base
+                (metadata-offset-for (bytevector-length (compiled-code c))
+                                     (bytevector-length (compiled-pool c)))))
+       ;; find the lea in the entry code and decode its rip-relative target
+       (code (compiled-code c))
+       (found
+        (let scan ((i 0))
+          (cond
+           ((>= i (- (bytevector-length code) 7)) #f)
+           ;; 48 8d 05 disp32  =  lea rax, [rip+disp]
+           ((and (= #x48 (bytevector-u8-ref code i))
+                 (= #x8d (bytevector-u8-ref code (+ i 1)))
+                 (= #x05 (bytevector-u8-ref code (+ i 2))))
+            (let* ((d (bytevector-s32-ref code (+ i 3) 'little))
+                   (next (+ elf-text-vaddr i 7)))
+              (if (= (+ next d) want) #t (scan (+ i 1)))))
+           (else (scan (+ i 1)))))))
+  (ck! "_start computes the maps' address and it points at the maps" found))
+
 ;; AND A PROGRAM THAT ACTUALLY SPILLS A ROOT SAYS SO.
 ;;
 ;; Neither benchmark does -- see above -- so a test written against either would

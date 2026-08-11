@@ -162,10 +162,16 @@
                      ;; how `flneg` alone came to segfault.
                      (code-size (listing-size listing))
                      (pad (- (pool-offset-for code-size) code-size))
-                     (extra (map (lambda (l)
-                                   (cons (pool-label (lit-offset l))
-                                         (+ pad (lit-offset l))))
-                                 (pool-entries (current-litpool))))
+                     (extra (cons
+                             ;; The maps sit immediately after the pool, which
+                             ;; is where build-executable places them. `_start`
+                             ;; loads this RIP-relatively into gcmeta-cell so
+                             ;; the collector can find its roots.
+                             (cons '%gcmeta (+ pad (bytevector-length pool)))
+                             (map (lambda (l)
+                                    (cons (pool-label (lit-offset l))
+                                          (+ pad (lit-offset l))))
+                                  (pool-entries (current-litpool)))))
                      ;; WHICH FRAME SLOTS HOLD TAGGED VALUES, per function.
                      ;; `finalized-spills` is the spilled vregs IN SLOT ORDER --
                      ;; the order build-frame assigns indices in -- so the

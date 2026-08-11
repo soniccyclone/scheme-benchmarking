@@ -47,7 +47,7 @@
   (export runtime-listing runtime-labels
           heap-base-address heap-size
           runtime-data-size
-          heap-pointer-cell out-buffer-cell command-line-cell
+          heap-pointer-cell out-buffer-cell command-line-cell gcmeta-cell
           globals-base globals-span assign-global-cells)
   (import (chezscheme)
           (sonic numeric))
@@ -66,6 +66,15 @@
   ;; collector exists, which is why it lives in a named cell rather than being
   ;; rebuilt on each call.
   (define command-line-cell (+ data-base 16))      ; 8 bytes: a tagged list
+  ;; WHERE THE GC STACK MAPS ARE. The blob rides in the R+X segment after the
+  ;; constant pool (D54), which is an address only the linker knows, so `_start`
+  ;; computes it RIP-relatively and leaves it here for the collector to find.
+  ;;
+  ;; A cell rather than a compile-time constant in the collector's own code
+  ;; because the collector will be emitted once, into a listing assembled before
+  ;; the pool's size is known -- the same reason the pool's own loads are
+  ;; RIP-relative rather than absolute.
+  (define gcmeta-cell       (+ data-base 24))      ; 8 bytes: address of the maps
   ;; The top-level bindings' cells sit between the runtime's own words and the
   ;; heap. Reserving a fixed span rather than sizing it to the program keeps the
   ;; heap's base a constant, which the entry code stores without arithmetic.
@@ -164,6 +173,10 @@
       (kmovw k1 rax)
       (mov rax (imm ,heap-base-address))
       (mov ,(abs-mem heap-pointer-cell) rax)
+      ;; The maps' address, computed the way every other link-time address in
+      ;; this runtime is: RIP-relative against a label the assembler resolves.
+      (lea rax (mem rip #f 1 (label %gcmeta)))
+      (mov ,(abs-mem gcmeta-cell) rax)
       ;; THE ARGUMENT LIST, built before anything else runs.
       ;;
       ;; The kernel leaves argc at [rsp] and the argv pointers directly after

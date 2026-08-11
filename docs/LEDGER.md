@@ -1728,3 +1728,41 @@ too.
 The general lesson, stated because it has now cost three corrections in one
 thread: an assertion about a compiler artefact should fail on the artefact that
 was wrong. "Nonzero", "present", "three bytes" all passed on blank maps.
+
+
+## D55 -- the gate on the collector was imaginary; the encoder already had it
+
+D53's last note said the runtime cannot find the maps, because labels in this
+compiler appear only in control-flow operands, and offered three ways to fix it
+with a recommendation to teach the encoder a RIP-relative `lea`.
+
+The encoder already has RIP-relative addressing, and `lea` already takes it.
+
+    ours   lea rax, 16(%rip)   (72 141 5 16 0 0 0)
+    gas                        48 8d 05 10 00 00 00
+    ours   lea r11, -8(%rip)   (76 141 29 248 255 255 255)
+    gas                        4c 8d 1d f8 ff ff ff
+
+Byte for byte, both. `rm-encoding` carries a whole comment on why `(mem 'rip
+...)` is spelled as a distinct base rather than as base=#f, and every pooled
+constant load in target-x86-64.ss is already written as
+`(mem rip #f 1 (label ,(pool-label off)))` -- a label inside a displacement,
+resolved by `resolve-labels` against the driver's `extra-labels`.
+
+So the whole of what was missing was two lines: a `%gcmeta` label in that same
+`extra-labels` list, at the offset where build-executable puts the blob, and a
+`lea` plus a store in `_start`. Verified against the layout rather than against
+itself -- the address the lea computes must equal `elf-load-base` plus
+`metadata-offset-for`, and it does, 0x401800 both ways.
+
+WHAT I GOT WRONG AND WHY IT MATTERS. I looked for `lea` and `label` in the same
+grep, found labels only in `jmp`/`call`/`jle`, and concluded the capability was
+absent. The capability was in a different file, expressed differently, with the
+comment explaining it sitting directly above the code. Three options were
+weighed and a recommendation made about work that was already done.
+
+That is the fourth time in this thread that reading structure produced a wrong
+answer a one-command experiment settled: the import graph, the blob size, the
+nonzero byte, and now this. The pattern is specific enough to state as a rule --
+when the question is "can the compiler express X", the cheap answer is to ask it
+to emit X, not to search for where it might.
