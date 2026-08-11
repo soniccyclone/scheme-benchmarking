@@ -39,7 +39,10 @@ if [ ! -f /.dockerenv ]; then
 fi
 
 N=${N:-11}
-REPS=${REPS:-5}
+# NINE, NOT FIVE. Five samples can miss an outlier entirely: see LEDGER D57,
+# where a five-sample run reported half a percent of spread and a seven-sample
+# run of the same binary minutes later spanned 11.5%.
+REPS=${REPS:-9}
 BENCH="$here/bench/fannkuch"
 BUILD="$here/build/fannkuch"
 mkdir -p "$BUILD"
@@ -82,6 +85,10 @@ echo "  sonic:$a"
 echo "  gcc:  $b"
 [ "$a" = "$b" ] && echo "  answers AGREE" || { echo "  answers DIFFER -- stop"; exit 1; }
 
+# MIN AS WELL AS MEDIAN, and the min is the one to believe. The box is shared
+# with the container doing the compiling, so a sample can land while it is
+# busy; that moves the median and not the min. A min that moves is a real
+# change, a median that moves might be the neighbours. LEDGER D57.
 report() {  # $1 = label, $2 = cmd, $3 = event
   local samples=()
   for _ in $(seq "$REPS"); do
@@ -89,8 +96,8 @@ report() {  # $1 = label, $2 = cmd, $3 = event
   done
   printf '%s\n' "${samples[@]}" | sort -n |
     awk -v n="$1" '{v[NR]=$1}
-                   END{printf "  %-10s median %14d    (%+.2f%% spread)\n",
-                              n, v[int((NR+1)/2)],
+                   END{printf "  %-10s min %14d  median %14d  (%+.2f%% spread)\n",
+                              n, v[1], v[int((NR+1)/2)],
                               100*(v[NR]-v[1])/v[int((NR+1)/2)]}'
 }
 
