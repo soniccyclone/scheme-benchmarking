@@ -173,11 +173,30 @@
                                           (+ pad (lit-offset l))))
                                   (pool-entries (current-litpool)))))
                      ;; WHICH FRAME SLOTS HOLD TAGGED VALUES, per function.
-                     ;; `finalized-spills` is the spilled vregs IN SLOT ORDER --
-                     ;; the order build-frame assigns indices in -- so the
-                     ;; bitmap is a map over it against the class table. This is
-                     ;; the stack half of D21; without it the collector has no
-                     ;; roots and a Cheney scan collects the whole heap.
+                     ;;
+                     ;; INDEXED BY SLOT, NOT BY SPILLED VREG, and the difference
+                     ;; is not cosmetic. `build-frame` SHARES a slot between a
+                     ;; vreg and its coalescing representative, so the spill
+                     ;; list is longer than the frame in any function where that
+                     ;; happens -- fannkuch's `next` is 15 vregs in 14 slots,
+                     ;; nbody's `outer%22.201` is 4 in 3. A bitmap laid out per
+                     ;; vreg is correct until the first shared slot and shifted
+                     ;; by one after it, which is the worst possible failure for
+                     ;; a collector: it would follow whatever the neighbouring
+                     ;; word happens to hold.
+                     ;;
+                     ;; `frame-layout-map` is the vreg -> slot table build-frame
+                     ;; produced, so it is the only thing that knows the answer.
+                     ;;
+                     ;; Sharing is between coalesced copies, which have the same
+                     ;; storage class, so the vregs at one slot agree. That is
+                     ;; asserted rather than assumed -- a slot holding a tagged
+                     ;; value on one path and a raw one on another has no sound
+                     ;; bit, and silently picking either is how a collector
+                     ;; learns to follow an integer.
+                     ;;
+                     ;; This is the stack half of D21; without it the collector
+                     ;; has no roots and a Cheney scan collects the whole heap.
                      (n-instrs (lambda (l) (length (filter (lambda (i) (not (symbol? i))) l))))
                      (fb-at
                       (let walk ((fs fns)
@@ -187,10 +206,7 @@
                             (reverse acc)
                             (walk (cdr fs)
                                   (+ i (n-instrs (finalized-listing (car fs))))
-                                  (cons (cons i
-                                              (map (lambda (v)
-                                                     (eq? (hashtable-ref classes v #f) 'tagged))
-                                                   (finalized-spills (car fs))))
+                                  (cons (cons i (frame-tag-bits (car fs) classes))
                                         acc)))))
                      (o (assemble-function 'x86-64 'program listing
                                            (list (cons 'constants pool)
@@ -256,6 +272,40 @@
             (if (zero? (specialize-stats-specialized st))
                 p
                 (loop (fold-program p1) (+ round 1)))))))))
+
+  ;; One boolean per FRAME SLOT: is the value living there a tagged pointer?
+  ;;
+  ;; Built from `frame-layout-map`, the vreg -> slot table, because slots are
+  ;; shared between coalesced vregs and the spill list is therefore not a slot
+  ;; list. Raises if two vregs sharing a slot disagree about their class: there
+  ;; is no sound bit for such a slot, and choosing one silently is how a
+  ;; collector comes to follow an integer.
+  (define (frame-tag-bits f classes)
+    (let* ((fl (finalized-frame f))
+           (n (frame-layout-count fl))
+           (bits (make-vector n 'unset)))
+      (let-values (((vs slots) (hashtable-entries (frame-layout-map fl))))
+        (vector-for-each
+         (lambda (v k)
+           (when (and (integer? k) (< k n))
+             (let ((tagged? (eq? (hashtable-ref classes v #f) 'tagged))
+                   (had (vector-ref bits k)))
+               (cond ((eq? had 'unset) (vector-set! bits k tagged?))
+                     ((not (eq? had tagged?))
+                      (error 'compile-sonic
+                             (string-append
+                              "two vregs share frame slot " (number->string k)
+                              " of " (symbol->string (finalized-name f))
+                              " and disagree about whether it is tagged; there"
+                              " is no sound GC bit for that slot")
+                             v k))))))
+         vs slots))
+      (let loop ((k 0) (acc '()))
+        (if (= k n)
+            (reverse acc)
+            (loop (+ k 1) (cons (let ((b (vector-ref bits k)))
+                                  (if (eq? b 'unset) #f b))
+                                acc))))))
 
   (define (elide-to-fixpoint ssa)
     (let* ((datum (unparse-Lssa ssa))

@@ -950,6 +950,25 @@
          (let ((e (metadata-lookup es 2879)))
            (and e (<= (entry-offset e) 2879))))))
 
+;; AND NO MAP DESCRIBES MORE SLOTS THAN THE FRAME HAS.
+;;
+;; The bits are per frame SLOT, and `build-frame` shares a slot between a vreg
+;; and its coalescing representative -- so the spill list is longer than the
+;; frame wherever that happens. fannkuch's `next` is 15 spilled vregs in 14
+;; slots and nbody's outer%22 is 4 in 3.
+;;
+;; A bitmap laid out per vreg is right until the first shared slot and shifted
+;; by one after it, which is the worst failure available to a collector: it
+;; follows whatever the neighbouring word holds. This caught exactly that -- the
+;; maps claimed 15 slots for a 14-slot frame.
+(let* ((c (compile-sonic "../bench/fannkuch/config-sonic.sps" '(display newline)))
+       (es (decode-metadata target-x86-64 (compiled-metadata c)))
+       (widest-map (apply max (map (lambda (e) (length (entry-frame-bits e))) es)))
+       (widest-frame (apply max (map (lambda (f) (frame-layout-count (finalized-frame f)))
+                                     (compiled-functions c)))))
+  (ck! "no stack map describes more slots than its frame has"
+       (<= widest-map widest-frame)))
+
 ;; AND _start LEAVES THE MAPS' ADDRESS WHERE THE COLLECTOR WILL LOOK.
 ;;
 ;; The blob's address is a link-time fact -- it sits after the constant pool,

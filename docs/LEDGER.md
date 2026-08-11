@@ -1766,3 +1766,45 @@ answer a one-command experiment settled: the import graph, the blob size, the
 nonzero byte, and now this. The pattern is specific enough to state as a rule --
 when the question is "can the compiler express X", the cheap answer is to ask it
 to emit X, not to search for where it might.
+
+
+## D56 -- the maps were indexed by the wrong thing, and only one program showed it
+
+D54 built the stack maps from `finalized-spills`, the spilled vregs in slot
+order, on the reasoning that `build-frame` numbers slots walking that same list.
+It does -- except when it shares one.
+
+`build-frame` gives a vreg and its coalescing representative the SAME slot. So
+the spill list is longer than the frame wherever coalescing happened:
+
+    fannkuch  `next`            15 spilled vregs, 14 slots
+    nbody     `outer%22.201`     4 spilled vregs,  3 slots
+    the probe `main.entry1`     18 and 18          -- no sharing, so it agreed
+
+A bitmap laid out per vreg is correct up to the first shared slot and shifted by
+one for every slot after it. For a collector that is the worst available
+failure: not a missed root, which loses an object, but a root read from the
+wrong word, which follows whatever the neighbour happens to hold.
+
+AND THE FIXTURE COULD NOT SEE IT. `bench/probe-tagged-spills.sps` was written to
+force tagged spills, and it has no coalescing, so its 18 vregs land in 18 slots
+and its map was right the whole time. Every assertion in D54 passed. What
+exposed it was asking a different question -- does the spill list length equal
+the frame's slot count -- of every function in every program, rather than
+checking the fixture harder.
+
+The fix is to build from `frame-layout-map`, the vreg-to-slot table, which is
+the only structure that knows the answer. Sharing is between coalesced copies
+and those have the same storage class, so the vregs at one slot agree; that is
+now asserted rather than assumed, because a slot holding a tagged value on one
+path and a raw one on another has no sound bit and picking either silently is
+how a collector learns to follow an integer.
+
+The regression test compares the widest map against the widest frame. It fails
+on the old code, which is the only property a test of this kind needs.
+
+THE PATTERN, since this is the fifth correction in one thread: every one has
+come from checking the artefact against something INDEPENDENT of how it was
+built. Nonzero bytes, present blobs, matching sizes and a passing fixture all
+agreed with the bug. The slot count came from finalize and the map came from
+the driver, and only comparing the two settled it.
