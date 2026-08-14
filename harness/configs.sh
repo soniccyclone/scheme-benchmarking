@@ -39,12 +39,13 @@ cfg_compile_sonic() {
 (import (chezscheme) (sonic driver) (sonic pipeline))
 (compile-sonic-to-file "$BENCH/config-sonic.sps" nbody-externs "$BUILD/sonic")
 EOF
-    if [ -f /.dockerenv ]; then
+    . "$ROOT/tools/container.sh"
+    if sonic_in_container; then
         scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
     else
-        docker compose -f "$ROOT/docker-compose.yml" run --rm -T \
-            --entrypoint bash sonic -c \
-            "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-build.ss"
+        "$ROOT/tools/container.sh" bash -c \
+            "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-build.ss" \
+            || return 1
     fi
     chmod +x "$BUILD/sonic"
 }

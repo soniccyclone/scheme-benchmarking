@@ -33,10 +33,8 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 
 # NOTHING RUNS ON THE HOST -- the hard rule in CLAUDE.md. This compiles, which
 # is a Chez process, and that is the thing the container limits exist for.
-if [ ! -f /.dockerenv ]; then
-  exec docker compose -f "$here/docker-compose.yml" run --rm -T \
-       --entrypoint bash sonic /work/harness/disasm-sonic.sh "$@"
-fi
+. "$here/tools/container.sh"
+sonic_reexec sonic bash /work/harness/disasm-sonic.sh "$@"
 
 SRC=${1:-}
 EXTERNS=${2:-"(display newline)"}

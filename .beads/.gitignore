@@ -75,3 +75,7 @@ bd.db
 # They would override fork protection in .git/info/exclude.
 # Config files (metadata.json, config.yaml) are tracked by git by default
 # since no pattern above ignores them.
+
+# Transient local artifacts from bd's auto-import on a fresh DB (D58 session:
+# the Dolt DB was lost and rebuilt from issues.jsonl, which is the tracked one).
+.auto-import-issues.jsonl

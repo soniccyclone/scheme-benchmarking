@@ -26,12 +26,11 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 # emits programs that loop forever. Both belong inside the limits.
 #
 # Re-exec rather than document, because a script that merely says "run me in a
-# container" is a script someone runs on the host. `-T` keeps stdin attached,
-# which matters: the program under test arrives on it.
-if [ ! -f /.dockerenv ]; then
-  exec docker compose -f "$here/../docker-compose.yml" run --rm -T \
-       --entrypoint bash sonic tools/diff-run.sh "$@"
-fi
+# container" is a script someone runs on the host. The runner attaches stdin and
+# allocates no tty, which matters both ways: the program under test arrives on
+# stdin, and a tty would mangle the raw doubles the emitted program writes back.
+. "$here/../tools/container.sh"
+sonic_reexec sonic bash /work/sonic/tools/diff-run.sh "$@"
 work="${TMPDIR:-/tmp}/sonic-diff.$$"
 mkdir -p "$work"
 trap 'rm -rf "$work"' EXIT

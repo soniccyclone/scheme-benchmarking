@@ -31,12 +31,17 @@
 set -uo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 
-# NOTHING RUNS ON THE HOST -- the hard rule in CLAUDE.md. `bench` is `sonic`
-# plus the seccomp exception perf_event_open needs; see docker-compose.yml.
-if [ ! -f /.dockerenv ]; then
-  exec docker compose -f "$here/docker-compose.yml" run --rm -T \
-       --entrypoint bash bench /work/harness/measure-fannkuch.sh "$@"
-fi
+# NOTHING RUNS ON THE HOST -- the hard rule in CLAUDE.md. `bench` is the `sonic`
+# service plus the seccomp exception perf_event_open needs; see
+# docker-compose.yml.
+#
+# THAT EXCEPTION IS NO LONGER SUFFICIENT ON THIS HOST. Seccomp was the only
+# blocker while `kernel.perf_event_paranoid` was 2; native Ubuntu ships it at 4,
+# under which perf_event_open is denied to unprivileged users OUTSIDE any
+# container too -- measured on the bare host with a direct syscall probe, same
+# EPERM. Until `sysctl kernel.perf_event_paranoid=2`, this script cannot count.
+. "$here/tools/container.sh"
+sonic_reexec bench bash /work/harness/measure-fannkuch.sh "$@"
 
 N=${N:-11}
 # NINE, NOT FIVE. Five samples can miss an outlier entirely: see LEDGER D57,

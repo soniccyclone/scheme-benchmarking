@@ -24,6 +24,15 @@
 
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# NOTHING RUNS ON THE HOST -- the hard rule in CLAUDE.md. This gate compiles
+# with Chez further down, and it guarded that with `command -v scheme`, so on a
+# host without Chez it SKIPPED the compile and still exited green. That is the
+# fail-silently shape: `make smoke` on the host reported a passing gate that had
+# not run. CI reached it inside a container and so never showed the hole.
+. "$ROOT/tools/container.sh"
+sonic_reexec sonic bash /work/harness/smoke-riscv.sh "$@"
+
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/riscv"
 # From PATH: the container installs qemu-user properly. The old default

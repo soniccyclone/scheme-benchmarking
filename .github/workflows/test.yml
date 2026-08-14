@@ -32,9 +32,15 @@ jobs:
         run: docker compose build
 
       # The limits come from docker-compose.yml, so they are the same numbers
-      # the developer ran under. Nothing is duplicated here to drift.
+      # the developer ran under. Nothing is duplicated here to drift. These are
+      # also the SAME two commands a developer runs -- tools/container.sh picks
+      # the engine (docker here, podman on Nathan's box), so local and CI are
+      # one code path rather than two that resemble each other.
+      - name: Containment gate
+        run: ./tools/test-containment.sh
+
       - name: Run the suite
-        run: docker compose run --rm sonic make test-suite
+        run: make -C sonic test
 
       - name: RISC-V smoke gate
-        run: docker compose run --rm --workdir /work sonic bash harness/smoke-riscv.sh
+        run: ./harness/smoke-riscv.sh

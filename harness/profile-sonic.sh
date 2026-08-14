@@ -33,10 +33,12 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 # NOTHING RUNS ON THE HOST -- the hard rule in CLAUDE.md. This compiles (a Chez
 # process) and runs an emitted binary under perf, so it needs the `bench`
 # service, which is `sonic` plus the seccomp exception perf_event_open wants.
-if [ ! -f /.dockerenv ]; then
-  exec docker compose -f "$here/docker-compose.yml" run --rm -T \
-       --entrypoint bash bench /work/harness/profile-sonic.sh "$@"
-fi
+#
+# perf itself is currently blocked by the host's kernel.perf_event_paranoid=4,
+# which denies perf_event_open to unprivileged users outside any container too;
+# the seccomp exception is necessary and no longer sufficient. See D58.
+. "$here/tools/container.sh"
+sonic_reexec bench bash /work/harness/profile-sonic.sh "$@"
 
 SRC=${1:-}
 EXTERNS=${2:-"(display newline)"}

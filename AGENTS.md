@@ -46,16 +46,32 @@ Out of memory: Killed process 29843 (scheme)
 This compiler is a dozen fixpoints and hand-rolled worklists. "A pass that does
 not terminate" is a *class* of bug here, not an incident, and it will recur. A
 limit you have to remember to apply fails exactly when a bug is already eating
-the machine, so the limit lives in `docker-compose.yml` and applies whether
+the machine, so the limit lives in `tools/container.sh` and applies whether
 anyone remembers it or not — 8 GB, no swap, 512 pids, `timeout` as PID 1.
+
+Podman needs a compose PROVIDER installed before `podman compose` does anything
+at all; this host has podman-compose 1.6.0 in a user venv at
+`~/.local/opt/podman-compose`. `tools/container.sh` picks the engine — `podman
+compose` here, `docker compose` in CI — so there is still one code path.
+
+Because a limit that is spelled correctly and still does not apply is the whole
+problem, every container start reads `memory.max` and `pids.max` back out of the
+cgroup and refuses to run if they are absent. `make containment` goes further and
+tries to VIOLATE each limit — memory runaway, fork bomb, infinite loop. Run it
+after touching `docker-compose.yml` or `tools/container.sh`. See D58.
 
 **Do not add a second way to run things.** No `ulimit` wrapper, no bare
 `scheme` in a script, no "just this once on the host to check something". A
 prior fix did exactly that and was deleted, because two mechanisms for one
 guarantee is how a later agent picks the one without the guard.
 
+**Detecting that you are inside is `sonic_in_container`, not `/.dockerenv`.**
+Docker writes `/.dockerenv`; podman writes `/run/.containerenv`. Every guard in
+this tree tested only the first, so on the podman host they rejected the
+container they were standing in.
+
 If you need a one-off: `make shell` from `sonic/`, or
-`docker compose run --rm --entrypoint bash sonic -c '...'`.
+`tools/container.sh bash -c '...'`.
 
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 

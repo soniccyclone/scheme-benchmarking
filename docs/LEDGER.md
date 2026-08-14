@@ -1846,3 +1846,90 @@ CONSEQUENCES, and they are practical rather than philosophical:
 Recorded because several entries here turn on differences of a few percent, and
 because the honest version of the current standing is "fannkuch is a little
 over 1.2x" rather than any particular three-digit number.
+
+---
+
+## D58 -- podman needs a compose provider, and `/.dockerenv` was never the question we meant to ask
+
+The host moved off WSL2 + Docker Desktop onto native Ubuntu with podman 5.7.0.
+D30 survives intact: the limits still live in `docker-compose.yml`, they are
+still 8g / 512 pids / 8 cpus, and there is still one way to run things. What
+changed is the two things about podman that are not interchangeable with docker,
+and one of them was silent.
+
+**A compose provider is a separate install.** `podman compose` is a shim: it
+shells out to `docker-compose` or `podman-compose` if one is on PATH, and
+neither was. Installed podman-compose 1.6.0 user-level -- a venv at
+`~/.local/opt/podman-compose` symlinked into `~/.local/bin`, driving system
+`/usr/bin/podman`. No sudo. Homebrew has the formula and it was DECLINED: it
+depends on the `podman` formula, so it would have installed a second podman
+alongside the system one, and two podmans is the same shape of mistake as two
+ways to run the tests. Only python came from brew, because Ubuntu's system
+python ships no `ensurepip` and PEP 668 marks it externally-managed.
+
+**`/.dockerenv` does not exist under podman, and six guards were built on it.**
+Docker writes that file; podman writes `/run/.containerenv`. Every guard in this
+tree tested the docker one to mean "am I contained", so on the new host they all
+inverted at once: `make test-suite` REFUSED to run inside a perfectly good
+container, `harness/configs.sh` took the host branch while inside one, and
+`diff-run.sh`, `measure-fannkuch.sh` and `disasm-sonic.sh` would each have
+re-exec'd into a container from within a container, without bound. The lesson is
+narrower than "check both files": an engine's implementation detail was
+load-bearing for a question about a property. `sonic_in_container` in
+`tools/container.sh` now answers it in one place and both spellings. It stays a
+FILE test rather than an environment variable we export, because a variable set
+on the host would walk straight through the guard.
+
+**The limits are now verified rather than declared, and that is the part worth
+keeping.** D30 records being bitten by a limit key that parsed, validated and did
+nothing (`deploy.resources.limits.memory`, ignored outside Swarm). The general
+answer to a failure whose whole character is silence is to read the limit back
+out of the kernel, so every container start now passes through
+`--preflight-exec`, which reads `memory.max` and `pids.max` from the cgroup and
+refuses to run if they are absent. Two file reads. Unverifiable counts as
+absent, since "I could not check" and "it is not there" have the same blast
+radius.
+
+**And the guarantee is now TESTED, which in five months it never was.**
+`tools/test-containment.sh`, wired to `make containment` and to CI, tries to
+violate each property rather than asserting the config that ought to prevent it.
+Measured on this host, all passing: a Python allocator touching every page was
+SIGKILLed by the cgroup OOM killer (exit 137) while host swap moved **0 MiB**; a
+loop spawning 2000 processes did not get there; a spinning process was killed by
+the ENTRYPOINT's `timeout` and reported 124. That last one exists because this
+image's `timeout` is uutils rather than GNU and the Dockerfile already documents
+`--signal=KILL` being inert in it -- a guard that read as the stronger choice
+and was no guard at all, found only when a miscompiled program wedged the suite.
+Every argument in D30 was about which file the limits are declared in; nothing
+ever checked the outcome. This does.
+
+FOOTNOTE, recorded so nobody re-derives it: podman-compose does not implement
+`memswap_limit`. `grep -c memswap` over `podman_compose.py` returns 0, and
+`container_to_cpu_res_args` handles only `cpus`, `cpu_shares`, `mem_limit`,
+`mem_reservation`, `pids_limit` and the `deploy.resources.limits.*` forms. There
+is no `mem_swappiness` and no generic podman-arg passthrough, so the key cannot
+be expressed at all. Consequence: a runaway gets 8g of RAM plus up to the host's
+8g swapfile before the OOM killer fires, rather than dying at 8g total. On the
+12 GiB WSL VM that comment was written for, 16g was the whole world; on a 122 GiB
+workstation it is the difference between dying fast and dying slightly less
+fast, and the containment test above measured the host swap cost of an actual
+runaway at zero. Not worth a second mechanism. Noted, not fixed.
+
+Two unrelated holes closed while consolidating. `harness/smoke-riscv.sh` guarded
+its Chez compile with `command -v scheme`, so on a host without Chez it SKIPPED
+the compile and exited GREEN -- `make smoke` reported a passing gate that had
+never run, and CI never showed it because CI arrived already inside a container
+where Chez exists. It re-execs like everything else now. And the old call sites
+all passed `--entrypoint bash`, which discards the ENTRYPOINT along with it; the
+wall-clock guard was absent from every harness path and is back. The container
+also gets `network_mode: none`, which kills a `level=error` netns-teardown line
+rootless podman emitted on every run -- noise that trains a reader to ignore
+errors in CI logs -- and makes a compile that suddenly wants the network justify
+itself.
+
+NOT FIXED, filed as a bead: `kernel.perf_event_paranoid` is **4** on this host
+where the old one was 2. `perf_event_open` now fails for unprivileged users on
+the BARE HOST -- measured with a direct syscall probe, no container involved --
+so the `bench` service's seccomp exception is still necessary and no longer
+sufficient, and `harness/measure-fannkuch.sh` cannot count instructions until
+the sysctl is lowered. Wall-clock measurement and the suite are unaffected.

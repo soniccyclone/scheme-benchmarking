@@ -31,6 +31,15 @@ services:
     cpus: 8
     pids_limit: 512            # a runaway that forks rather than conses
 
+    # The suite reaches nothing over the network, so it is given none. Two
+    # things fall out. Rootless podman otherwise leaves a netns behind that it
+    # cannot always tear down -- `rootless netns: kill network process:
+    # permission denied` on every run, a `level=error` line that is pure noise
+    # and would train a reader to ignore errors in CI logs. And a compile that
+    # suddenly wants the network is a compile doing something it should be
+    # made to justify.
+    network_mode: none
+
     volumes:
       - .:/work
     working_dir: /work/sonic

@@ -26,3 +26,6 @@ build/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# bd's local lock file, not shared state
+.beads.gate.lock

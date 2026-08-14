@@ -2,7 +2,7 @@
 #
 # NOTHING RUNS ON THE HOST. `make test` builds the image if needed and runs the
 # suite inside it, under the memory and wall-clock limits in
-# ../docker-compose.yml.
+# ../tools/container.sh.
 #
 # That is not tidiness. An unguarded loop in a compiler pass once consed until a
 # single Chez process held 31GB -- the whole WSL VM -- and the OOM killer took
@@ -15,7 +15,11 @@
 
 CHEZ ?= scheme
 LIBS  = --libdirs src:vendor/nanopass
-COMPOSE ?= docker compose -f ../docker-compose.yml
+# The limits still live in ../docker-compose.yml (D30). This goes through
+# tools/container.sh so that ONE place picks the engine -- `podman compose`
+# here, `docker compose` in CI -- and so that the limits are verified from
+# inside the cgroup before anything runs. See D58.
+RUN  ?= ../tools/container.sh
 
 .PHONY: help test test-suite shell clean
 
@@ -26,19 +30,21 @@ help:
 	@echo "make clean       remove compiled artifacts"
 
 test:
-	@$(COMPOSE) run --rm sonic make test-suite
+	@$(RUN) make test-suite
 
 shell:
-	@$(COMPOSE) run --rm --entrypoint /bin/bash sonic
+	@$(RUN) --shell
 
 # The guard is mechanical rather than a comment, because a comment is advice and
 # this needs to be a wall: an agent reaching for `make test-suite` on the host is
 # reaching for the thing that took the machine down.
+#
+# It tests for BOTH engines' markers. Docker writes /.dockerenv and podman
+# writes /run/.containerenv; when the host moved to podman this guard rejected
+# the container it was standing inside, which is the failure mode of hardcoding
+# one engine's implementation detail as if it meant "am I contained".
 test-suite:
-	@test -f /.dockerenv || { \
-	  echo "REFUSED: run 'make test' -- the suite runs in a container so that a"; \
-	  echo "runaway pass dies at 8g instead of taking the host with it."; \
-	  exit 1; }
+	@$(RUN) --assert-inside
 	@$(CHEZ) -q $(LIBS) --script test/lang-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/read-test.ss

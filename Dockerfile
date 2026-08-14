@@ -114,10 +114,10 @@ RUN ldconfig
 WORKDIR /work/sonic
 
 # `timeout` as PID 1, so a pass that does not terminate kills its own container
-# and exits 124 instead of hanging until someone notices. Docker has no
-# run-duration limit of its own -- `--stop-timeout` is the SIGTERM-to-SIGKILL
-# grace period and `--health-timeout` bounds a single probe, neither is a
-# lifetime -- so this is where wall clock has to come from.
+# and exits 124 instead of hanging until someone notices. Neither docker nor
+# podman has a run-duration limit of its own -- `--stop-timeout` is the
+# SIGTERM-to-SIGKILL grace period and `--health-timeout` bounds a single probe,
+# neither is a lifetime -- so this is where wall clock has to come from.
 #
 # NO `--signal=KILL`, AND DO NOT ADD IT BACK. It reads like the stronger
 # choice and in this image it disables the guard entirely. `timeout` here is
