@@ -36,12 +36,14 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 # docker-compose.yml.
 #
 # THAT EXCEPTION IS NO LONGER SUFFICIENT ON THIS HOST. Seccomp was the only
-# blocker while `kernel.perf_event_paranoid` was 2; native Ubuntu ships it at 4,
-# under which perf_event_open is denied to unprivileged users OUTSIDE any
-# container too -- measured on the bare host with a direct syscall probe, same
-# EPERM. Until `sysctl kernel.perf_event_paranoid=2`, this script cannot count.
+# blocker while `kernel.perf_event_paranoid` was 2; this host ships 4, under
+# which perf_event_open needs CAP_PERFMON -- which a ROOTLESS container cannot
+# hold, since that capability is tested against the initial user namespace.
+# Run the bench service rootful; sonic_assert_perf below says how. See D58.
 . "$here/tools/container.sh"
 sonic_reexec bench bash /work/harness/measure-fannkuch.sh "$@"
+
+sonic_assert_perf || exit 1
 
 N=${N:-11}
 # NINE, NOT FIVE. Five samples can miss an outlier entirely: see LEDGER D57,

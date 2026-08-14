@@ -66,8 +66,41 @@ services:
   # It gets its own service so the suite keeps the tight default profile. A
   # benchmark run is short, deliberate and human-started; the suite runs
   # constantly and is where a compiler bug shows up first.
+  # SECCOMP IS NO LONGER SUFFICIENT ON A HOST WITH paranoid > 2, and this one
+  # ships 4 (the old WSL host was 2). Measured, because the failure is a bare
+  # EPERM either way and the two causes are not distinguishable from the error:
+  #
+  #     seccomp default, paranoid 4   EPERM  (seccomp denies the syscall)
+  #     seccomp unconfined, paranoid 4  EACCES (the paranoid check denies it)
+  #     + --cap-add=CAP_PERFMON, ROOTLESS   still EACCES
+  #     + --privileged, ROOTLESS           still EACCES
+  #
+  # The last two are the surprise and the reason this needs a comment rather
+  # than a flag. `perfmon_capable()` tests CAP_PERFMON against the INITIAL user
+  # namespace, and a rootless container's capabilities live in its own; so a
+  # rootless container cannot hold this capability no matter what is added to
+  # it. `--sysctl kernel.perf_event_paranoid=2` is refused too -- that sysctl is
+  # not namespaced, so it is a host-wide setting or nothing.
+  #
+  # Hence: THE BENCH SERVICE IS RUN ROOTFUL, and only it. That is a smaller
+  # change than lowering the host's sysctl: the setting is scoped to one short,
+  # deliberately-started container instead of being left on for every process on
+  # the machine, and it leaves nothing behind in /etc.
+  #
+  #     sudo -E podman compose -f docker-compose.yml run --rm bench <cmd>
+  #
+  # Not solvable in userspace either, which is worth recording so nobody spends
+  # the afternoon on it: `runtime.ss` emits `kmovw k1, rax` in the PROLOGUE, so
+  # every binary we produce carries an AVX-512 opmask instruction from its entry
+  # point. Valgrind's VEX cannot decode it ("unhandled instruction bytes: 0xC5
+  # 0xF8 0x92 0xC8") and QEMU's TCG does not implement AVX-512 at all, so
+  # callgrind and qemu-user instruction counting are both dead on arrival here.
   bench:
     extends:
       service: sonic
     security_opt:
       - seccomp:unconfined
+    # Inert rootless; load-bearing rootful. Kept declared so the rootful run
+    # needs no extra flags remembered at the prompt.
+    cap_add:
+      - CAP_PERFMON

@@ -34,11 +34,14 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 # process) and runs an emitted binary under perf, so it needs the `bench`
 # service, which is `sonic` plus the seccomp exception perf_event_open wants.
 #
-# perf itself is currently blocked by the host's kernel.perf_event_paranoid=4,
-# which denies perf_event_open to unprivileged users outside any container too;
-# the seccomp exception is necessary and no longer sufficient. See D58.
+# The seccomp exception is necessary and no longer sufficient: this host runs
+# kernel.perf_event_paranoid=4, so perf_event_open needs CAP_PERFMON, which a
+# rootless container cannot hold. Run bench rootful -- sonic_assert_perf says
+# how, and it costs nothing on the host. See D58.
 . "$here/tools/container.sh"
 sonic_reexec bench bash /work/harness/profile-sonic.sh "$@"
+
+sonic_assert_perf || exit 1
 
 SRC=${1:-}
 EXTERNS=${2:-"(display newline)"}

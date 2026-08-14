@@ -1927,9 +1927,49 @@ rootless podman emitted on every run -- noise that trains a reader to ignore
 errors in CI logs -- and makes a compile that suddenly wants the network justify
 itself.
 
-NOT FIXED, filed as a bead: `kernel.perf_event_paranoid` is **4** on this host
-where the old one was 2. `perf_event_open` now fails for unprivileged users on
-the BARE HOST -- measured with a direct syscall probe, no container involved --
-so the `bench` service's seccomp exception is still necessary and no longer
-sufficient, and `harness/measure-fannkuch.sh` cannot count instructions until
-the sysctl is lowered. Wall-clock measurement and the suite are unaffected.
+PERF, which took three attempts to get right and is worth all of them. This
+host runs `kernel.perf_event_paranoid` at **4**; the old one ran 2, where the
+`bench` service's seccomp exception was the only blocker. The first answer
+written down here was "lower the sysctl", and that was wrong -- it leaves
+unprivileged profiling on for every process on the machine, permanently, to fix
+one benchmark script. Measured, in order:
+
+    seccomp default, rootless          EPERM   (seccomp denies the syscall)
+    seccomp unconfined, rootless       EACCES  (the paranoid check denies it)
+    + --cap-add=CAP_PERFMON, rootless  EACCES
+    + --privileged, rootless           EACCES
+    --sysctl kernel.perf_event_paranoid=2   REFUSED by podman
+
+The last two are the instructive ones. `perfmon_capable()` tests CAP_PERFMON
+against the INITIAL user namespace, so a rootless container cannot hold it no
+matter what is added to it -- `--privileged` is not a stronger version of
+`--cap-add` here, it is the same nothing. And that sysctl is not namespaced, so
+it is host-wide or unavailable; there is no per-container form.
+
+So the `bench` service is run ROOTFUL, and only it. That is strictly smaller
+than lowering the sysctl: the permission is scoped to one short,
+deliberately-started container instead of being left on for the whole machine,
+and it writes nothing to /etc.
+
+    sudo -E podman compose -f docker-compose.yml run --rm bench <cmd>
+
+Rootful podman keeps a SEPARATE image store, so the first such run rebuilds the
+image or needs `podman image scp sonic-scheme:dev root@localhost::`.
+
+USERSPACE COUNTING IS NOT AN ESCAPE, recorded so nobody spends an afternoon
+rediscovering it. valgrind/callgrind counts instructions exactly and needs no
+kernel PMU, and it counted the gcc reference fine at 75,208,916 -- but it
+reported **zero** for our own binary and died with `vex amd64->IR: unhandled
+instruction bytes: 0xC5 0xF8 0x92 0xC8`. That is `kmovw k1, eax`, an AVX-512
+opmask instruction, and `runtime.ss` emits it in the PROLOGUE -- so every binary
+this compiler produces carries AVX-512 from its entry point, whether or not the
+program vectorizes. Valgrind's VEX cannot decode AVX-512, and QEMU's TCG does
+not implement it either, so callgrind and qemu-user instruction counting are
+both dead on arrival for our output. Ubuntu's qemu is additionally built without
+TCG plugin support (`qemu: unknown option 'plugin'`), which would have been the
+other way in.
+
+`sonic_assert_perf` in `tools/container.sh` now detects the whole situation and
+prints the remedy, because the underlying failure is a bare EPERM that reads
+like a file-permission problem and whose real cause is three layers away.
+Wall-clock measurement and the test suite are unaffected throughout.

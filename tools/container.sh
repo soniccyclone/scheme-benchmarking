@@ -88,6 +88,39 @@ sonic_assert_limits() {
     return 0
 }
 
+# Called by the two harness scripts that need hardware counters, once they are
+# already inside the bench container. perf's failure is a bare EPERM that reads
+# like a file-permission problem, and the actual cause is three layers away, so
+# this says which layer.
+sonic_assert_perf() {
+    if perf stat -e instructions true >/dev/null 2>&1; then return 0; fi
+    local par; par=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo '?')
+    cat >&2 <<EOF
+REFUSED: perf_event_open is denied in this container.
+
+  kernel.perf_event_paranoid = $par   (anything > 2 denies unprivileged perf)
+  euid inside the container  = $(id -u)
+
+The seccomp exception this service carries is necessary and NOT sufficient at
+paranoid > 2. CAP_PERFMON is tested against the INITIAL user namespace, so a
+ROOTLESS container cannot hold it -- measured: --cap-add=CAP_PERFMON and even
+--privileged still fail rootless. The sysctl is not namespaced, so it cannot be
+set per-container either.
+
+Run the bench service ROOTFUL. This changes nothing on the host and leaves
+nothing behind; the capability is scoped to this one container:
+
+  sudo -E podman compose -f docker-compose.yml run --rm bench <command>
+
+Note that rootful podman keeps its images in a SEPARATE store, so the first
+rootful run rebuilds the image (or transfer it once with
+\`podman image scp sonic-scheme:dev root@localhost::\`).
+
+See D58, and the comment on the bench service in docker-compose.yml.
+EOF
+    return 1
+}
+
 # ---------------------------------------------------------------------------
 # Host side.
 # ---------------------------------------------------------------------------
