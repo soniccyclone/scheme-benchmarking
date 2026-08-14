@@ -76,6 +76,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # and the failure reads like a codegen bug.
         libc6-dev-riscv64-cross \
         qemu-user \
+        # INSTRUCTION COUNTS WITHOUT THE PMU. This host runs
+        # kernel.perf_event_paranoid=4, under which perf_event_open is denied to
+        # every unprivileged process -- and CAP_PERFMON is tested against the
+        # INITIAL user namespace, so a rootless container cannot hold it no
+        # matter what is added to it (--privileged included; measured). callgrind
+        # counts instructions exactly in userspace and needs none of that.
+        #
+        # It is also the BETTER instrument for this project, not merely the
+        # available one: it is deterministic, so it does not have D57's problem
+        # where the standing drifted 1% with the code byte-identical.
+        #
+        # This works only because the runtime no longer emits AVX-512
+        # unconditionally (D59) -- valgrind's VEX cannot decode `kmovw` and used
+        # to die in the prologue, reporting zero instructions.
+        valgrind \
         git \
         make \
         python3 \

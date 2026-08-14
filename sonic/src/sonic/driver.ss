@@ -45,6 +45,9 @@
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
           (sonic order)
+          ;; for listing-uses-three-lane?: whether the prologue needs its k1
+          ;; setup, which is AVX-512 and must not be emitted unconditionally.
+          (sonic vec-x86-64)
           (sonic target-x86-64))
 
   (define-record-type (compiled make-compiled compiled?)
@@ -153,8 +156,15 @@
                      (fns (finalize-program 'x86-64 arch-x86-64 selected
                                             (cadr prog) entry classes
                                             (lowered-params)))
-                     (listing (append (runtime-listing 'x86-64 entry)
-                                      (apply append (map finalized-listing fns))))
+                     ;; The prologue's k1 setup is AVX-512 and is emitted only
+                     ;; if something reads it, so ask the finalized code. This
+                     ;; is computed ONCE and used at both runtime-listing call
+                     ;; sites below: they must agree, because the second one
+                     ;; counts instructions to place the GC frame maps.
+                     (code-listing (apply append (map finalized-listing fns)))
+                     (lane-mask? (listing-uses-three-lane? code-listing))
+                     (listing (append (runtime-listing 'x86-64 entry lane-mask?)
+                                      code-listing))
                      (pool (pool-bytes (current-litpool)))
                      ;; The pool lands 16-ALIGNED past the code, so every pool
                      ;; label carries the padding. A sign mask is a 128-bit SSE
@@ -200,7 +210,7 @@
                      (n-instrs (lambda (l) (length (filter (lambda (i) (not (symbol? i))) l))))
                      (fb-at
                       (let walk ((fs fns)
-                                 (i (n-instrs (runtime-listing 'x86-64 entry)))
+                                 (i (n-instrs (runtime-listing 'x86-64 entry lane-mask?)))
                                  (acc '()))
                         (if (null? fs)
                             (reverse acc)

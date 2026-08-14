@@ -64,7 +64,7 @@
           vec-reg? vec-reg-width vec-reg-number vec-reg-name
           vec-lane-reg vec-scalar-reg
           mask-reg? mask-reg-number masked? masked-operand masked-k masked-zeroing?
-          three-lane-entry three-lane-rewrite
+          three-lane-entry three-lane-rewrite listing-uses-three-lane?
           ;; encoding
           vec-encode-instr vec-encode-instrs vec-instr-length
           vec-mnemonics vec-supports? vec-fused-mnemonic?
@@ -359,6 +359,21 @@
       (v4splat   vbroadcastsd 256 bcst)))
 
   (define (three-lane-entry m) (assq m three-lane-table))
+
+  ;; Does this listing contain any three-lane instruction?
+  ;;
+  ;; Asked by driver.ss so the runtime prologue can leave out the `kmovw` that
+  ;; establishes k1 when nothing reads it -- see the header on x86-64-listing in
+  ;; runtime.ss. CONSERVATIVE BY CONSTRUCTION: it says yes for every mnemonic in
+  ;; the table, including the two shapes (`bcst`, `ext2`) that are not actually
+  ;; predicated, because a spurious mask costs two instructions once at entry
+  ;; while a missing one is a wrong answer in a loop.
+  (define (listing-uses-three-lane? listing)
+    (let loop ((xs listing))
+      (cond ((null? xs) #f)
+            ((symbol? (car xs)) (loop (cdr xs)))
+            ((and (pair? (car xs)) (three-lane-entry (caar xs))) #t)
+            (else (loop (cdr xs))))))
 
   ;; The mask is `merge` on a register destination and simply "these lanes are
   ;; not written" on a memory one. Merging rather than zeroing is deliberate:

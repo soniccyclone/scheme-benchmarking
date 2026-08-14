@@ -149,7 +149,21 @@
   ;; Lanes 0, 1 and 2 active; lane 3 is the padding a body does not have.
   (define three-lane-mask #b0111)
 
-  (define (x86-64-listing entry)
+  ;; `lane-mask?` says whether the image contains any three-lane instruction.
+  ;;
+  ;; IT IS NOT AN OPTIMIZATION. `kmovw` is AVX-512, so emitting it
+  ;; unconditionally made EVERY binary this compiler produces require an
+  ;; AVX-512 machine -- including programs with no vector work at all, which is
+  ;; most of them. That is the x86 counterpart of exactly what the RISC-V smoke
+  ;; gate exists to catch: depending on something the target may not have. It
+  ;; also blocked every userspace instrumentation tool, since neither valgrind's
+  ;; VEX nor QEMU's TCG decodes AVX-512 -- callgrind reported zero instructions
+  ;; and qemu died with SIGILL, both on this one instruction, in the PROLOGUE,
+  ;; before a single line of the program ran.
+  ;;
+  ;; Two instructions are dropped with it: the mask goes through `rax` because
+  ;; `kmovw` cannot take an immediate.
+  (define (x86-64-listing entry lane-mask?)
     `(;; ---- entry ----
       ;;
       ;; The kernel enters here with argc at [rsp]. Nothing reads it: see the
@@ -169,8 +183,13 @@
       ;;
       ;; `kmovw` cannot take an immediate, so the constant goes through a GPR.
       ;; rax is the integer scratch and holds nothing at entry.
-      (mov rax (imm ,three-lane-mask))
-      (kmovw k1 rax)
+      ;;
+      ;; Emitted only when the image actually has three-lane work: see the
+      ;; header on x86-64-listing. `,@` splices nothing when it does not.
+      ,@(if lane-mask?
+            `((mov rax (imm ,three-lane-mask))
+              (kmovw k1 rax))
+            '())
       (mov rax (imm ,heap-base-address))
       (mov ,(abs-mem heap-pointer-cell) rax)
       ;; The maps' address, computed the way every other link-time address in
@@ -828,19 +847,28 @@
   ;; nothing, and a runtime that assembles is not a runtime that works. The
   ;; RISC-V smoke gate already proves the COMPILER's output is well-formed
   ;; there, which is the claim D22 rests on.
-  (define (runtime-listing target entry)
-    (case target
-      ((x86-64) (x86-64-listing entry))
-      ((rv64)
-       (error 'runtime-listing
-              (string-append
-               "no RV64 runtime yet. The x86-64 one is validated by running it "
-               "and an RV64 one written blind would be validated by nothing; "
-               "the smoke gate proves the compiler's RV64 output is well-formed, "
-               "which is a different claim")
-              target))
-      (else (error 'runtime-listing "unknown target" target))))
+  ;; `lane-mask?` defaults to #t, which is the pre-D59 behaviour: a caller that
+  ;; does not know whether the image vectorizes gets the mask and a binary that
+  ;; runs everywhere the old ones did. Only driver.ss, which HAS the finalized
+  ;; code and can therefore answer the question, passes #f.
+  (define (runtime-listing target entry . opt)
+    (let ((lane-mask? (if (null? opt) #t (car opt))))
+      (case target
+        ((x86-64) (x86-64-listing entry lane-mask?))
+        ((rv64)
+         (error 'runtime-listing
+                (string-append
+                 "no RV64 runtime yet. The x86-64 one is validated by running it "
+                 "and an RV64 one written blind would be validated by nothing; "
+                 "the smoke gate proves the compiler's RV64 output is well-formed, "
+                 "which is a different claim")
+                target))
+        (else (error 'runtime-listing "unknown target" target)))))
 
-  (define (runtime-labels target entry)
-    (filter symbol? (runtime-listing target entry)))
+  ;; The flag is forwarded, not defaulted again: labels are OFFSETS, and a label
+  ;; map built against a two-instruction-longer prologue than the code it
+  ;; describes is the exact shape of D56 -- every address off by a constant,
+  ;; plausible-looking, and wrong.
+  (define (runtime-labels target entry . opt)
+    (filter symbol? (apply runtime-listing target entry opt)))
   )

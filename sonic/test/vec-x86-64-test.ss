@@ -675,6 +675,41 @@
                                    (mask-reg? (cadr i))))
                             rt)))))
 
+;; --- but only when the image has three-lane work ----------------------------
+;;
+;; `kmovw` is AVX-512, so setting the mask unconditionally made EVERY binary
+;; this compiler emits require an AVX-512 machine -- including programs with no
+;; vector work at all. That is the x86 form of what the RISC-V smoke gate exists
+;; to catch. It also blocked every userspace instrumentation tool: neither
+;; valgrind's VEX nor QEMU's TCG decodes AVX-512, so both died in the PROLOGUE,
+;; before a line of the program ran, and instruction counts were unobtainable
+;; without hardware counters. See D59.
+(let ((with (runtime-listing 'x86-64 'main #t))
+      (without (runtime-listing 'x86-64 'main #f)))
+  (ck! "an image with three-lane work still gets its mask"
+       (exists (lambda (i) (equal? i '(kmovw k1 rax))) with))
+  (ck! "an image without it emits no kmovw at all"
+       (not (exists (lambda (i) (and (pair? i) (eq? (car i) 'kmovw))) without)))
+  (ck! "and no AVX-512 opmask instruction survives anywhere in that prologue"
+       (not (exists (lambda (i) (and (pair? i) (memq 'k1 (cdr i)))) without)))
+  ;; THE SAFETY PROPERTY, not a cosmetic one. driver.ss counts the runtime's
+  ;; instructions to place the GC frame maps, so a listing built with one flag
+  ;; and counted with the other shifts every map by a constant -- which is D56
+  ;; exactly: plausible addresses, all wrong.
+  (ck! "the two differ by exactly the two instructions of the setup"
+       (= 2 (- (length (filter (lambda (i) (not (symbol? i))) with))
+               (length (filter (lambda (i) (not (symbol? i))) without)))))
+  (ck! "the default is the mask, so an uninformed caller is never under-served"
+       (equal? (runtime-listing 'x86-64 'main) with)))
+
+;; The detector driver.ss asks. Conservative: any table mnemonic counts.
+(ck! "listing-uses-three-lane? sees a three-lane op"
+     (listing-uses-three-lane? '(_start (mov rax (imm 7)) (v3addpd ymm0 ymm1 ymm2))))
+(ck! "and is not fooled by the unmasked four-lane forms"
+     (not (listing-uses-three-lane? '(_start (mov rax (imm 7)) (vaddpd ymm0 ymm1 ymm2)))))
+(ck! "labels in the listing do not confuse it"
+     (not (listing-uses-three-lane? '(_start L.body (ret)))))
+
 (display "\n-- differential against gcc/objdump --\n")
 (for-each differential! instruction-corpus)
 

@@ -48,59 +48,40 @@ services:
     # may allocate a tty and mangle them.
     tty: false
 
-  # Benchmarking, which needs one thing the test suite must NOT have.
+  # PERF DOES NOT WORK ON THIS HOST, AND NO CONTAINER FLAG FIXES IT.
+  # kernel.perf_event_paranoid is 4 here, which denies perf_event_open to every
+  # unprivileged process -- not just hardware events; `task-clock` fails
+  # identically. Measured, all EACCES, because the error is a bare EPERM that
+  # names none of this:
   #
-  # Docker's DEFAULT seccomp profile denies `perf_event_open` outright -- the
-  # syscall every hardware counter goes through -- and it fails with a bare
-  # EPERM that reads like a file-permission problem rather than a policy
-  # decision. Measured, since guessing about this wasted time once already:
+  #     seccomp unconfined                  rootless   EACCES
+  #     + --cap-add=CAP_PERFMON             rootless   EACCES
+  #     + --privileged                      rootless   EACCES
+  #     --sysctl kernel.perf_event_paranoid=2          REFUSED (not namespaced)
   #
-  #     host, no docker              perf_event_open OK
-  #     container, default seccomp   EPERM
-  #     container, seccomp=unconfined  OK
+  # `perfmon_capable()` tests CAP_PERFMON against the INITIAL user namespace and
+  # a rootless container's capabilities live in its own, so --privileged is not
+  # a stronger --cap-add here; it is the same nothing. Do not spend another
+  # afternoon on this flag surface.
   #
-  # That is the ONLY blocker. `perf_event_paranoid` is 2 on this host and the
-  # container reads the same 2, which already permits counting your own
-  # user-space process; no CAP_PERFMON, no host sysctl.
+  # INSTRUCTION COUNTS DO NOT NEED PERF: harness/count-instructions.sh uses
+  # callgrind, which counts by simulation in userspace, needs no capability, and
+  # is DETERMINISTIC -- the same binary gives the same number exactly, which is
+  # a better answer than perf gave even when perf worked (D57: 11.5% spread).
+  # That path only became possible once the runtime stopped emitting AVX-512
+  # unconditionally; see D59.
   #
-  # It gets its own service so the suite keeps the tight default profile. A
-  # benchmark run is short, deliberate and human-started; the suite runs
-  # constantly and is where a compiler bug shows up first.
-  # SECCOMP IS NO LONGER SUFFICIENT ON A HOST WITH paranoid > 2, and this one
-  # ships 4 (the old WSL host was 2). Measured, because the failure is a bare
-  # EPERM either way and the two causes are not distinguishable from the error:
+  # The seccomp exception below is kept because it is still NECESSARY (it is the
+  # first of the two gates above), just no longer sufficient. What remains
+  # genuinely blocked is `perf record` SAMPLING in harness/profile-sonic.sh --
+  # "which function holds the cycles" -- for which callgrind is a plausible
+  # replacement nobody has written yet.
   #
-  #     seccomp default, paranoid 4   EPERM  (seccomp denies the syscall)
-  #     seccomp unconfined, paranoid 4  EACCES (the paranoid check denies it)
-  #     + --cap-add=CAP_PERFMON, ROOTLESS   still EACCES
-  #     + --privileged, ROOTLESS           still EACCES
-  #
-  # The last two are the surprise and the reason this needs a comment rather
-  # than a flag. `perfmon_capable()` tests CAP_PERFMON against the INITIAL user
-  # namespace, and a rootless container's capabilities live in its own; so a
-  # rootless container cannot hold this capability no matter what is added to
-  # it. `--sysctl kernel.perf_event_paranoid=2` is refused too -- that sysctl is
-  # not namespaced, so it is a host-wide setting or nothing.
-  #
-  # Hence: THE BENCH SERVICE IS RUN ROOTFUL, and only it. That is a smaller
-  # change than lowering the host's sysctl: the setting is scoped to one short,
-  # deliberately-started container instead of being left on for every process on
-  # the machine, and it leaves nothing behind in /etc.
-  #
-  #     sudo -E podman compose -f docker-compose.yml run --rm bench <cmd>
-  #
-  # Not solvable in userspace either, which is worth recording so nobody spends
-  # the afternoon on it: `runtime.ss` emits `kmovw k1, rax` in the PROLOGUE, so
-  # every binary we produce carries an AVX-512 opmask instruction from its entry
-  # point. Valgrind's VEX cannot decode it ("unhandled instruction bytes: 0xC5
-  # 0xF8 0x92 0xC8") and QEMU's TCG does not implement AVX-512 at all, so
-  # callgrind and qemu-user instruction counting are both dead on arrival here.
+  # It stays a separate service regardless: the suite keeps the tight default
+  # seccomp profile, because the suite runs constantly and is where a compiler
+  # bug shows up first, while a benchmark run is short and human-started.
   bench:
     extends:
       service: sonic
     security_opt:
       - seccomp:unconfined
-    # Inert rootless; load-bearing rootful. Kept declared so the rootful run
-    # needs no extra flags remembered at the prompt.
-    cap_add:
-      - CAP_PERFMON

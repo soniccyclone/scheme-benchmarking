@@ -1927,12 +1927,9 @@ rootless podman emitted on every run -- noise that trains a reader to ignore
 errors in CI logs -- and makes a compile that suddenly wants the network justify
 itself.
 
-PERF, which took three attempts to get right and is worth all of them. This
-host runs `kernel.perf_event_paranoid` at **4**; the old one ran 2, where the
-`bench` service's seccomp exception was the only blocker. The first answer
-written down here was "lower the sysctl", and that was wrong -- it leaves
-unprivileged profiling on for every process on the machine, permanently, to fix
-one benchmark script. Measured, in order:
+PERF DOES NOT WORK ON THIS HOST AND NO CONTAINER FLAG FIXES IT, which took
+three wrong answers to establish. `kernel.perf_event_paranoid` is 4 here where
+the old host ran 2. Measured, all EACCES:
 
     seccomp default, rootless          EPERM   (seccomp denies the syscall)
     seccomp unconfined, rootless       EACCES  (the paranoid check denies it)
@@ -1940,36 +1937,86 @@ one benchmark script. Measured, in order:
     + --privileged, rootless           EACCES
     --sysctl kernel.perf_event_paranoid=2   REFUSED by podman
 
-The last two are the instructive ones. `perfmon_capable()` tests CAP_PERFMON
-against the INITIAL user namespace, so a rootless container cannot hold it no
-matter what is added to it -- `--privileged` is not a stronger version of
-`--cap-add` here, it is the same nothing. And that sysctl is not namespaced, so
-it is host-wide or unavailable; there is no per-container form.
+It denies ALL unprivileged perf, not just hardware events -- `task-clock` fails
+identically. `perfmon_capable()` tests CAP_PERFMON against the INITIAL user
+namespace and a rootless container's capabilities live in its own, so
+`--privileged` is not a stronger `--cap-add` here, it is the same nothing. And
+that sysctl is not namespaced, so there is no per-container form. This is kernel
+design rather than a podman gap, and the flag surface is a dead end.
 
-So the `bench` service is run ROOTFUL, and only it. That is strictly smaller
-than lowering the sysctl: the permission is scoped to one short,
-deliberately-started container instead of being left on for the whole machine,
-and it writes nothing to /etc.
+Two answers were written down here before the right one and both were wrong.
+"Lower the sysctl" leaves unprivileged profiling on for every process on the
+machine, permanently, to fix one benchmark script. "Run bench rootful" needs
+sudo, and avoiding root is the reason for podman in the first place. Nathan
+rejected both, and the second rejection is what forced the actual question:
+counters were never the goal, INSTRUCTION COUNTS were. See D59, which gets them
+without perf, without privilege and more accurately than perf ever did.
 
-    sudo -E podman compose -f docker-compose.yml run --rm bench <cmd>
+Still genuinely blocked: `perf record` SAMPLING in `harness/profile-sonic.sh`,
+which answers "which function holds the cycles". callgrind emits per-address
+costs and the label-mapping code in that script could consume them, but nobody
+has written it. Wall-clock measurement and the test suite are unaffected
+throughout.
 
-Rootful podman keeps a SEPARATE image store, so the first such run rebuilds the
-image or needs `podman image scp sonic-scheme:dev root@localhost::`.
 
-USERSPACE COUNTING IS NOT AN ESCAPE, recorded so nobody spends an afternoon
-rediscovering it. valgrind/callgrind counts instructions exactly and needs no
-kernel PMU, and it counted the gcc reference fine at 75,208,916 -- but it
-reported **zero** for our own binary and died with `vex amd64->IR: unhandled
-instruction bytes: 0xC5 0xF8 0x92 0xC8`. That is `kmovw k1, eax`, an AVX-512
-opmask instruction, and `runtime.ss` emits it in the PROLOGUE -- so every binary
-this compiler produces carries AVX-512 from its entry point, whether or not the
-program vectorizes. Valgrind's VEX cannot decode AVX-512, and QEMU's TCG does
-not implement it either, so callgrind and qemu-user instruction counting are
-both dead on arrival for our output. Ubuntu's qemu is additionally built without
-TCG plugin support (`qemu: unknown option 'plugin'`), which would have been the
-other way in.
+---
 
-`sonic_assert_perf` in `tools/container.sh` now detects the whole situation and
-prints the remedy, because the underlying failure is a bare EPERM that reads
-like a file-permission problem and whose real cause is three layers away.
-Wall-clock measurement and the test suite are unaffected throughout.
+## D59 -- the runtime required AVX-512 of every program, which cost portability and all instrumentation
+
+`runtime.ss` set the three-lane predicate mask in the image prologue --
+`mov rax, 7; kmovw k1, rax` -- unconditionally, for every binary this compiler
+emits. The reasoning for doing it once per image rather than once per function
+was sound and still is: nothing we emit writes a k register, we produce a static
+binary and call no external code, so no ABI convention can take k1 away. What
+was wrong is the "always".
+
+`kmovw` is AVX-512. So a hello-world with no vector work anywhere in it came out
+as a binary that faults on any machine without AVX-512. That is the x86
+counterpart of precisely what the RISC-V smoke gate exists to catch -- depending
+on something the target may not have -- and nothing was checking for it on the
+target we actually run on.
+
+IT ALSO COST US EVERY USERSPACE INSTRUMENTATION TOOL, which is how it was found.
+With the host at `perf_event_paranoid=4` (D58) there are no hardware counters,
+so instruction counts had to come from simulation instead. Both candidates died
+in the prologue, before a single line of the program ran:
+
+    valgrind/callgrind   I refs: 0, "vex amd64->IR: unhandled instruction
+                         bytes: 0xC5 0xF8 0x92 0xC8"
+    qemu-x86_64          uncaught target signal 4 (Illegal instruction)
+
+Those bytes are the `kmovw`. Valgrind's VEX does not decode AVX-512 and QEMU's
+TCG does not implement it, so one dead instruction made the entire class of
+tooling unusable on our output. Removing it by hand and rebuilding fannkuch:
+same answer (8629, 30), callgrind counted 199,436,247, qemu ran it correctly.
+
+So the mask is now emitted only when the image contains a three-lane
+instruction. `listing-uses-three-lane?` in `vec-x86-64.ss` answers that from the
+finalized code; it is conservative by construction, saying yes for every
+mnemonic in the table including the two shapes that are not actually predicated,
+because a spurious mask costs two instructions once at entry while a missing one
+is a wrong answer in a loop. Neither benchmark triggers it today -- nbody uses
+the four-lane unmasked layout that D-era measurement preferred, and fannkuch has
+no vector work at all -- so both now emit AVX-512-free binaries.
+
+THE FLAG IS THREADED, NOT DEFAULTED TWICE, and that is the whole risk of this
+change. `driver.ss` calls `runtime-listing` in two places: once to build the
+image and once to COUNT its instructions, because that count is where the GC
+frame maps start. A listing built with the mask and counted without it shifts
+every map by two -- plausible addresses, all wrong, which is D56 exactly. So it
+is computed once, in a `let`, and passed to both; `runtime-labels` forwards it
+rather than defaulting again; and the default remains #t so any caller that
+cannot answer the question gets a binary that runs everywhere the old ones did.
+`vec-x86-64-test.ss` asserts both directions, that the two listings differ by
+exactly two instructions, and that the default is the masked one.
+
+The payoff is `harness/count-instructions.sh`, and it is a better instrument
+than the one it replaces rather than a fallback. callgrind counts by simulation,
+so the answer is DETERMINISTIC: fannkuch at n=9 returned 199,436,224 three runs
+in a row, exactly. D57 records the standing drifting 1% with the code
+byte-identical and a five-sample perf run reporting +-0.5% where the true range
+was 11.5%; there is no spread here to report. What it does not measure is time
+-- no cache or branch-predictor model -- so it answers "how much work" and never
+"how fast", and wall clock still comes from `measure-fannkuch.sh`. First numbers
+off it, fannkuch n=9: sonic 199,436,224 against gcc -O3 -march=native
+75,208,916, a ratio of 2.65x in instructions retired.
