@@ -88,41 +88,13 @@ sonic_assert_limits() {
     return 0
 }
 
-# Called by the two harness scripts that need hardware counters, once they are
-# already inside the bench container. perf's failure is a bare EPERM that reads
-# like a file-permission problem, and the actual cause is three layers away, so
-# this says which layer.
-sonic_assert_perf() {
-    if perf stat -e instructions true >/dev/null 2>&1; then return 0; fi
-    local par; par=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo '?')
-    cat >&2 <<EOF
-REFUSED: perf_event_open is denied in this container, and no flag fixes it.
-
-  kernel.perf_event_paranoid = $par   (> 2 denies ALL unprivileged perf)
-
-CAP_PERFMON is tested against the INITIAL user namespace, so a rootless
-container cannot hold it -- measured: --cap-add=CAP_PERFMON and even
---privileged still fail. The sysctl is not namespaced, so podman refuses
---sysctl for it. This is kernel design, not a podman gap.
-
-If you want INSTRUCTION COUNTS, you do not need perf at all:
-
-    harness/count-instructions.sh <binary> [args...]
-
-callgrind counts in userspace, needs no capability, and is deterministic --
-the same binary gives the same number exactly, every run.
-
-Only perf-record SAMPLING (profile-sonic.sh, "which function holds the
-cycles") is genuinely blocked. See D58 and D59.
-EOF
-    return 1
-}
-
 # ---------------------------------------------------------------------------
 # Host side.
 # ---------------------------------------------------------------------------
-# $1 is the compose SERVICE (`sonic`, or `bench` for the seccomp exception that
-# perf_event_open needs). The rest is the command.
+# $1 is the compose SERVICE. There is only `sonic` now -- `bench` existed for
+# perf's seccomp exception and nothing opens a perf event any more (D60) -- but
+# it stays a parameter rather than being inlined, so adding a service later does
+# not mean rewriting every call site.
 #
 # The ENTRYPOINT (`timeout 1800`) is NOT overridden. The old call sites passed
 # `--entrypoint bash` and silently gave up the wall-clock guard along with it,
@@ -132,11 +104,23 @@ EOF
 # `-T` allocates no tty, which matters both ways: the emitted programs write raw
 # doubles to stdout (sonic/src/sonic/runtime.ss) and a tty would mangle them,
 # while diff-run.sh needs stdin to carry the program under test.
+# The harness scripts document knobs -- `N=11 REPS=9 harness/measure-fannkuch.sh`
+# -- and neither `docker compose run` nor `podman compose run` forwards the
+# caller's environment. So those knobs silently did nothing across the container
+# boundary: the script re-exec'd inside and read its own defaults, and the run
+# LOOKED fine while ignoring what was asked for. Forwarded explicitly, and only
+# these, so the container's environment stays a known quantity.
+SONIC_ENV_FORWARD="N REPS TOP NBODY"
+
 sonic_run() {
     local service=$1; shift
     local compose; compose=$(sonic_compose) || return 1
-    exec $compose -f "$(sonic_root)/docker-compose.yml" run --rm -T "$service" \
-        /work/tools/container.sh --preflight-exec "$@"
+    local envs=() v
+    for v in $SONIC_ENV_FORWARD; do
+        [ -n "${!v:-}" ] && envs+=(-e "$v=${!v}")
+    done
+    exec $compose -f "$(sonic_root)/docker-compose.yml" run --rm -T "${envs[@]}" \
+        "$service" /work/tools/container.sh --preflight-exec "$@"
 }
 
 # Returns (does nothing) when already inside, so the caller falls through to its

@@ -10,9 +10,15 @@ source "$(dirname "${BASH_SOURCE[0]}")/configs.sh"
 
 N1=${N1:-1000000}
 N2=${N2:-2000000}
-# From PATH inside the `bench` compose service, which carries the
-# seccomp exception perf_event_open needs. See docker-compose.yml.
-PERF=${PERF:-perf}
+# COUNTED BY SIMULATION, NOT BY THE PMU. perf does not work rootless on this
+# host and no container flag reaches it (D58/D60), so counts come from
+# callgrind. For THIS script that is close to a pure win: it was already built
+# on instructions because they are deterministic, and callgrind makes that
+# exactly true rather than nearly so.
+#
+# The cost is wall time -- callgrind runs the program perhaps 50x slower -- and
+# nbody at N=2,000,000 is not a short run to begin with. Lower N1/N2 if you are
+# iterating; the slope cancels startup at any pair.
 
 # WHICH EVENT, and how many samples of it.
 #
@@ -22,16 +28,22 @@ PERF=${PERF:-perf}
 # so the ratio that matters is measured in cycles, as a MEDIAN with the spread
 # printed, because the spread is how you find out the instrument is inadequate.
 #
-#   EVENT=cycles:u REPS=7 harness/measure.sh c-native sonic
+#   REPS=7 harness/measure.sh c-native sonic   (REPS buys nothing: exact)
 #
 # This is what harness/measure-sonic.sh used to do for one configuration. It
 # does it for all of them now, which is the point: a number for SonicScheme that
 # cannot be produced for Chez or gcc is not a comparison.
-EVENT=${EVENT:-instructions:u}
+# REPS defaults to 1 and there is now no reason to raise it: a simulated count
+# is the same integer every time. It is kept so the min/max columns still work
+# if someone wants to prove that to themselves.
 REPS=${REPS:-1}
 
-count() {  # one sample of $EVENT for one run
-    $PERF stat -x, -e "$EVENT" $1 2>&1 >/dev/null | cut -d, -f1
+here_m="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+count() {  # exact instruction count for one run
+    # $1 is a command line, deliberately unquoted so its arguments split -- the
+    # same shape the perf invocation this replaces had.
+    "$here_m/harness/count-instructions.sh" $1 2>/dev/null | cut -f1
 }
 
 # The slope between N1 and N2, sampled REPS times; prints "median min max".

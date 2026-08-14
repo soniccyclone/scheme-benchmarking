@@ -57,7 +57,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # gcc/binutils: the differential assembler oracle for x86-64.
 # binutils-riscv64-linux-gnu + qemu-user: the RISC-V smoke gate.
-# linux-tools: `perf`, for the instruction counts phases 3 and 4 are built on.
+# valgrind: the instruction counts phases 3 and 4 are built on, counted by
+#   simulation because this host has no usable PMU (D58/D60).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         binutils \
@@ -96,18 +97,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
         ca-certificates \
         libelf1 \
-        # perf's runtime deps.
-        # perf itself. `linux-tools-common` pulls `linux-perf`, whose binary
-        # works here even though it is built for a different kernel version --
-        # the counters we need are the architectural ones. The version wrapper
-        # would refuse, so nothing calls `perf` through it.
-        # `linux-perf` NAMED EXPLICITLY: linux-tools-common only RECOMMENDS it,
-        # and --no-install-recommends drops it -- the same trap that silently
-        # left out the riscv64 static libc. Its binary works here despite being
-        # built for a different kernel version, because the counters we need are
-        # the architectural ones; the version wrapper would refuse, so nothing
-        # calls it through the wrapper.
-        linux-perf \
+        # NO `linux-perf`, DELIBERATELY, and do not add it back without a
+        # reason that survives D60. Nothing in this tree opens a perf event:
+        # instruction counts and the by-function profile both come from
+        # callgrind, and wall clock needs neither. On this host perf CANNOT work
+        # rootless whatever flags it is given -- kernel.perf_event_paranoid is 4
+        # and CAP_PERFMON is tested against the INITIAL user namespace -- so
+        # shipping the binary would only offer a tool that fails with a bare
+        # EPERM three layers from its cause. The libraries below stay: they are
+        # small and binutils/objdump link several of them.
         libslang2 \
         libunwind8 \
         libdw1 \

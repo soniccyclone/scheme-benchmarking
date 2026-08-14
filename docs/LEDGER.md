@@ -2020,3 +2020,72 @@ was 11.5%; there is no spread here to report. What it does not measure is time
 "how fast", and wall clock still comes from `measure-fannkuch.sh`. First numbers
 off it, fannkuch n=9: sonic 199,436,224 against gcc -O3 -march=native
 75,208,916, a ratio of 2.65x in instructions retired.
+---
+
+## D60 -- perf is gone from the tree entirely, and the measurements got better
+
+D58 established that perf cannot work rootless on this host and that no
+container flag reaches it. D59 removed the AVX-512 instruction that was blocking
+every simulator. This closes the loop: nothing in this tree opens a perf event
+any more, and the three things perf used to do are each done by something with
+no privilege requirement at all. Two of the three are now strictly better
+measurements, which is not the outcome anyone expects from losing hardware
+counters.
+
+**Instruction counts** (`harness/count-instructions.sh`, and `measure.sh` which
+was built entirely on them). callgrind counts by simulation, so the answer is
+DETERMINISTIC: fannkuch at n=9 returned 199,436,224 three runs in a row,
+exactly. `measure.sh` chose instructions in the first place *because* they are
+deterministic, and this makes that exactly rather than nearly true; its `REPS`
+knob now buys literally nothing and says so.
+
+**The by-function profile** (`harness/profile-sonic.sh`). This is the one that
+improved most, and the header of that script had already written the argument
+for why. It described 7.2% of fannkuch's cycles landing on `flip-prefix`'s
+PROLOGUE, reading as call overhead, and being branch-mispredict SKID -- the
+sampled instruction pointer is not where the cost was incurred, and unpicking
+that cost two wrong findings in one session. A simulator has no skid: cost is
+attributed to the instruction that did the work. It is also exhaustive rather
+than sampled, so a function that never caught a sample stops being invisible.
+And `--branch-sim=yes` reports the mispredicts themselves, correctly attributed,
+which is what that investigation actually wanted. First run on fannkuch n=9
+immediately showed `loop%2.365.loop` at 12.2% of instructions but **29.5% of all
+mispredicts** -- the kind of disproportion the old tool could only hint at.
+
+What is genuinely lost is CYCLES. There is no pipeline model in callgrind, so a
+divider chain and an add cost the same Ir. `measure-fannkuch.sh` therefore reads
+wall clock instead, min-of-nine, which is what D57 already recommended for
+independent reasons -- that argument never depended on which clock was read.
+Cross-validation worth recording: the new wall-clock path puts fannkuch at
+1.23x against gcc, and D57's standing from the perf era was "a little over
+1.2x". Two unrelated instruments, same answer.
+
+The profile output states in its own header that it is instructions and not
+cycles, rather than leaving that to be discovered, because silently swapping the
+metric under a script people already trust is how a wrong conclusion gets an
+authoritative-looking table.
+
+THE PARSER IS CROSS-CHECKED AGAINST CALLGRIND'S OWN ARITHMETIC. Reading that
+format has two silent failure modes: positions use subposition compression
+(`+n`/`-n`/`*` against the previous line) and decoding them as absolutes
+attributes cost to invented addresses, while the cost line after `calls=` is a
+call's INCLUSIVE cost and failing to skip it adds every callee to its caller
+again. Both produce a plausible profile. So the parser sums each event and
+compares against the file's `summary:` line, and refuses to print anything if
+they disagree. Confirmed independently: its mispredict total for n=8 (229,284)
+matches what cachegrind reports for the same binary.
+
+Three pieces of scaffolding went with it. The `bench` compose service existed
+solely to carry `seccomp:unconfined` for `perf_event_open`; nothing needs that
+now, and a service kept for a tool nobody calls is a second way to run things
+waiting for someone to pick it. `linux-perf` is out of the image for the same
+reason -- shipping a binary that fails with a bare EPERM three layers from its
+cause is worse than not shipping it. And `sonic_assert_perf` is gone.
+
+Found while porting: **the documented knobs never crossed the container
+boundary.** `N=11 REPS=9 harness/measure-fannkuch.sh` re-execs itself inside a
+container, and neither `docker compose run` nor `podman compose run` forwards
+the caller's environment, so the script read its own defaults and produced a run
+that looked fine while ignoring what was asked for. `tools/container.sh` now
+forwards an explicit list (`N REPS TOP NBODY`) -- explicit rather than
+wholesale, so the container's environment stays a known quantity.

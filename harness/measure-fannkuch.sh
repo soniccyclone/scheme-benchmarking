@@ -31,19 +31,10 @@
 set -uo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 
-# NOTHING RUNS ON THE HOST -- the hard rule in CLAUDE.md. `bench` is the `sonic`
-# service plus the seccomp exception perf_event_open needs; see
-# docker-compose.yml.
-#
-# THAT EXCEPTION IS NO LONGER SUFFICIENT ON THIS HOST. Seccomp was the only
-# blocker while `kernel.perf_event_paranoid` was 2; this host ships 4, under
-# which perf_event_open needs CAP_PERFMON -- which a ROOTLESS container cannot
-# hold, since that capability is tested against the initial user namespace.
-# Run the bench service rootful; sonic_assert_perf below says how. See D58.
+# NOTHING RUNS ON THE HOST -- the hard rule in CLAUDE.md. The ORDINARY service:
+# this no longer opens a perf event, so it needs no seccomp exception. See D60.
 . "$here/tools/container.sh"
-sonic_reexec bench bash /work/harness/measure-fannkuch.sh "$@"
-
-sonic_assert_perf || exit 1
+sonic_reexec sonic bash /work/harness/measure-fannkuch.sh "$@"
 
 N=${N:-11}
 # NINE, NOT FIVE. Five samples can miss an outlier entirely: see LEDGER D57,
@@ -96,22 +87,42 @@ echo "  gcc:  $b"
 # with the container doing the compiling, so a sample can land while it is
 # busy; that moves the median and not the min. A min that moves is a real
 # change, a median that moves might be the neighbours. LEDGER D57.
-report() {  # $1 = label, $2 = cmd, $3 = event
-  local samples=()
+#
+# WALL CLOCK, NOT `perf stat -e cycles:u`. perf does not work rootless on this
+# host and no container flag reaches it (D58), so cycles are simply unavailable.
+# Wall clock is the honest replacement rather than a lesser one: D57's whole
+# recommendation was already min-of-nine on a noisy measurement, and that
+# argument does not depend on which clock is read. What is lost is the exclusion
+# of kernel time, which is why the min matters more here, not less.
+time_report() {  # $1 = label, $2 = cmd
+  local samples=() t0 t1
   for _ in $(seq "$REPS"); do
-    samples+=("$(perf stat -x, -e "$3" $2 2>&1 >/dev/null | cut -d, -f1)")
+    t0=$(date +%s%N); $2 >/dev/null 2>&1; t1=$(date +%s%N)
+    samples+=("$((t1 - t0))")
   done
   printf '%s\n' "${samples[@]}" | sort -n |
     awk -v n="$1" '{v[NR]=$1}
-                   END{printf "  %-10s min %14d  median %14d  (%+.2f%% spread)\n",
-                              n, v[1], v[int((NR+1)/2)],
+                   END{printf "  %-10s min %10.3f ms  median %10.3f ms  (%+.2f%% spread)\n",
+                              n, v[1]/1e6, v[int((NR+1)/2)]/1e6,
                               100*(v[NR]-v[1])/v[int((NR+1)/2)]}'
 }
 
+# INSTRUCTIONS, EXACTLY, FROM ONE RUN. callgrind counts by simulation, so the
+# answer is deterministic and repetitions buy nothing -- nine runs would return
+# the same integer nine times. This is the measurement that got BETTER when perf
+# went away: D57 records a five-sample perf run reporting +-0.5% where the true
+# range was 11.5%, and there is no spread here at all.
+insn_report() {  # $1 = label, $2 = binary
+  local n
+  n=$("$here/harness/count-instructions.sh" "$2" | cut -f1) || return 1
+  awk -v n="$1" -v i="$n" 'BEGIN{printf "  %-10s %16d instructions\n", n, i}'
+}
+
 echo
-echo "fannkuch-redux n=$N, total, $REPS repetitions"
-for ev in cycles:u instructions:u; do
-  echo "--- $ev ---"
-  report c-native "$BUILD/fkref" "$ev"
-  report sonic    "$BUILD/fk"    "$ev"
-done
+echo "fannkuch-redux n=$N"
+echo "--- wall clock, $REPS repetitions ---"
+time_report c-native "$BUILD/fkref"
+time_report sonic    "$BUILD/fk"
+echo "--- instructions retired (simulated, exact, one run) ---"
+insn_report c-native "$BUILD/fkref"
+insn_report sonic    "$BUILD/fk"

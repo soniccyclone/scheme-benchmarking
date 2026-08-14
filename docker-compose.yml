@@ -48,11 +48,17 @@ services:
     # may allocate a tty and mangle them.
     tty: false
 
-  # PERF DOES NOT WORK ON THIS HOST, AND NO CONTAINER FLAG FIXES IT.
-  # kernel.perf_event_paranoid is 4 here, which denies perf_event_open to every
-  # unprivileged process -- not just hardware events; `task-clock` fails
-  # identically. Measured, all EACCES, because the error is a bare EPERM that
-  # names none of this:
+  # NO `bench` SERVICE ANY MORE, and the reason is worth keeping.
+  #
+  # It existed for one thing: `seccomp:unconfined`, because the default profile
+  # denies perf_event_open. Nothing in this tree opens a perf event now (D60) --
+  # instruction counts and the by-function profile both come from callgrind,
+  # which needs no capability and no seccomp exception, and wall clock needs
+  # neither. A service kept for a tool nobody calls is a second way to run
+  # things waiting for someone to pick it.
+  #
+  # DO NOT ADD IT BACK EXPECTING perf TO WORK. On this host it cannot, and no
+  # container flag changes that. Measured, all EACCES:
   #
   #     seccomp unconfined                  rootless   EACCES
   #     + --cap-add=CAP_PERFMON             rootless   EACCES
@@ -60,28 +66,5 @@ services:
   #     --sysctl kernel.perf_event_paranoid=2          REFUSED (not namespaced)
   #
   # `perfmon_capable()` tests CAP_PERFMON against the INITIAL user namespace and
-  # a rootless container's capabilities live in its own, so --privileged is not
-  # a stronger --cap-add here; it is the same nothing. Do not spend another
-  # afternoon on this flag surface.
-  #
-  # INSTRUCTION COUNTS DO NOT NEED PERF: harness/count-instructions.sh uses
-  # callgrind, which counts by simulation in userspace, needs no capability, and
-  # is DETERMINISTIC -- the same binary gives the same number exactly, which is
-  # a better answer than perf gave even when perf worked (D57: 11.5% spread).
-  # That path only became possible once the runtime stopped emitting AVX-512
-  # unconditionally; see D59.
-  #
-  # The seccomp exception below is kept because it is still NECESSARY (it is the
-  # first of the two gates above), just no longer sufficient. What remains
-  # genuinely blocked is `perf record` SAMPLING in harness/profile-sonic.sh --
-  # "which function holds the cycles" -- for which callgrind is a plausible
-  # replacement nobody has written yet.
-  #
-  # It stays a separate service regardless: the suite keeps the tight default
-  # seccomp profile, because the suite runs constantly and is where a compiler
-  # bug shows up first, while a benchmark run is short and human-started.
-  bench:
-    extends:
-      service: sonic
-    security_opt:
-      - seccomp:unconfined
+  # a rootless container's capabilities live in its own, so `--privileged` is
+  # not a stronger `--cap-add` here; it is the same nothing.
