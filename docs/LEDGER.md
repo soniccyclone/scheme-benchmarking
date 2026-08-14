@@ -2089,3 +2089,49 @@ the caller's environment, so the script read its own defaults and produced a run
 that looked fine while ignoring what was asked for. `tools/container.sh` now
 forwards an explicit list (`N REPS TOP NBODY`) -- explicit rather than
 wholesale, so the container's environment stays a known quantity.
+
+---
+
+## D61 -- the container had quietly cut the oracle from 19 configurations to 9
+
+Milestone 1's acceptance is "nbody compiles, runs, and passes all three oracle
+checks", and check 2 is the eleven-way bit-exact cross-agreement that D24 calls
+the strongest correctness evidence this project has. The argument for it is
+specific: an unsound abstract domain deletes a check that was needed, and the
+symptom is a value that is only SLIGHTLY wrong. Nothing else we run would catch
+that; agreement across independent implementations of the same algorithm will.
+
+Pinning the toolchain in a container (D30) silently reduced that check to the
+nine configurations whose compilers happened to already be in the image --
+`sonic`, two C builds and six Chez variants. `racket-1/2a/2b/4`, `sbcl-5`,
+`ecl-9`, `clisp-9` and `ada-8-checked/named/all` could not run at all, because
+racket, sbcl, ecl, clisp and gnat were never added to the Dockerfile. The SOURCES
+were all still there in `bench/nbody`; only the compilers were missing, so
+nothing looked broken. `harness/compile.sh` would have said `[FAIL]` for those
+ten, and nothing was calling it.
+
+That is the failure mode this whole container exercise keeps rediscovering: a
+check that silently stops checking looks exactly like a check that passes. It is
+the same shape as `deploy.resources.limits.memory` (D30), as
+`timeout --signal=KILL` (the Dockerfile), as `command -v scheme` skipping the
+smoke gate's compile and exiting green (D58), and as the harness knobs that never
+crossed the container boundary (D60). Five instances now, all silent, all found
+by going and looking rather than by anything failing.
+
+All five toolchains are packaged in Ubuntu 25.10, so the fix was the Dockerfile
+and nothing else. `gnat-15` is named EXPLICITLY rather than the `gnat`
+metapackage, which pulls 14: `harness/configs.sh` calls `gnatmake-15` by version
+on purpose, and unversioned `gnatmake` would build against whatever happened to
+be installed -- exactly the drift the image exists to prevent. 15 also matches
+the gcc the C configurations use.
+
+Verified after the change: **19 of 19 configurations agree at nine decimals**,
+-0.169075164 and -0.169087605 at N=1000. Every Scheme variant, ours included,
+agrees bit-for-bit at 17 significant digits.
+
+MILESTONE 1 IS MET, on all three checks and now on the whole matrix rather than
+half of it. At the published N of 50,000,000 SonicScheme prints
+-0.16907516382852447 and -0.16905990681396785 against METHOD.md's -0.169075164
+and -0.169059907: exact at the nine decimals the oracle states. Energy drifts
+1.5e-5 over fifty million steps and does not do so monotonically, which is the
+conservation check. Run time 3.18s.

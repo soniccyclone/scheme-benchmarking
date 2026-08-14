@@ -77,6 +77,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # and the failure reads like a codegen bug.
         libc6-dev-riscv64-cross \
         qemu-user \
+        # THE OTHER TEN nbody CONFIGURATIONS. Oracle check 2 is eleven-way
+        # bit-exact cross-agreement, which D24 calls the strongest correctness
+        # evidence this project has -- an unsound abstract domain shows up as a
+        # value that is only slightly wrong, and agreement across independent
+        # implementations is what catches that. Pinning the toolchain silently
+        # cut that check to the nine configurations whose compilers happened to
+        # already be here (sonic, two C builds, six Chez variants); the other
+        # ten could not run at all. The SOURCES were never missing, only the
+        # compilers, so this is the whole fix.
+        racket \
+        sbcl \
+        ecl \
+        clisp \
+        # gnat-15 EXPLICITLY, not the `gnat` metapackage: that one pulls 14, and
+        # harness/configs.sh calls `gnatmake-15` by version on purpose -- the
+        # same pinning argument the rest of this file rests on. Unversioned
+        # `gnatmake` would build against whatever happened to be installed,
+        # which is the drift the container exists to prevent. 15 also matches
+        # the gcc the C configurations are built with.
+        gnat-15 \
         # INSTRUCTION COUNTS WITHOUT THE PMU. This host runs
         # kernel.perf_event_paranoid=4, under which perf_event_open is denied to
         # every unprivileged process -- and CAP_PERFMON is tested against the
