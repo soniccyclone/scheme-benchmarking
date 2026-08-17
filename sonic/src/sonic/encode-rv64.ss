@@ -148,6 +148,10 @@
   (define op-load-fp #b0000111)
   (define op-store-fp #b0100111)
   (define op-fp      #b1010011)
+  ;; SYSTEM. Needed because a runtime cannot exit or write without a syscall,
+  ;; and `ecall` was absent from this encoder -- which is a prerequisite for
+  ;; bead 1mp.6 that sizing the RV64 gap by counting what EXISTS did not reveal.
+  (define op-system  #b1110011)
 
   ;; Rounding mode `dyn`, i.e. take the mode from fcsr. This is what gcc emits
   ;; for ordinary double arithmetic and it is what the differential test pins:
@@ -176,6 +180,10 @@
       (and   r ,op-op #b111 #b0000000)
       (mul   r ,op-op #b000 #b0000001)
       (div   r ,op-op #b100 #b0000001)
+      ;; SYSTEM: (ecall), no operands. Fixed word 0x00000073 -- rd, rs1,
+      ;; funct3 and imm are all zero. Linux/RV64 takes the syscall number
+      ;; in a7 and arguments in a0-a5.
+      (ecall system ,op-system #b000)
       ;; register-immediate: (op rd rs1 imm)
       (addi  i ,op-imm #b000)
       (slti  i ,op-imm #b010)
@@ -297,6 +305,8 @@
         ((i)     (arity! 3) (enc-i (car f) (cadr f)
                                  (gpr-number (car ops)) (gpr-number (cadr ops))
                                  (simm12 who (caddr ops))))
+        ;; Every field is zero, so this takes no operands and reads none.
+        ((system) (arity! 0) (enc-i (car f) (cadr f) 0 0 0))
         ((shift) (arity! 3) (enc-shift (car f) (cadr f) (caddr f)
                                      (gpr-number (car ops)) (gpr-number (cadr ops))
                                      (shamt6 who (caddr ops))))

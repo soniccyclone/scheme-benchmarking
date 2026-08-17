@@ -277,7 +277,11 @@
 ;; because the immediates are the interesting part: signs, both ends of every
 ;; range, and branches in both directions.
 (define coverage-listing
-  '(;; RV64I / RV64M register-register
+  '(;; SYSTEM. No operands, every field zero. Verified here rather than trusted
+    ;; because a fixed word is exactly the kind of encoding it is easy to
+    ;; transcribe confidently and wrongly.
+    (ecall)
+    ;; RV64I / RV64M register-register
     (add   a0 a1 a2)   (sub   t0 t1 t2)   (mul  s2 s3 s4)   (div  t3 t4 t5)
     (slt   a7 s7 t6)   (sltu  a1 a2 a3)   (xor  s11 s10 s9) (and  a4 a5 a6)
     (or    a4 a5 a6)   (sll   a0 a1 a2)   (srl  a0 a1 a2)   (sra  a0 a1 a2)
