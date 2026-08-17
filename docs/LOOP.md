@@ -61,9 +61,13 @@ opposite of nbody's diagnosis (D37).
 
 ## The queue, in dependency order
 
-105 of 114 closed. What remains is THREE decisions and the work gated behind
-them, plus one open bug that is actionable now. E1, E2, E4, E6-M3 and E7 are
-closed; every pass in the tree now has a test.
+107 of 115 closed. **Everything that remains needs a decision from Nathan.**
+E1, E2, E4, E6-M3 and E7 are closed; every pass in the tree has a test; the
+audit below has been run to exhaustion.
+
+All six decision beads carry the `human` label, so `bd human list` shows them
+directly rather than requiring a dig through notes. Each one is posed with its
+evidence gathered and its cost sized — none is waiting on more measurement.
 
 ### Waiting on Nathan — do not decide these autonomously
 
@@ -104,6 +108,22 @@ more adjacency, and adjacency is already found, so it does not help.
 to a shipping pass and its payoff is unknown, so it is Nathan's call, not the
 loop's.
 
+**`1mp.6` — the driver has no RV64 target path.** Filed this session while
+checking whether M4 could close. `compile-sonic` hardcodes `'x86-64` at every
+stage and takes no target argument, so **no Scheme program has ever been compiled
+to RV64**. What exists is an ENCODER target: `rv64-selector` is a full 588-line
+backend, and `regs`/`finalize`/`object` all handle rv64, exercised by
+`rv64-test.ss` and a smoke gate that reads our own output back through
+`riscv64-linux-gnu-objdump` — but on a HAND-WRITTEN body passed to
+`assemble-function`. So every "tested on both targets" claim means the back-end
+machinery is tested on both targets.
+
+Missing: the runtime entry listing, an `EM_RISCV` image in `elfexec.ss`
+(`e_machine` is hardcoded `0x3e`), and a driver target argument. Both code-level
+gaps refuse LOUDLY, which is why this was never a live hazard. D76: the old
+justification — "an RV64 runtime written blind would be validated by nothing" —
+expired when the container gained qemu-riscv64 for instruction counting.
+
 **`xei` (E3) — the acceptance names an artifact that does not exist**, a
 hand-written core fixture. parse-test.ss does something stronger and passes.
 Reword or add the fixture.
@@ -116,28 +136,28 @@ does not implement it.
 
 ### Actionable without a decision
 
-Nothing. All remaining beads are the decisions above or gated behind them.
+**Nothing.** This was worked to exhaustion over eight loop iterations. What that
+consumed, so it is not re-run:
 
-`qaq.11` — the 6.17% instrument disagreement — is **closed** (D72). It was our
-own counter: `objdump` wraps any instruction longer than 7 bytes onto a
-continuation line carrying an address but no mnemonic, and `qemu-count.sh`
-counted that as a second instruction, so every instruction of 8+ bytes was
-double-counted on every execution. Both instruments now agree to the hundredth
-on both binaries.
+- every open bead audited individually (that is what found `qaq.6`'s criterion
+  testing gcc rather than us, and `1mp.6` as an untracked gap)
+- the instrument disagreement chased to root cause (D68→D72)
+- both baseline bugs found and fixed (D69, D70)
+- the four-lane route table completed by measurement (D73)
+- a sweep for EXPIRED PREMISES — claims true when written and falsified by an
+  unrelated change. Three found and fixed: D74, D76, and `analyze.ss`'s "there
+  is no reader". Everything else checked out.
+- a sweep of every doc for stale standing numbers after D69/D70 changed them.
+  Clean — no user-facing doc carried a wrong claim.
 
-Two things from it are worth carrying forward:
-
-- **`harness/count-diff.sh` exists now.** It diffs the two counters PER ADDRESS.
-  When two measurements disagree, this turns "these totals differ" into "they
-  differ at this address", which is the only form of the question that is
-  answerable. Reach for it before theorising.
-- **Validate an instrument on the thing you intend to measure.** The counter had
-  been cross-checked against gcc's output and agreed perfectly — because gcc's
-  binary contains none of the long-instruction forms that trigger the bug. A
-  check run where the difference cannot appear is worse than no check: it
-  produces documented confidence. Third instance in the ledger (D57, D61, D72).
-- **Any qemu-sourced instruction figure predating D72 is wrong** by an amount
-  that varies per binary. Re-measure; do not scale.
+**`1mp.6` — the RV64 driver gap** (filed this session) is the one bead that is
+*work* rather than a wording call, and it is still not the loop's to take:
+writing an entry sequence and ELF writer for a second architecture is a feature,
+and which target this project spends time on is a priorities question. It is
+well-posed now — see D76: the hard parts (selection, allocation, encoding,
+object emission) all exist, only the runtime listing, an `EM_RISCV` image, and a
+driver target argument are missing, and the container's qemu-riscv64 means the
+result can be validated by running it.
 
 ## Definition of done, per kind of bead
 
