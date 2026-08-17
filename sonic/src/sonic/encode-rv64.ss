@@ -348,8 +348,20 @@
 
   ;; -> a list of 4 bytes, little-endian, which is the only endianness RISC-V
   ;; defines for instruction fetch regardless of the data endianness.
+  ;; THE WHOLE INSTRUCTION IN THE MESSAGE, not just the operand that offended.
+  ;; `gpr-number` and friends raise with the bad value alone -- "not an RV64
+  ;; integer register (#f)" -- which says nothing about WHICH instruction, and a
+  ;; compile of any size then gives you a needle and no haystack. Re-raising
+  ;; here with the instruction attached costs nothing on the success path and is
+  ;; the difference between a five-minute search and a one-line answer.
   (define (encode-instr instr)
-    (let ((w (encode-word instr)))
+    (let ((w (guard (e (#t (error 'encode-instr
+                                  (string-append
+                                   (if (message-condition? e) (condition-message e) "encoding failed")
+                                   " -- in instruction")
+                                  (if (irritants-condition? e) (condition-irritants e) '())
+                                  instr)))
+               (encode-word instr))))
       (list (bitwise-and w #xff)
             (bitwise-and (ash w -8) #xff)
             (bitwise-and (ash w -16) #xff)

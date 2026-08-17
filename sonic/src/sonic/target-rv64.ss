@@ -117,9 +117,29 @@
 
   ;; base + idx*scale into the scratch, then the memory instruction. Three
   ;; instructions where x86-64 needs zero: see note 1 at the top.
+  ;;
+  ;; AN ABSENT INDEX IS `#f`, and it has to be handled rather than shifted.
+  ;; That is how this tree spells a base-only address everywhere -- x86-64
+  ;; writes `(mem base #f 1 disp)` and its encoder simply omits the SIB index.
+  ;; Here the index went straight into `slli`, so a base-only access emitted
+  ;; `(slli t0 #f 3)` and the encoder refused it with "not an RV64 integer
+  ;; register (#f)" -- naming the operand and not the instruction, which is a
+  ;; separate defect now fixed in encode-rv64.ss.
+  ;;
+  ;; It survived because nothing had ever selected a memory access on real IR
+  ;; for this target: rv64-test.ss and the smoke gate drive `assemble-function`
+  ;; with HAND-WRITTEN bodies, which by construction never contain `#f`. That is
+  ;; the same shape as the note further down this file about the lowered store
+  ;; -- "it survived because the RV64 selector died on the call sequence first".
+  ;; Each gap hides the next one behind it.
+  ;;
+  ;; A move rather than nothing, because the callers load from the scratch with
+  ;; their own displacement and must not be made to special-case the base.
   (define (address-into scratch base idx sc)
-    (list `(slli ,scratch ,idx ,(log2-scale (class-scale sc)))
-          `(add ,scratch ,base ,scratch)))
+    (if idx
+        (list `(slli ,scratch ,idx ,(log2-scale (class-scale sc)))
+              `(add ,scratch ,base ,scratch))
+        (list `(addi ,scratch ,base 0))))
 
   (define (arity-check! who n srcs)
     (unless (= (length srcs) n)
