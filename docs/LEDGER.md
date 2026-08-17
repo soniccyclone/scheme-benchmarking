@@ -2250,8 +2250,16 @@ column rather than presenting one number type.
 
     sonic, c-scalar, chez     callgrind
     sbcl-5                    qemu, validated by the two-N check
-    racket-4, ecl-9           qemu answers; not validated, both too slow under
-                              nochain to check inside ten minutes
+    racket-4, ecl-9           qemu answers a single count; the two-N check
+                              cannot be run. Measured: neither completes a pair
+                              at N=5 against N=20 inside 400 seconds per point,
+                              because `nochain` disables translation-block
+                              chaining and that is most of QEMU's speed. So
+                              their counts are UNVALIDATED and must not be
+                              quoted -- not because the numbers look wrong, but
+                              because the one check that distinguishes a
+                              measurement from a truncated log cannot be
+                              afforded on them
     clisp-9                   NEITHER
     c-native                  NEITHER, and this one has consequences
 
