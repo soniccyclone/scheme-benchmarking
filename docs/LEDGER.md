@@ -2386,3 +2386,66 @@ with a bootstrap CI of [-0.0027, 0.0045] and marked it "real" -- a negative
 per-step time, from timing "No such file or directory" twice. It preflights now.
 Placing that check took three attempts because `$?` inside the `$( ... )` that
 captures timing is a subshell, and so is `slopes`; only the main loop is not.
+
+---
+
+## D66 -- the four-lane gap is an IR LEVEL, not a missing analysis, and two attempts proved it the hard way
+
+D65 measured the first route to 256-bit packing and found it 1.60x slower. This
+records the second, which does not work at all, and the diagnosis both failures
+share -- because the diagnosis is the useful part and neither attempt found it by
+reasoning.
+
+**ATTEMPT TWO: OFFSET-TABLE ADJACENCY.** `slp.ss`'s `store-at` decides four
+stores are adjacent by requiring them to name the SAME index vreg, differing only
+in a literal offset. Across bodies that never holds -- body i uses `bi`, body i+1
+uses `bj` -- so I taught it to resolve each index through a table mapping
+`dst -> (root . constant)`, the same computation `addrfold.ss` does, gated behind
+`four-lane-packing?` so nothing shipping could change. Gate off: suite
+bit-identical. Gate on: `ymm=0`. With the unroll budget raised as well: still
+`ymm=0`, identical to gate-off.
+
+It cannot work, and the reason is arithmetic. An offset table relates indices
+computed as root PLUS A LITERAL. Within one body that resolves `bi+1` and `bi+2`
+to root `bi`, which `store-at` already had by vreg identity, so it buys nothing.
+Bridging bodies means relating `bi = 3i` to `bj = 3(i+1) = 3i+3`, which is
+reasoning through a MULTIPLY. `addrfold` does not do it and neither did my table.
+REVERTED rather than left in: a shipping pass carrying a gated path that never
+fires is the dead-code shape this project keeps finding.
+
+**THE DIAGNOSIS BOTH FAILURES SHARE.** `slp.ss` imports only `(chezscheme)` and
+`(sonic order)`. It runs on Lmach, AFTER lowering, where `3i` is a `mul` and every
+connection to the loop's induction variable is gone. At that level there is
+nothing left that says two index vregs are affine in one counter. Padding
+sidesteps the problem by paying for a fourth store; an offset table cannot
+recover it. **The gap is which facts survive to which IR level, not a missing
+analysis.**
+
+**AND THE FACTS DO EXIST, ONE LEVEL UP.** `vectorize.ss` imports `(sonic loops)`
+and reads `iv-coeff` and `iv-offset` off an induction variable to build
+`(base coeff offset)`. `loops.ss` exports the whole affine vocabulary --
+`loop-ivs`, `iv-base`, `iv-coeff`, `iv-offset`, `iv-step`, `iv-span`,
+`loop-iv-ref`. That is exactly what relating `3i` to `3i+3` requires, and it is
+why that pass states its linearization as a FACT ABOUT THE LOOP rather than
+searching for adjacency.
+
+**AND THE TARGET IR EXISTS.** `lang.ss` has `p4add p4sub p4mul p4div p4splat`,
+the `-c` contraction spellings, `p4fma`/`p4fnma`, and `p4load`/`p4store`;
+`target-x86-64.ss` lowers all of them (`p4add` -> `v4addpd`, `p4mul` ->
+`v4mulpd`). No pass emits one: the only producers today are `contract.ss` fusing
+a pair and the selector table itself.
+
+**SO THE REMAINING WORK IS AN EMISSION TARGET.** vectorize.ss has the premises,
+Lmach has the operations, the selector has the rules, and the allocator already
+handles packed values as ordinary `raw-f64` vregs because that is how pairs work.
+What is missing is that `vec-x86-64.ss` and `vec-rv64.ss` hand back a LISTING with
+physical registers already chosen -- unwireable for the reason bead 1mp.4 records
+-- instead of vectorize.ss emitting Lmach `p4` ops. Keep those emitters: they
+carry the RVV length-agnostic path D22 wants, and nothing in an Lmach route
+serves RV64 until Lmach grows length-agnostic vector ops.
+
+Three routes, and the state of each: padded layout WORKS and costs 1.60x;
+offset-table adjacency DOES NOT FIRE; Lmach emission from vectorize.ss is
+UNATTEMPTED and is the only one that pays for the width in neither stores nor
+traffic. c-native is 256-bit and 1.15x faster than us, so the width is still
+worth having.
