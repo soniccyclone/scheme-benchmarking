@@ -156,6 +156,8 @@ test-suite:
 	@$(CHEZ) -q $(LIBS) --script test/shapes-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/elemrange-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/dce-test.ss
 
 clean:
 	@find . -name '*.so' -delete
