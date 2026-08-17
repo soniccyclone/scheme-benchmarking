@@ -2576,3 +2576,52 @@ message** from an instrument declining. Third time this project has had a check
 fail for a reason other than the one it named (D57's drift, D61's dropped
 configs) — the pattern is that a diagnostic which cannot distinguish two causes
 will be read as the more interesting one.
+
+## D69 — the `vs-C` column was never vs C
+
+`measure.sh` printed a ratio column headed `vs-C` and took its baseline from
+whichever configuration was measured **first**:
+
+```
+base=""
+...
+[ -z "$base" ] && base="$per"
+```
+
+The default `CONFIGS` list begins with `sonic`. So every table this has ever
+printed divided by sonic while claiming to divide by C. For a project whose
+entire question is whether we beat C, that is the one column that must not lie.
+
+What it looked like, and why it survived: sonic showed `1.00x` and c-scalar
+`0.99x`, which reads as "we have drawn level with C". Corrected, with the
+baseline actually being C:
+
+```
+sonic                664.00      1.02x    callgrind
+c-scalar             654.00      1.00x    callgrind
+```
+
+We are at 1.02x C's instruction count, not level with it. The ratio was also
+inverted relative to its own label — `0.99x` was `c-scalar/sonic`.
+
+The baseline is now computed before the header is printed and the header is
+built from it, so the label cannot drift from the arithmetic again: `BASELINE`
+if set, else `c-scalar` when it is in the run, else the first config — the old
+behaviour, now stated rather than implied. A baseline that fails to measure
+prints `--` and a warning instead of silently falling back to the first
+configuration that happened to work.
+
+**A second bug fell out of the rewrite, and it is worth recording because the
+mechanism is not obvious.** Buffering the per-config results to a file and
+reading them back with `while IFS=$'\t' read -r c per ins why` loses empty
+fields: **tab is IFS whitespace**, so `read` collapses runs of delimiters and
+drops leading ones. A refused row written as `c-native\t\t\tmessage` came back
+with the message sitting in the *per-step* field, which then tested non-empty
+and was printed as though it were a measurement — the row rendered as a refusal
+followed by a stray ratio column. The separator is now ASCII 0x1f, which is not
+IFS whitespace, so empty fields survive.
+
+That is the same failure shape as D68's path bug and D57's drift: the code did
+something defensible, the output was wrong in a way that read as a different
+problem entirely, and only an incoherent *number* — 0.93x against a baseline
+that was supposedly itself — exposed it.

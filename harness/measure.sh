@@ -55,30 +55,85 @@ here_m="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 #
 # It also picks the instrument -- callgrind first, because every instruction
 # figure in the ledger came from it, then qemu-count for the four
-# managed-runtime Lisps it crashes on -- and says which one answered. A
-# callgrind number and a qemu number agree to about 1% at scale and NOT exactly,
-# so the column is there to stop the two being read as interchangeable.
+# managed-runtime Lisps it crashes on -- and says which one answered.
+#
+# THAT COLUMN IS A WARNING, NOT A FOOTNOTE. An earlier version of this comment
+# said the two instruments "agree to about 1% at scale". Measured (D68), by
+# slope so startup cancels: exact on gcc's output, 6.17% on ours. So a ROW
+# COUNTED BY ONE INSTRUMENT AND A ROW COUNTED BY THE OTHER DO NOT FORM A VALID
+# RATIO, and the vs- column across such a pair is not meaningful.
+#
+# Set SONIC_INSTRUMENT=qemu (or callgrind) to force one across the whole table,
+# which is what a milestone comparison needs -- qemu being the only instrument
+# that runs sbcl, racket, ecl or clisp at all.
 #
 # REPS is gone. A simulated count is the same integer every time; repeating it
 # measured nothing and only made the table slower.
 
-printf '%-12s %14s %10s %12s\n' config per-step vs-C instrument
-printf '%-12s %14s %10s %12s\n' ------ -------------- ---------- ------------
+# THE BASELINE IS NAMED IN THE HEADER, AND IT IS COMPUTED, NOT ASSUMED. This
+# column said `vs-C` while the code below took the baseline from whichever
+# config happened to be measured FIRST. The default CONFIGS list starts with
+# `sonic`, so every table this has ever printed compared against sonic under a
+# header claiming C -- which for a project whose whole question is "do we beat
+# C" is the one column that must not lie. c-scalar reading 0.93x is incoherent
+# if you believe the header, and that incoherence is what gave it away.
+#
+# BASELINE picks it explicitly; otherwise c-scalar when it is in the run, since
+# that is the comparison the ledger is written around; otherwise the first
+# config, which is the old behaviour and is now stated rather than implied.
+run_configs="${*:-$CONFIGS}"
+if [ -n "${BASELINE:-}" ]; then
+    base_cfg="$BASELINE"
+else
+    base_cfg=$(printf '%s\n' $run_configs | grep -x c-scalar || printf '%s\n' $run_configs | head -1)
+fi
 
-base=""
-for c in ${*:-$CONFIGS}; do
+# MEASURE EVERYTHING FIRST, THEN PRINT. The ratio needs the baseline, and the
+# baseline is no longer guaranteed to be the first row -- but measuring in one
+# pass and printing in another also avoids counting the baseline TWICE, which a
+# two-pass version would have done. That is free with callgrind and emphatically
+# not with qemu: sbcl under full QEMU logging is minutes, not seconds.
+results=$(mktemp)
+trap 'rm -f "$results"' EXIT
+
+# ASCII UNIT SEPARATOR, NOT TAB, AND THAT IS NOT FUSSINESS. Tab is IFS
+# WHITESPACE, so `read` collapses runs of it and drops empty fields entirely:
+# a refused row written as `c-native\t\t\tmessage` came back with the MESSAGE
+# sitting in the per-step field, which then tested non-empty and printed as a
+# measurement. The row rendered as a refusal followed by a stray ratio column.
+# 0x1f is not IFS whitespace, so empty fields survive.
+US=$(printf '\037')
+
+for c in $run_configs; do
     out=$("$here_m/harness/count-slope.sh" "$N1" "$N2" "$(cfg_run "$c" @N)" 2>&1)
     per=$(printf '%s' "$out" | awk -F'\t' '/instructions\/step/ {print $1}')
     ins=$(printf '%s' "$out" | awk -F'\t' '/instructions\/step/ {print $3}')
-    if [ -z "$per" ]; then
-        # The refusal, not a blank. Which one it was matters: "no instrument
-        # could count this" and "the count did not change with the work" are
-        # different failures and only the second implies a broken measurement.
-        why=$(printf '%s' "$out" | sed -n 's/^REFUSED: //p' | head -1)
-        printf '%-12s  %s\n' "$c" "${why:-measurement failed}"
-        continue
-    fi
-    [ -z "$base" ] && base="$per"
-    rel=$(awk -v p="$per" -v b="$base" 'BEGIN{printf "%.2fx", p/b}')
-    printf '%-12s %14s %10s %12s\n' "$c" "$per" "$rel" "$ins"
+    # The refusal, not a blank. Which one it was matters: "no instrument could
+    # count this" and "the count did not change with the work" are different
+    # failures and only the second implies a broken measurement.
+    why=$(printf '%s' "$out" | sed -n 's/^REFUSED: //p' | head -1)
+    printf '%s%s%s%s%s%s%s\n' "$c" "$US" "$per" "$US" "$ins" "$US" "${why:-measurement failed}" >> "$results"
 done
+
+base=$(awk -F'\037' -v b="$base_cfg" '$1==b {print $2}' "$results")
+
+printf '%-12s %14s %10s %12s\n' config per-step "vs-${base_cfg}" instrument
+printf '%-12s %14s %10s %12s\n' ------ -------------- ---------- ------------
+
+# A BASELINE THAT DID NOT MEASURE MUST NOT SILENTLY BECOME SOMETHING ELSE. The
+# old code fell back to the first config that happened to work, which is how a
+# mislabelled ratio survives a failed run without anyone noticing.
+if [ -z "$base" ]; then
+    printf 'NO BASELINE: %s did not measure, so no ratio is shown.\n' "$base_cfg" >&2
+fi
+
+while IFS=$US read -r c per ins why; do
+    if [ -z "$per" ]; then
+        printf '%-12s  %s\n' "$c" "$why"
+    elif [ -z "$base" ]; then
+        printf '%-12s %14s %10s %12s\n' "$c" "$per" "--" "$ins"
+    else
+        rel=$(awk -v p="$per" -v b="$base" 'BEGIN{printf "%.2fx", p/b}')
+        printf '%-12s %14s %10s %12s\n' "$c" "$per" "$rel" "$ins"
+    fi
+done < "$results"
