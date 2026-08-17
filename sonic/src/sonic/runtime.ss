@@ -118,6 +118,25 @@
   (define sys-write 1)
   (define sys-exit  60)
 
+  ;; Linux RV64 syscall numbers, which are the GENERIC UNISTD set and share no
+  ;; values with x86-64's: write is 64 rather than 1, exit is 93 rather than 60.
+  ;; Reusing the x86 numbers on RV64 does not fail cleanly -- 60 is `sched_...`
+  ;; territory there -- so they are named separately rather than parameterised.
+  (define rv64-sys-write 64)
+  (define rv64-sys-exit  93)
+
+  ;; RISC-V materialises a 32-bit address as `lui` of the high 20 bits plus
+  ;; `addi` of the low 12. The low half is SIGN-EXTENDED by addi, so when it has
+  ;; bit 11 set the high half must be incremented to compensate. Every address
+  ;; this runtime uses today has a small low half and would work without the
+  ;; adjustment, which is exactly why it is done properly here rather than left
+  ;; as a latent trap for the first constant that does not.
+  (define (lo12 a)
+    (let ((l (bitwise-and a #xfff)))
+      (if (>= l 2048) (- l 4096) l)))
+  (define (hi20 a)
+    (bitwise-and (ash (+ a 2048) -12) #xfffff))
+
   ;; Exit codes, one per trap, so a failure names itself in $?.
   (define exit-ok             0)
   (define exit-type-error     101)
@@ -851,33 +870,55 @@
   ;; does not know whether the image vectorizes gets the mask and a binary that
   ;; runs everywhere the old ones did. Only driver.ss, which HAS the finalized
   ;; code and can therefore answer the question, passes #f.
+  ;; --- the RV64 entry sequence ----------------------------------------------
+  ;;
+  ;; MINIMAL, AND ONLY SAFE BECAUSE THE GAPS FAIL LOUDLY. This establishes the
+  ;; nil register, the heap pointer and an empty command line, calls the entry
+  ;; point, and exits. It does NOT provide the 39 helper routines the x86-64
+  ;; listing carries -- no %cons, no %make-flvector, no %box-flonum, no number
+  ;; formatting, and it does not populate %gcmeta.
+  ;;
+  ;; That is not a silent limitation. Compiled code calls those helpers BY
+  ;; LABEL, so a program needing one fails at label resolution with the name it
+  ;; wanted, rather than running and producing wrong numbers. A partial runtime
+  ;; that linked would be the dangerous version of this; one that refuses to
+  ;; link is merely incomplete. Allocation is what pulls in %gcmeta, and
+  ;; allocation cannot link, so the unpopulated cell is unreachable rather than
+  ;; wrong.
+  ;;
+  ;; gp holds nil here, per regs.ss: RISC-V has no segment registers, so nil
+  ;; gets a dedicated register the way it does on arm64. That is the analogue
+  ;; of r15 in the x86-64 listing above.
+  (define (rv64-listing entry)
+    `(_start
+      (addi gp zero ,sonic-null)
+      ;; heap-pointer-cell <- heap-base-address
+      (lui  t0 ,(hi20 heap-base-address))
+      (addi t0 t0 ,(lo12 heap-base-address))
+      (lui  t2 ,(hi20 heap-pointer-cell))
+      (sd   t0 t2 ,(lo12 heap-pointer-cell))
+      ;; command-line-cell <- '(), so `command-line` answers rather than faults.
+      ;; The x86-64 listing walks argv here; nothing that needs the list can
+      ;; link on RV64 yet, so an empty list is the honest placeholder.
+      (lui  t2 ,(hi20 command-line-cell))
+      (sd   gp t2 ,(lo12 command-line-cell))
+      ;; A BARE SYMBOL, not `(label ...)`. The two targets spell a label
+      ;; reference differently and object.ss resolves them separately: x86-64
+      ;; rewrites `(label L)` to `(rel n)`, while the RV64 arm looks for a
+      ;; SYMBOL in the last operand of a branchy instruction. Using the x86
+      ;; spelling here got `(label main.entry1)` all the way to the encoder,
+      ;; which rejected it as "jal displacement is not an even offset" -- the
+      ;; complaint of something handed a list where it wanted a number.
+      (jal  ra ,entry)
+      (addi a0 zero ,exit-ok)
+      (addi a7 zero ,rv64-sys-exit)
+      (ecall)))
+
   (define (runtime-listing target entry . opt)
     (let ((lane-mask? (if (null? opt) #t (car opt))))
       (case target
         ((x86-64) (x86-64-listing entry lane-mask?))
-        ((rv64)
-         ;; THE SECOND HALF OF THIS REASON EXPIRED. It used to say an RV64
-         ;; runtime "written blind would be validated by nothing", which was
-         ;; true when the container had no RISC-V emulator. It does now:
-         ;; qemu-riscv64 10.1.0 is installed and runs cross-compiled binaries
-         ;; (verified end to end -- riscv64-linux-gnu-gcc builds a static
-         ;; binary, qemu-riscv64 runs it). So an RV64 runtime CAN be validated
-         ;; exactly the way the x86-64 one is: emit, run, compare the energies
-         ;; against SPEC.md.
-         ;;
-         ;; The refusal stands because the runtime is still unwritten, not
-         ;; because writing it would be unverifiable. See bead 1mp.6, which
-         ;; inventories what a full RV64 path still needs -- this listing, an
-         ;; EM_RISCV image in elfexec.ss, and a target argument on the driver.
-         ;; Everything else (selection, regalloc, encoding, object emission)
-         ;; already exists and is tested.
-         (error 'runtime-listing
-                (string-append
-                 "no RV64 runtime yet. Selection, allocation, encoding and "
-                 "object emission all handle rv64; what is missing is this "
-                 "entry listing. It CAN be validated by running the result "
-                 "under qemu-riscv64, which the container has. See 1mp.6")
-                target))
+        ((rv64) (rv64-listing entry))
         (else (error 'runtime-listing "unknown target" target)))))
 
   ;; The flag is forwarded, not defaulted again: labels are OFFSETS, and a label

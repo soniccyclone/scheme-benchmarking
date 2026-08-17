@@ -2998,3 +2998,60 @@ to decide it. What does not change is the validation route: qemu-riscv64 makes i
 checkable against SPEC.md exactly as x86-64 is. Estimating a remainder by sizing
 the part already built is its own small lesson — the same error shape as
 validating an instrument on the binary that cannot exercise it (D72).
+
+## D77 — a Scheme program runs on RISC-V
+
+D75 recorded that "tested on both targets" meant the back-end machinery, because
+no Scheme program had ever been compiled to RV64. One can now:
+
+```
+0:  addi gp,zero,23         nil register = sonic-null
+8:  addi t0,t0,1088 # 0x600440   heap-base-address
+10: sd   t0,0(t2)   # 0x600000   heap-pointer-cell
+18: sd   gp,16(t2)  # 0x600010   command-line = '()
+1c: jal  ra,0x2c                 into the compiled function
+28: ecall                        exit(0), a7=93
+2c: addi sp,sp,-16               the compiled function's prologue
+```
+
+Four prerequisites had to land first, and **each was found by trying, not by
+reading** — the sizing in D76 missed all but the first:
+
+1. **`ecall` was absent from the encoder.** No syscall, so no exit and no output.
+2. **`build-executable` refused non-x86-64**, and `e_machine` was hardcoded.
+3. **The driver had no target argument**, so RV64 could not be requested at all.
+4. **`slp.ss` packed unconditionally**, emitting `p2add`/`p2splat` that only
+   x86-64 can lower — nbody died in selection until SLP was gated.
+
+**The runtime is minimal and that is safe only because the gaps fail loudly.**
+It establishes the nil register, heap pointer and an empty command line, calls
+the entry point and exits. It provides none of the 39 helpers. Compiled code
+calls those BY LABEL, so a program needing one fails at link time naming what it
+wanted — `undefined label (%make-flvector)` for nbody. A partial runtime that
+*linked* would be the dangerous version; one that refuses to link is merely
+incomplete. Allocation is what pulls in `%gcmeta`, and allocation cannot link, so
+the unpopulated cell is unreachable rather than wrong.
+
+**Two bugs in my own work, both from defaults.** `listing-size` and
+`label-offset` were given `'x86-64` defaults when the target was threaded
+through; called without one on an RV64 listing they measured every instruction
+with the x86 sizer, and the compile died in the x86 encoder with *"no encoding
+for this mnemonic (addi)"* — a real RV64 mnemonic, reported by the wrong encoder,
+which reads like a missing instruction rather than a missing argument. The
+defaults are now errors. Separately, the runtime spelled its call target
+`(label entry)`, which is the **x86** convention: `object.ss` rewrites that to
+`(rel n)` for x86-64, while its RV64 arm looks for a bare SYMBOL in the last
+operand of a branchy instruction. The x86 spelling reached the encoder intact
+and was rejected as a bad displacement.
+
+**Exit 0 is a weak claim and is not left alone.** The runtime exits `exit-ok`
+unconditionally, so a program that never ran would also exit 0. Two things give
+it teeth: corrupting the `jal` target makes the process die with SIGILL rather
+than exiting quietly, and the paired assertion requires that a program needing a
+helper *fails to link, naming it*. Together they show the pipeline discriminating
+between what the runtime provides and what it does not.
+
+The RV64 ladder now reads: bytes match binutils → objdump reads our output back →
+the kernel runs our image → **the kernel runs our compiled program**. What
+remains for a useful RV64 target is the helper set, and nbody names the first one
+it wants.

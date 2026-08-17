@@ -201,7 +201,7 @@
                      ;; label carries the padding. A sign mask is a 128-bit SSE
                      ;; operand and `xorpd` FAULTS on an unaligned one, which is
                      ;; how `flneg` alone came to segfault.
-                     (code-size (listing-size listing))
+                     (code-size (listing-size listing target))
                      (pad (- (pool-offset-for code-size) code-size))
                      (extra (cons
                              ;; The maps sit immediately after the pool, which
@@ -253,7 +253,7 @@
                                            (list (cons 'constants pool)
                                                  (cons 'extra-labels extra)
                                                  (cons 'frame-bits-at fb-at))))
-                     (start (label-offset listing '_start))
+                     (start (label-offset listing '_start target))
                      ;; THE METADATA GOES IN. It was computed here and thrown
                      ;; away: `assemble-function` hangs the GC stack maps on
                      ;; the function object and this call took only the code.
@@ -482,18 +482,25 @@
                         ((efacts) (element-ascent settled)))
             (call-with-values (lambda () (interval-ascent efacts)) drop3)))))
 
+  ;; NO DEFAULT TARGET. A default here is not a convenience, it is a silent
+  ;; wrong answer: called without one on an RV64 listing, this measured every
+  ;; instruction with the x86-64 sizer and the compile died in the x86 encoder
+  ;; with "no encoding for this mnemonic (addi)" -- a genuine RV64 mnemonic,
+  ;; reported by the wrong encoder, which reads like a missing instruction
+  ;; rather than a missing argument.
   (define listing-size
     (case-lambda
-      [(listing) (listing-size listing 'x86-64)]
+      [(listing) (error 'listing-size "a target is required" 'listing-size)]
       [(listing target)
        (let loop ((xs listing) (pc 0))
          (cond ((null? xs) pc)
                ((symbol? (car xs)) (loop (cdr xs) pc))
                (else (loop (cdr xs) (+ pc (instruction-size target (car xs)))))))]))
 
+  ;; NO DEFAULT TARGET, for the same reason as listing-size above.
   (define label-offset
     (case-lambda
-      [(listing name) (label-offset listing name 'x86-64)]
+      [(listing name) (error 'label-offset "a target is required" name)]
       [(listing name target)
        (let loop ((xs listing) (pc 0))
          (cond ((null? xs) (error 'label-offset "no such label in the listing" name))

@@ -542,18 +542,56 @@
 (let ((msg (guard (e (#t (condition-message e)))
              (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs 'rv64)
              "compiled, which it cannot yet do")))
-  (ck! "a real program reaches the RV64 RUNTIME, i.e. everything before it handles rv64"
-       (and (string? msg)
-            (>= (string-length msg) 8)
-            (string=? (substring msg 0 8) "no RV64 ")))
-  ;; THE CONTROL. If this passed too, the assertion above would be matching a
-  ;; generic failure rather than the specific frontier.
-  (ck! "and it is NOT failing in selection any more"
+  ;; THE FRONTIER MOVES, AND THIS ASSERTION MOVED WITH IT. It first read "must
+  ;; fail in the RUNTIME, not in selection", which was right when there was no
+  ;; RV64 runtime at all. Writing one pushed nbody PAST that point and this
+  ;; failed -- correctly. The frontier is now label resolution, and what
+  ;; matters is unchanged: the failure must be specific and must name what is
+  ;; missing, rather than being a generic refusal somewhere upstream.
+  (ck! "nbody on rv64 fails in LINKING, not in selection: everything earlier handles it"
        (not (and (string? msg)
                  (let loop ((i 0))
                    (cond ((> (+ i 6) (string-length msg)) #f)
                          ((string=? (substring msg i (+ i 6)) "select") #t)
-                         (else (loop (+ i 1))))))))) 
+                         (else (loop (+ i 1)))))))))
+
+;;; --- a compiled Scheme program, on RV64, executed -------------------------
+;;;
+;;; THE FIRST TIME A SCHEME PROGRAM RUNS ON THIS TARGET. The assertions above
+;;; climb a ladder: our bytes match binutils, then our IMAGE runs (exit 42 from
+;;; three hand-written instructions), then a real program reaches the runtime
+;;; boundary. This is the top of it -- source, through the whole pipeline, to a
+;;; process the kernel ran.
+;;;
+;;; EXIT 0 IS A WEAK CLAIM ON ITS OWN and is not left to stand alone. The
+;;; runtime exits with `exit-ok` unconditionally, so a program that never
+;;; executed would also exit 0. The second assertion is what gives it teeth: a
+;;; program needing a runtime helper must FAIL TO LINK, naming the helper. If
+;;; both hold, the pipeline is discriminating between what the runtime provides
+;;; and what it does not, rather than accepting everything.
+(if (not qemu-available?)
+    (display "  SKIP qemu-riscv64 absent; the compiled RV64 program is not run\n")
+    (let ((out "/tmp/sonic-rv64-tiny"))
+      (ck! "a Scheme program compiles to RV64 and the kernel runs it"
+           (guard (e (#t #f))
+             (compile-sonic-to-file "test/rv64-tiny.sps" '() out 'rv64)
+             (system (string-append "chmod +x " out))
+             (zero? (system (string-append "qemu-riscv64 " out)))))
+      ;; THE BOUNDARY, and the control on the assertion above. nbody needs
+      ;; %make-flvector, which the minimal runtime does not define. It must fail
+      ;; at LABEL RESOLUTION, naming what it wanted -- a partial runtime that
+      ;; linked and produced wrong numbers is the dangerous version of this.
+      (ck! "and one needing a runtime helper fails to link, naming the helper"
+           (let ((msg (guard (e (#t (format "~a ~s" (condition-message e)
+                                            (condition-irritants e))))
+                        (compile-sonic "../bench/nbody/config-sonic.sps"
+                                       nbody-externs 'rv64)
+                        "compiled, which it cannot yet do")))
+             (and (string? msg)
+                  (let loop ((i 0))
+                    (cond ((> (+ i 14) (string-length msg)) #f)
+                          ((string=? (substring msg i (+ i 14)) "%make-flvector") #t)
+                          (else (loop (+ i 1))))))))))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
