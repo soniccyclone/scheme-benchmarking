@@ -10,7 +10,8 @@
 
 (import (chezscheme) (rnrs io simple)
         (sonic lang) (sonic fixtures) (sonic select)
-        (sonic regs) (sonic target-rv64) (sonic encode-rv64) (sonic litpool) (sonic numeric))
+        (sonic regs) (sonic target-rv64) (sonic encode-rv64) (sonic litpool)
+        (sonic numeric) (sonic elfexec))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -474,6 +475,55 @@
                  ;; for it, and binutils prints the real mnemonic under
                  ;; -M no-aliases.
                  '("addi" "mul" "add" "slli" "add" "fld" "fsgnj.d" "jalr")))))
+
+;;; --- an RV64 image that the kernel actually runs -------------------------
+;;;
+;;; EVERY OTHER RV64 CHECK IN THIS TREE INSPECTS AN ARTIFACT. The differential
+;;; test above compares our bytes to binutils, and the smoke gate reads our
+;;; output back through objdump. Both are real, and both stop short of the only
+;;; claim that catches a wrong header: that the kernel loads the file and the
+;;; program does what it says.
+;;;
+;;; run-x86-64-test.ss carried the reason this did not exist -- "x86-64 only,
+;;; because this machine is x86-64". The container has qemu-riscv64 now, so
+;;; that reason has expired the same way the two in D74 and D76 did.
+;;;
+;;; exit(42): a0 is the status, a7 is 93 (SYS_exit on the generic unistd ABI
+;;; RISC-V uses), and ecall makes the call. Small enough to be obviously right,
+;;; and it exercises the whole chain: our encoder, our ELF writer, and a real
+;;; loader. It fails if e_machine, e_flags, the entry address, or the program
+;;; headers are wrong -- none of which the byte-level tests can see.
+(define qemu-available?
+  (zero? (system "qemu-riscv64 --version >/dev/null 2>&1")))
+
+(if (not qemu-available?)
+    (begin
+      (display "  SKIP qemu-riscv64 absent; the RV64 image is not executed\n")
+      (display "       (byte-level checks above still ran)\n"))
+    (let* ((code (u8-list->bytevector
+                  (encode-listing '((addi a0 zero 42)
+                                    (addi a7 zero 93)
+                                    (ecall)))))
+           (img (build-executable 'rv64 code (make-bytevector 0)
+                                  elf-text-vaddr #x600000 4096))
+           (path "/tmp/sonic-rv64-exit42"))
+      (write-executable path img)
+      (system (string-append "chmod +x " path))
+      (ck! "an RV64 image we emit is loaded and run by the kernel, and exits 42"
+           (= 42 (system (string-append "qemu-riscv64 " path))))
+      ;; THE CONTROL. Without it, "exits 42" would also pass if qemu failed to
+      ;; start the program and something returned 42 by accident.
+      (ck! "and a different status really does come back different"
+           (let* ((c2 (u8-list->bytevector
+                       (encode-listing '((addi a0 zero 7)
+                                         (addi a7 zero 93)
+                                         (ecall)))))
+                  (i2 (build-executable 'rv64 c2 (make-bytevector 0)
+                                        elf-text-vaddr #x600000 4096))
+                  (p2 "/tmp/sonic-rv64-exit7"))
+             (write-executable p2 i2)
+             (system (string-append "chmod +x " p2))
+             (= 7 (system (string-append "qemu-riscv64 " p2)))))))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)

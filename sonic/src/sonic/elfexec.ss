@@ -83,22 +83,21 @@
     (+ text-file-offset (pool-offset-for code-size) pool-size))
 
   (define (build-executable/meta target code pool entry data-va data-sz meta)
-    ;; ONLY x86-64 IS EMITTED AS A RUNNABLE IMAGE, and the missing pieces for
-    ;; RV64 are small and known: the e_machine below is hardcoded EM_X86_64
-    ;; (0x3e) where RV64 needs EM_RISCV (0xf3), and the entry listing does not
-    ;; exist yet (runtime.ss refuses for the same reason).
+    ;; BOTH TARGETS EMIT A RUNNABLE IMAGE NOW. The layout below is identical for
+    ;; the two -- two PT_LOAD segments, no sections -- so the only things that
+    ;; vary are e_machine and e_flags.
     ;;
-    ;; The old wording here said RV64 "is verified by the smoke gate and run
-    ;; under qemu from an object", which undersells what is available: the
-    ;; container has qemu-riscv64 10.1.0, so a full RV64 IMAGE would be
-    ;; runnable and checkable against the oracle, not merely disassemblable.
-    ;; Nothing blocks that except the two gaps above. See bead 1mp.6.
-    (unless (eq? target 'x86-64)
-      (error 'build-executable
-             "only x86-64 is emitted as a runnable image; RV64 needs EM_RISCV
-              here and an entry listing in runtime.ss. Both are tracked by
-              bead 1mp.6, and the result would be runnable under qemu-riscv64"
-             target))
+    ;; e_flags IS NOT COPIED FROM GCC, and that is deliberate. A static binary
+    ;; from riscv64-linux-gnu-gcc carries 0x5 = EF_RISCV_RVC |
+    ;; EF_RISCV_FLOAT_ABI_DOUBLE. We emit 0x4: the double-float ABI is ours, but
+    ;; the RVC bit would claim compressed instructions, and encode-rv64.ss
+    ;; deliberately does not emit the C extension. Setting it would not break
+    ;; execution, which is exactly why it is worth getting right -- the header
+    ;; would simply describe a file we did not produce.
+    ;;
+    ;; x86-64 keeps e_flags 0, which is what gcc emits there.
+    (unless (memq target '(x86-64 rv64))
+      (error 'build-executable "no image writer for this target" target))
     (let* ((code-size (bytevector-length code))
            (pool-size (bytevector-length pool))
            (pool-at (pool-offset-for code-size))
@@ -125,12 +124,14 @@
              '(2 1 1 0)                             ; 64-bit, LSB, version, SysV
              '(0 0 0 0 0 0 0 0)                     ; padding
              (u16 2)                                ; ET_EXEC
-             (u16 #x3e)                             ; EM_X86_64
+             (u16 (if (eq? target 'rv64) #xf3 #x3e)) ; EM_RISCV / EM_X86_64
              (u32 1)                                ; version
              (u64 entry)
              (u64 elf-header-size)                  ; e_phoff
              (u64 0)                                ; e_shoff: no sections
-             (u32 0)                                ; e_flags
+             ;; e_flags: RV64 declares the double-float ABI (0x4) and NOT
+             ;; EF_RISCV_RVC, because we emit no compressed instructions.
+             (u32 (if (eq? target 'rv64) #x4 0))
              (u16 elf-header-size)
              (u16 ph-entry-size) (u16 ph-count)
              (u16 0) (u16 0) (u16 0)))              ; no section headers

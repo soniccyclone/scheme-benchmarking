@@ -8,9 +8,17 @@
 ;;; skipped its epilogue and leaked a frame per iteration. Nothing that reads
 ;;; the output can see that. Only running it can.
 ;;;
-;;; x86-64 only, because this machine is x86-64. The RISC-V smoke gate covers
-;;; the other target as far as "binutils reads it back", which is a weaker claim
-;;; and is honestly labelled as one.
+;;; x86-64 only, because the RV64 target has no runtime yet (bead 1mp.6) and so
+;;; no compiled PROGRAM to run. The reason used to be "because this machine is
+;;; x86-64", which stopped being the binding constraint when the container
+;;; gained qemu-riscv64: rv64-test.ss now emits an RV64 image through our own
+;;; encoder and ELF writer, and the kernel loads and runs it. That is a real
+;;; execution check, on a three-instruction program rather than a compiled one.
+;;;
+;;; So the ladder for RV64 is: bytes match binutils (rv64-test.ss), objdump
+;;; reads our output back (the smoke gate), the kernel runs our image
+;;; (rv64-test.ss). What is still missing, and what this file would cover, is a
+;;; compiled Scheme program -- which needs the runtime listing.
 
 (import (chezscheme) (nanopass)
         (sonic lang) (sonic read) (sonic expand) (sonic parse) (sonic policy)
