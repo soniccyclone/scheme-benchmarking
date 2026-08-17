@@ -83,10 +83,23 @@ slopes() {
     echo "${vals[@]}"
 }
 
-base=""
-printf 'slope of N=%s to N=%s, %s reps, baseline %s\n\n' "$N1" "$N2" "$REPS" "$BASELINE"
-printf '%-14s %12s  %s\n' config ns/step 'bootstrap 95% CI on ratio vs baseline'
-printf '%-14s %12s  %s\n' -------------- ------------ -------------------------------------
+# BASELINE NAMES THE BASELINE, AND NOW IT ALSO IS ONE. It was printed in the
+# header and never used in the arithmetic: the ratio came from `[ -z "$base" ]
+# && base="$s"`, i.e. whichever configuration was measured FIRST. The default
+# CONFIGS list begins with sonic while BASELINE defaults to c-scalar, so every
+# table this has produced divided by sonic under a header claiming C. Same bug
+# D69 records in measure.sh, in the script that prints the headline wall-clock
+# numbers AND their confidence intervals.
+#
+# It shows up as a row saying "(baseline)" that is not the row the header names,
+# which is how it was caught: `BASELINE=sbcl-5 bench.sh sonic sbcl-5` printed
+# "baseline sbcl-5" above a table marking SONIC as the baseline.
+#
+# MEASURE FIRST, THEN PRINT, because the baseline need not be the first row and
+# a ratio cannot be formed before its divisor exists.
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+US=$(printf '\037')
 
 for c in ${*:-$CONFIGS}; do
     # PREFLIGHT, IN THE MAIN SHELL. Timing a command that does not exist yields
@@ -99,23 +112,52 @@ for c in ${*:-$CONFIGS}; do
     # a subshell cannot reach this loop. Two earlier attempts put it in each of
     # them and both still reported a number for a missing binary.
     if ! eval "$(cfg_run "$c" "$N1")" >/dev/null 2>&1; then
-        printf '%-14s  refused: the command does not run\n' "$c"
+        printf '%s%s%s%s%s\n' "$c" "$US" "" "$US" "refused: the command does not run" >> "$work/rows"
         continue
     fi
     s=$(slopes "$c")
     [ -z "$s" ] && {
-        printf '%-14s  refused: all samples rejected as parallel\n' "$c"
+        printf '%s%s%s%s%s\n' "$c" "$US" "" "$US" "refused: all samples rejected as parallel" >> "$work/rows"
         continue; }
     med=$(printf '%s\n' $s | tr ' ' '\n' | sort -n | awk '{a[NR]=$1} END{print (NR%2)?a[(NR+1)/2]:(a[NR/2]+a[NR/2+1])/2}')
     # A NON-POSITIVE PER-STEP TIME IS NOT A RESULT. More work cannot take less
     # time, so a slope at or below zero means the measurement is measuring
     # something else -- a failing command, or an N the program ignores.
     if awk -v m="$med" 'BEGIN{exit !(m <= 0)}'; then
-        printf '%-14s  refused: per-step time %s is not positive\n' "$c" "$med"
+        printf '%s%s%s%s%s\n' "$c" "$US" "" "$US" "refused: per-step time $med is not positive" >> "$work/rows"
         continue
     fi
-    if [ -z "$base" ]; then base="$s"; ci="(baseline)"
-    else ci=$(printf '%s\n%s\n' "$base" "$s" | awk -f "$HERE/bootstrap.awk"); fi
-    note=""; [ "${REJECTED:-0}" -gt 0 ] && note=" [${REJECTED} rejected as parallel]"
-    printf '%-14s %12s  %s%s\n' "$c" "$med" "$ci" "$note"
+    printf '%s\n' "$s" > "$work/samples.$c"
+    printf '%s%s%s%s%s\n' "$c" "$US" "$med" "$US" "" >> "$work/rows"
 done
+# THE "[n rejected as parallel]" NOTE IS GONE, AND IT NEVER PRINTED. It read
+# ${REJECTED:-0}, which `slopes` sets -- but `slopes` is invoked as $(slopes
+# "$c"), so the assignment happens in a subshell and cannot reach here. REJECTED
+# was therefore always 0 and the note was always empty. Same subshell trap this
+# harness has hit four times; removed rather than left looking like a feature.
+# Filed as a bead to surface the count through slopes' OUTPUT, which is the fix
+# that actually works.
+
+printf 'slope of N=%s to N=%s, %s reps, baseline %s\n\n' "$N1" "$N2" "$REPS" "$BASELINE"
+printf '%-14s %12s  %s\n' config ns/step 'bootstrap 95% CI on ratio vs baseline'
+printf '%-14s %12s  %s\n' -------------- ------------ -------------------------------------
+
+# THE NAMED BASELINE, OR NO RATIOS AT ALL. Falling back to another config here
+# is what produced a table whose header and whose arithmetic disagreed, so a
+# baseline that did not measure now costs the ratio column and says so.
+basefile="$work/samples.$BASELINE"
+[ -f "$basefile" ] || printf 'NO BASELINE: %s did not measure, so no ratios are shown.\n\n' "$BASELINE" >&2
+
+while IFS=$US read -r c med why; do
+    if [ -n "$why" ]; then
+        printf '%-14s  %s\n' "$c" "$why"
+    elif [ ! -f "$basefile" ]; then
+        printf '%-14s %12s  %s\n' "$c" "$med" "--"
+    elif [ "$c" = "$BASELINE" ]; then
+        printf '%-14s %12s  %s\n' "$c" "$med" "(baseline)"
+    else
+        ci=$(printf '%s\n%s\n' "$(cat "$basefile")" "$(cat "$work/samples.$c")" \
+             | awk -f "$HERE/bootstrap.awk")
+        printf '%-14s %12s  %s\n' "$c" "$med" "$ci"
+    fi
+done < "$work/rows"

@@ -2625,3 +2625,66 @@ That is the same failure shape as D68's path bug and D57's drift: the code did
 something defensible, the output was wrong in a way that read as a different
 problem entirely, and only an incoherent *number* — 0.93x against a baseline
 that was supposedly itself — exposed it.
+
+## D70 — the same baseline bug in `bench.sh`, where the confidence intervals live
+
+D69 fixed `measure.sh`. `bench.sh` had it too, and worse: `BASELINE` was printed
+in the header and **never used in the arithmetic**.
+
+```
+BASELINE=${BASELINE:-c-scalar}
+...
+printf 'slope of N=%s to N=%s, %s reps, baseline %s\n\n' ... "$BASELINE"
+...
+if [ -z "$base" ]; then base="$s"; ci="(baseline)"
+```
+
+`BASELINE` was a label. The divisor was whichever configuration measured first.
+The default `CONFIGS` begins with `sonic` and `BASELINE` defaults to `c-scalar`,
+so every wall-clock table — the headline numbers, with their bootstrap CIs —
+divided by sonic while naming C.
+
+**How it was caught**, and this is the useful part: `BASELINE=sbcl-5` produced
+
+```
+slope of N=1000000 to N=2000000, 40 reps, baseline sbcl-5
+sonic               65.5925  (baseline)
+sbcl-5              374.805  ratio 5.7142  95% CI [5.4236, 5.8631]  real
+```
+
+A row marked `(baseline)` that is not the row the header names. The ratio itself
+was arithmetically fine — 5.71 really is sbcl/sonic — so nothing looked wrong
+unless you read the two labels against each other. That is the same signature as
+D69: defensible code, a number that is not false so much as *not the number the
+column claims*, and only an internal inconsistency to give it away.
+
+Corrected, `BASELINE=sbcl-5`:
+
+```
+sonic               96.1343  ratio 0.1715  95% CI [0.1654, 0.1821]  real
+sbcl-5              560.399  (baseline)
+```
+
+A baseline that fails to measure now costs the ratio column and says so, rather
+than falling back to another configuration — the fallback is what let the header
+and the arithmetic disagree in the first place.
+
+**The standing this exposes.** With the baseline actually being C:
+
+```
+sonic               98.2211  ratio 1.0507  95% CI [0.9926, 1.0979]  no detected difference
+c-scalar            93.4793  (baseline)
+```
+
+Wall clock: statistically indistinguishable from scalar C, the interval
+straddling 1.0. Instructions: 1.02x (D69). Those two agree, which is the first
+time the two instruments have told a consistent story about where we actually
+stand against C.
+
+**Removed, not fixed:** the `[n rejected as parallel]` note. It read
+`${REJECTED:-0}`, assigned inside `slopes()`, which is called as `$(slopes "$c")`
+— a subshell, so it never reached the caller. Always 0, always empty. Filed as
+qaq.12. That is the **fifth** subshell assignment to vanish in this harness
+(measure.sh `COUNTER`, count-slope.sh `INSTRUMENT`, bench.sh `rc` and
+`FAILED_WHY`, now `REJECTED`); in these scripts a value crossing a `$( )`
+boundary travels in stdout, never in a variable.
