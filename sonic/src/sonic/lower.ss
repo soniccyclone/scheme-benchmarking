@@ -418,9 +418,21 @@
   (define (emit-block! lbl instrs transfer)
     (record-classes! (reverse instrs))
     (set! blocks (cons (list lbl (list 'block (reverse instrs) transfer)) blocks)))
+  ;; THE COUNTER RESETS, so a compile's output does not depend on how many
+  ;; compiles preceded it in this process. It used not to, and the same source
+  ;; could CRASH on compile #1 and succeed on #2 -- the second one's names
+  ;; started wherever the first stopped, stepping over the register-name
+  ;; collision that `fresh!` now skips outright.
+  ;;
+  ;; Resetting it looked unsafe for a while: with the reset added, `(if #f 7 9)`
+  ;; compiled to 7 against Chez's 9. That belonged to an ABANDONED fix beside
+  ;; it, not to the reset -- spelling virtuals `k.7` collided with essa's `.ddd`
+  ;; SSA suffix, which `base-of` strips. With the register-name skip instead,
+  ;; the reset is clean: suite green, and three compiles of one source give
+  ;; byte-identical images (asserted in run-x86-64-test.ss).
   (define (reset-blocks!)
       (reset-classes!)
-      (reset-params!) (set! blocks '()))
+      (reset-params!) (set! counter 0) (set! blocks '()))
 
   ;; --- what class is a vreg in --------------------------------------------
   ;;

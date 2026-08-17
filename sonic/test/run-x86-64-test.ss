@@ -1343,10 +1343,35 @@
     (close-port p))
   (compile-sonic-to-file src '(display newline) a)
   (compile-sonic-to-file src '(display newline) b)
+  ;; IDEMPOTENCE IS STRUCTURAL NOW, not luck. lower.ss's name counter used not to
+  ;; reset, so a compile's output depended on how many compiles preceded it in
+  ;; the process -- and this assertion passed anyway, because THIS program never
+  ;; reached the collision that made the difference visible. The one below does:
+  ;; it is the seven-constant program from 6gk.26, whose seventh `(fresh! "k")`
+  ;; landed on the register name `k7` only when the counter started low.
   (ck! "the same source compiles to the same bytes, twice running"
        (let ((x (call-with-port (open-file-input-port a) get-bytevector-all))
              (y (call-with-port (open-file-input-port b) get-bytevector-all)))
          (equal? x y))))
+
+;; The program that made the non-idempotence visible, asserted directly: three
+;; compiles in ONE process, byte for byte. Before the counter reset this crashed
+;; on the first and succeeded on the second.
+(let ((src (string-append
+            "(define v (make-flvector 4 0.0))\n"
+            "(define (fill i n)\n"
+            "  (if (fx= i n) 0.0 (begin (flvector-set! v i 1.0) (fill (fx+ i 1) n))))\n"
+            "(define (main) (display (fill 0 4)) (newline))\n(main)\n"))
+      (path (string-append tmp "-idem.sps")))
+  (let ((p (open-file-output-port path (file-options no-fail)
+                                  (buffer-mode block) (native-transcoder))))
+    (put-string p src)
+    (close-port p))
+  (let ((a (compiled-image (compile-sonic path '(display newline))))
+        (b (compiled-image (compile-sonic path '(display newline))))
+        (c (compiled-image (compile-sonic path '(display newline)))))
+    (ck! "three compiles of one source in one process are byte-identical"
+         (and (equal? a b) (equal? b c)))))
 
 
 ;; --- a tail call whose arguments overflow the register set -------------------
