@@ -582,24 +582,22 @@
       ;; fail at LABEL RESOLUTION -- a partial runtime that LINKED and produced
       ;; wrong numbers is the dangerous version of this.
       ;;
-      ;; ASSERTS THE PROPERTY, NOT THE CURRENT FRONTIER. An earlier version
-      ;; pinned "%make-flvector" and failed the moment that routine was written,
-      ;; because nbody then got further and asked for `display`. That is the
-      ;; frontier moving, which is progress rather than breakage -- but a test
-      ;; that has to be edited on every step of progress is measuring the step
-      ;; instead of the invariant. What must hold at every step is that the
-      ;; failure is an UNDEFINED LABEL: specific, and naming what is missing.
-      (ck! "and one needing a routine the runtime lacks fails to LINK, not silently"
-           (let ((msg (guard (e (#t (format "~a ~s" (condition-message e)
-                                            (condition-irritants e))))
-                        (compile-sonic "../bench/nbody/config-sonic.sps"
-                                       nbody-externs 'rv64)
-                        "compiled, which it cannot yet do")))
-             (and (string? msg)
-                  (let loop ((i 0))
-                    (cond ((> (+ i 15) (string-length msg)) #f)
-                          ((string=? (substring msg i (+ i 15)) "undefined label") #t)
-                          (else (loop (+ i 1))))))))))
+      ;; ASSERTS THE INVARIANT, NOT THE FRONTIER -- and it has now been rewritten
+      ;; twice for exactly that reason, which is the lesson. It first pinned
+      ;; "%make-flvector" and failed when that routine was written; then it
+      ;; pinned "undefined label" and failed when the last extern was written
+      ;; and nbody reached the ENCODER instead. Each failure was progress.
+      ;;
+      ;; What must hold regardless of how far nbody gets is that it does not
+      ;; QUIETLY produce an image while the target is incomplete. It must raise.
+      ;; The specific reason belongs in a bead, not in an assertion that has to
+      ;; be edited every time the work advances.
+      (ck! "nbody on rv64 does not silently produce an image while the target is incomplete"
+           (eq? 'raised
+                (guard (e (#t 'raised))
+                  (compile-sonic "../bench/nbody/config-sonic.sps"
+                                 nbody-externs 'rv64)
+                  'compiled)))))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)

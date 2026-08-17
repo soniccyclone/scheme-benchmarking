@@ -970,8 +970,81 @@
       (addi t3 t1 ,(+ heap-header-bytes heap-tag))
       (jalr zero ra 0)
 
-      ;; The trap. Distinct exit code so a failure names itself in $?, the same
-      ;; contract the x86-64 traps keep.
+      ;; ---- (display x) ----
+      ;;
+      ;; Eight raw IEEE bytes to fd 1, exactly as the x86-64 routine does and
+      ;; for the reason in this file's header: the oracle compares the computed
+      ;; value, and eight bytes compare it exactly where a decimal conversion
+      ;; would insert our own formatter between the answer and the check.
+      ;;
+      ;; The double arrives in fa0 -- repr.ss's `extern-arg-classes` declares
+      ;; `display` raw-f64, so this is a contract rather than a guess. The
+      ;; result is `tagged`, which callconv-rv64 returns in a0, NOT in the
+      ;; raw-word register the x86-64 copy uses.
+      display
+      (lui  t0 ,(hi20 out-buffer-cell))
+      (fsd  fa0 t0 ,(lo12 out-buffer-cell))
+      (addi a0 zero 1)                           ; fd 1
+      (lui  a1 ,(hi20 out-buffer-cell))
+      (addi a1 a1 ,(lo12 out-buffer-cell))
+      (addi a2 zero 8)                           ; count
+      (addi a7 zero ,rv64-sys-write)
+      (ecall)
+      (addi a0 gp 0)                             ; nil, the unspecified result
+      (jalr zero ra 0)
+
+      ;; A newline would corrupt a stream of raw doubles, so this writes
+      ;; nothing and returns nil.
+      newline
+      (addi a0 gp 0)
+      (jalr zero ra 0)
+
+      ;; ---- (command-line) ----
+      ;; The list _start left in its cell. Empty here, since the RV64 entry
+      ;; sequence does not walk argv yet, which takes nbody's default branch of
+      ;; N = 1000 -- the case docs/METHOD.md publishes an oracle for.
+      command-line
+      (lui  t0 ,(hi20 command-line-cell))
+      (ld   a0 t0 ,(lo12 command-line-cell))
+      (jalr zero ra 0)
+
+      ;; ---- (length lst) ----
+      ;;
+      ;; Walks the cdr chain to sonic-null, counting. The list is TAGGED and
+      ;; arrives in a0; the count is a RAW WORD and leaves in t3, because
+      ;; repr.ss names `length` in `extern-result-classes`. Returning it tagged
+      ;; is what once made nbody's N a tagged fixnum consumed as a machine word.
+      length
+      (addi t3 zero 0)
+      (addi t0 a0 0)
+      %rv-len-loop
+      (addi t1 zero ,sonic-null)
+      (beq  t0 t1 %rv-len-done)
+      (addi t3 t3 1)
+      (ld   t0 t0 ,(- 8 heap-tag))               ; t0 = (cdr t0)
+      (jal  zero %rv-len-loop)
+      %rv-len-done
+      (jalr zero ra 0)
+
+      ;; ---- the dead branch ----
+      ;;
+      ;; nbody reads `(if (fx> (length args) 1) (string->number (cadr args)) ...)`
+      ;; and the argument list is empty, so neither of these runs. They still
+      ;; have to EXIST, because a label the code references must resolve -- and
+      ;; they TRAP rather than returning something, because a routine that is
+      ;; unreachable and a routine that quietly returns garbage look identical
+      ;; until the day the branch is taken. Same contract as the x86-64 side.
+      cadr
+      (jal  zero sonic-type-error)
+      string->number
+      (jal  zero sonic-type-error)
+
+      ;; The traps. A distinct exit code each, so a failure names itself in $?,
+      ;; which is the contract the x86-64 traps keep.
+      sonic-type-error
+      (addi a0 zero ,exit-type-error)
+      (addi a7 zero ,rv64-sys-exit)
+      (ecall)
       sonic-heap-error
       (addi a0 zero ,exit-heap-error)
       (addi a7 zero ,rv64-sys-exit)
