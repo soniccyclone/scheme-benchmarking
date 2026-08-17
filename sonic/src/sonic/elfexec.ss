@@ -83,10 +83,21 @@
     (+ text-file-offset (pool-offset-for code-size) pool-size))
 
   (define (build-executable/meta target code pool entry data-va data-sz meta)
+    ;; ONLY x86-64 IS EMITTED AS A RUNNABLE IMAGE, and the missing pieces for
+    ;; RV64 are small and known: the e_machine below is hardcoded EM_X86_64
+    ;; (0x3e) where RV64 needs EM_RISCV (0xf3), and the entry listing does not
+    ;; exist yet (runtime.ss refuses for the same reason).
+    ;;
+    ;; The old wording here said RV64 "is verified by the smoke gate and run
+    ;; under qemu from an object", which undersells what is available: the
+    ;; container has qemu-riscv64 10.1.0, so a full RV64 IMAGE would be
+    ;; runnable and checkable against the oracle, not merely disassemblable.
+    ;; Nothing blocks that except the two gaps above. See bead 1mp.6.
     (unless (eq? target 'x86-64)
       (error 'build-executable
-             "only x86-64 is emitted as a runnable image; RV64 output is
-              verified by the smoke gate and run under qemu from an object"
+             "only x86-64 is emitted as a runnable image; RV64 needs EM_RISCV
+              here and an entry listing in runtime.ss. Both are tracked by
+              bead 1mp.6, and the result would be runnable under qemu-riscv64"
              target))
     (let* ((code-size (bytevector-length code))
            (pool-size (bytevector-length pool))

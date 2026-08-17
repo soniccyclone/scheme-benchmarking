@@ -856,12 +856,27 @@
       (case target
         ((x86-64) (x86-64-listing entry lane-mask?))
         ((rv64)
+         ;; THE SECOND HALF OF THIS REASON EXPIRED. It used to say an RV64
+         ;; runtime "written blind would be validated by nothing", which was
+         ;; true when the container had no RISC-V emulator. It does now:
+         ;; qemu-riscv64 10.1.0 is installed and runs cross-compiled binaries
+         ;; (verified end to end -- riscv64-linux-gnu-gcc builds a static
+         ;; binary, qemu-riscv64 runs it). So an RV64 runtime CAN be validated
+         ;; exactly the way the x86-64 one is: emit, run, compare the energies
+         ;; against SPEC.md.
+         ;;
+         ;; The refusal stands because the runtime is still unwritten, not
+         ;; because writing it would be unverifiable. See bead 1mp.6, which
+         ;; inventories what a full RV64 path still needs -- this listing, an
+         ;; EM_RISCV image in elfexec.ss, and a target argument on the driver.
+         ;; Everything else (selection, regalloc, encoding, object emission)
+         ;; already exists and is tested.
          (error 'runtime-listing
                 (string-append
-                 "no RV64 runtime yet. The x86-64 one is validated by running it "
-                 "and an RV64 one written blind would be validated by nothing; "
-                 "the smoke gate proves the compiler's RV64 output is well-formed, "
-                 "which is a different claim")
+                 "no RV64 runtime yet. Selection, allocation, encoding and "
+                 "object emission all handle rv64; what is missing is this "
+                 "entry listing. It CAN be validated by running the result "
+                 "under qemu-riscv64, which the container has. See 1mp.6")
                 target))
         (else (error 'runtime-listing "unknown target" target)))))
 

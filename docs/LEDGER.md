@@ -2951,3 +2951,34 @@ in the compiled nbody inner loop, at 128 bits, asserted via `compiled-loop-of`
 and passing. RV64 carries none, and cannot until 1mp.6 is addressed — separately
 from that, `slp`'s packed ops have no RV64 lowering (`p2add`/`p2sub`/`p2mul`/
 `p2div` are x86-64:1, rv64:0), so a driver target path alone would not suffice.
+
+## D76 — the reason not to build an RV64 runtime expired when the container gained qemu
+
+Sizing 1mp.6 found that most of an RV64 compilation path already exists:
+`rv64-selector` is a full 588-line backend (`make-selector 'rv64 rv64-rules
+arch-rv64`) with FMA rules, a call emitter, trap label and litpool, and
+`finalize.ss`, `object.ss` and `regs.ss` all handle the target. Three things are
+missing, and **both code-level gaps refuse loudly rather than silently**, which
+is why none of it was a live hazard:
+
+- `runtime.ss:858` — no RV64 entry listing (argv, output, exit; the syscall ABI)
+- `elfexec.ss` — `build-executable/meta` refuses non-x86-64, and `e_machine` is
+  hardcoded `EM_X86_64` (`0x3e`) where RV64 needs `EM_RISCV` (`0xf3`)
+- `driver.ss` — takes no target argument, so neither refusal is even reachable
+
+**The stated reason for not writing the runtime has expired.** It read: *"an RV64
+one written blind would be validated by nothing."* True when written. The
+container now has **qemu-riscv64 10.1.0** — verified end to end, cross-gcc builds
+a static binary and qemu runs it — so an RV64 runtime can be validated exactly
+the way the x86-64 one is: emit it, run it, compare energies against SPEC.md.
+The same standard, not a weaker one.
+
+The premise expired because the container gained qemu **for instruction
+counting**, and nothing revisited a comment that depended on its absence. That is
+the same shape as D74's header: a true statement falsified by an unrelated
+change, with no mechanism to notice. Two in one session is enough to name the
+pattern — **a justification that cites an absence needs re-checking whenever the
+environment gains capability**, and neither of these had anything watching.
+
+Both refusals corrected to say what is actually missing. They still refuse; they
+no longer claim the work is unverifiable.
