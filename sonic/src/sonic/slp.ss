@@ -57,6 +57,25 @@
   ;; The padded shape is a property of the PROGRAM, not of the pass, so it is a
   ;; parameter rather than a constant: a benchmark that stores four-wide bodies
   ;; wants it and one that stores three-wide finds nothing.
+  ;; NOTHING SETS THIS, and enabling it is a measured no-op rather than an
+  ;; unexplored option. Compiling nbody with it on and off, counting functions
+  ;; that carry packed arithmetic at each width:
+  ;;
+  ;;     four-lane OFF: xmm=5 ymm=0 zmm=0
+  ;;     four-lane ON : xmm=5 ymm=0 zmm=0
+  ;;
+  ;; and it stays a no-op with the unroller turned up -- budget 4 takes the
+  ;; program from 902 instructions to 1734 and packed functions from 5 to 17,
+  ;; budget 16 reaches 6306, and ymm is 0 at every one of them.
+  ;;
+  ;; The reason is `store-at` below: four adjacent stores must share a base AND
+  ;; an INDEX VREG, differing only in their literal offset. One iteration of
+  ;; nbody's position update writes p[3i+0..2] -- three -- and the fourth
+  ;; element belongs to the next body, under a different index vreg. Unrolling
+  ;; produces more iterations, each with its own index, so adjacency never
+  ;; appears. It would take the indices becoming LITERAL, so 3i+k folds to a
+  ;; constant displacement off one base, or a padded four-wide layout to point
+  ;; it at. See bead 1mp.5.
   (define four-lane-packing? (make-parameter #f))
 
   (define-record-type (slp-stats make-slp-stats slp-stats?)

@@ -1,3 +1,22 @@
+;;; NOTHING IN THE COMPILATION PIPELINE CALLS THIS. Measured 2026-08-17 by
+;;; sweeping every import: driver.ss does not import (sonic vectorize), and the
+;;; only importers are vec-x86-64.ss, vec-rv64.ss and vectorize-test.ss. The
+;;; pass is written, has green assertions on BOTH targets including
+;;; length-agnostic RVV, and reaches no binary. Read that before treating a
+;;; green vectorize-test.ss as evidence about compiled output -- it tests the
+;;; kernel, not the program.
+;;;
+;;; WHY IT WAS NEVER WIRED, since it is not an oversight: vec-emit-loop* returns
+;;; a LISTING of machine instructions, fully unrolled at fixed byte offsets,
+;;; with physical register roles already chosen (ptrs, count, vl, stride). That
+;;; bypasses selection and allocation, so there is nowhere in driver.ss to put
+;;; it -- the surrounding function's register assignment has no way to agree
+;;; with a kernel that picked its own. slp.ss is the pass that DOES reach every
+;;; binary, and it works because its packed values are ordinary raw-f64 vregs
+;;; the allocator needs no special case for.
+;;;
+;;; See beads 1mp.4 and 1mp.5.
+;;;
 ;;; AVX-512 packed-double emission.
 ;;;
 ;;; E5-AVX512. Takes a verdict from `sonic/src/sonic/veclegal.ss` and a
