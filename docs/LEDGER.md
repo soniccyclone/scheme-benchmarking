@@ -2449,3 +2449,66 @@ offset-table adjacency DOES NOT FIRE; Lmach emission from vectorize.ss is
 UNATTEMPTED and is the only one that pays for the width in neither stores nor
 traffic. c-native is 256-bit and 1.15x faster than us, so the width is still
 worth having.
+
+---
+
+## D67 -- correcting D66: the facts cannot reach the operations, because the names do not survive lowering
+
+D66 concluded that the remaining four-lane work was "an emission target, not an
+analysis" -- vectorize.ss has the affine premises, Lmach has the `p4` operations,
+so the gap is that the emitters hand back listings. That is incomplete, and the
+missing piece invalidates the plan rather than adding to it.
+
+**THE KERNEL IS REAL AND SMALL.** Extracted from nbody's elided IR, the licensed
+loop `loop%35.220` yields a five-vop kernel over 15 linearized elements with
+coeff 3, arrays `(pos vel)`, index `i%36.222`, and `dt` as an invariant lane:
+
+    (vload  0 (elt pos))    (vmul 3 2 1)    (vstore (elt pos) 4)
+    (vload  1 (elt vel))    (vadd 4 0 3)
+
+Every vop has a direct Lmach counterpart already declared in `lang.ss` and
+already lowered by `target-x86-64.ss`: `p4load`, `p4splat`, `p4mul` -> `v4mulpd`,
+`p4add` -> `v4addpd`, `p4store`. The translation is five lines of correspondence.
+
+**BUT THE NAMES DO NOT SURVIVE.** Checked directly: of the kernel's names --
+`t.189.230`, `t.190.231`, `t.191.232`, `t.192.233`, `i%36.222`, `dt` -- NOT ONE
+appears anywhere in the finalized Lmach listings of the compiled program. repr,
+lift, convert and lower rename everything between the level where the affine
+facts exist and the level where the packed operations exist.
+
+So there is no correspondence to emit against. A pass at Lmach holding a kernel
+from SSA cannot say which vreg is lane 0.
+
+**WHICH MEANS ONE OF THREE THINGS, none of them "just emit p4 ops":**
+
+  (a) THREAD A CORRESPONDENCE through lowering, so each of repr/lift/convert/lower
+      records what became what. Invasive, and it makes four passes carry a
+      concern none of them has today.
+
+  (b) MOVE THE OPERATIONS UP -- give the higher IR packed forms so vectorization
+      happens where the induction variables are known, and let lowering carry
+      them down. A language change, and lang.ss's `p4*` are Lmach mach-ops.
+
+  (c) MOVE THE ANALYSIS DOWN -- give the Lmach packer enough induction-variable
+      reasoning to recover adjacency itself, which is the affine route D66 set
+      aside. `abcd.ss` already builds an inequality graph over induction
+      variables at SSA level, so the question is whether its premises can be
+      re-derived or carried to Lmach.
+
+(c) is the architecturally coherent one: it puts the analysis where the operations
+are, which is the property that makes `slp.ss` work at all -- its packed values
+are ordinary `raw-f64` vregs precisely because it reasons in the same IR the
+allocator sees.
+
+**WHY THIS WAS NEVER DONE, finally.** vec-x86-64.ss and vec-rv64.ss emit listings
+because they were fed HAND-WRITTEN FIXTURES, never real lowered IR -- their own
+header says "nothing built a kernel from real IR, so the emitters had only
+hand-written fixtures to consume". vectorize.ss then built the kernel and closed
+that gap at SSA level. Nobody closed the second gap, from SSA names to Lmach
+vregs, and it is the harder one.
+
+Four routes to 256-bit now: padded layout WORKS at 1.60x slower (D65);
+offset-table adjacency DOES NOT FIRE (D66); Lmach emission from an SSA kernel is
+BLOCKED by name correspondence (here); affine analysis at Lmach is UNATTEMPTED
+and is the coherent one. c-native is 256-bit and 1.15x faster, so the width is
+still worth having.
