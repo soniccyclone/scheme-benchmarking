@@ -76,6 +76,13 @@ If you need a one-off: `make shell` from `sonic/`, or
 `tools/container.sh bash -c '...'`.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
+## The autonomous loop
+
+If you are running unattended, read `docs/LOOP.md` FIRST, before `bd ready`. It
+carries the dependency order the bead graph does not show, the current measured
+standing, the definition of done per kind of bead, and the autonomy boundaries —
+what to do freely, what never to do, and what to stop and ask about.
+
 ## Beads Issue Tracker
 
 This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
