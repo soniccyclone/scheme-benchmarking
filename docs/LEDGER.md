@@ -2327,3 +2327,62 @@ a namespace unless something makes them disjoint, and nothing did. The failure i
 silent in the direction that matters: a name that happens not to collide today
 collides the moment a program has one more constant, or a target gains a
 register, or an unrelated pass shifts a counter.
+
+---
+
+## D65 -- 256-bit packing is reachable by padding and costs 60%, which is the argument for linearizing instead
+
+`slp.ss` has carried a complete four-lane arm behind the `four-lane-packing?`
+parameter since it was written, with a stated reason for being off: "until a
+padded layout exists to point it at -- nbody stores bodies three-wide, so seeding
+four adjacent stores finds nothing there." That layout has now been built and the
+comment turns out to be half of the story.
+
+**A PADDED LAYOUT ALONE DOES NOTHING.** `bench/nbody/config-sonic-pad4.sps` is
+`config-sonic.sps` with a stride of 4 instead of 3 -- eight index expressions and
+two allocations, with the body index in `(put! 3 ...)` left alone -- and its
+energies are bit-identical, which is what says the layout moved and the
+arithmetic did not. Four-lane packing on it: `ymm=0`, with the parameter on or
+off. `store-at` seeds from four stores sharing a base AND an index vreg, and a
+program that leaves slot 3 alone still emits three of them. Padding means not
+writing it.
+
+**WRITING THE PAD IS THE MISSING HALF.** With slot 3 stored -- `0 + dt*0` into a
+slot nothing reads -- four-lane fires: `ymm=2`, `vmulpd` and `vaddpd` on ymm in
+both halves of the unrolled position update. That is the first 256-bit packed
+arithmetic this compiler has emitted into a binary.
+
+**AND IT IS 1.60x SLOWER.** Measured at 40 reps, all three arms in one run:
+
+    sonic         64.1756 ns/step  (baseline)
+    sonic-pad4   102.787   ratio 1.6017  95% CI [1.5486, 1.6445]  real
+    c-native      55.9111  ratio 0.8712  95% CI [0.7542, 0.9354]  real
+
+**THE CONCLUSION IS NOT "256-BIT DOES NOT PAY HERE".** c-native is 256-bit and
+1.15x faster than us. It is that THIS ROUTE to 256-bit adds work proportional to
+what it saves: a quarter more stores and a third more memory traffic to buy two
+packed operations. Widening the packer by padding the data is the wrong trade on
+this shape.
+
+Which is the argument FOR `vectorize.ss`'s approach rather than against it. Its
+linearization needs no padding and no extra stores: the union over i of
+{3i, 3i+1, 3i+2} for i in [0,5) is exactly [0,15), so four consecutive elements
+already exist in the three-wide layout, crossing body boundaries. Same 256-bit
+packing, none of the traffic that just cost 60%. The open work is therefore
+making that linearization produce ordinary `raw-f64` vregs the way `slp.ss`
+produces pairs -- so the allocator needs no special case -- rather than wiring in
+emitters that hand back listings with their registers already chosen (D63's
+neighbour, bead 1mp.4).
+
+Kept as a configuration rather than deleted, like `sonic-u4` before it, so the
+negative result stays measurable instead of becoming folklore. Two routes to
+four lanes have now been tried and measured; the third is the one nobody has
+built.
+
+FOUND BY THE SAME RUN, and recorded because it invalidates any wall-clock number
+taken while a binary was missing: `bench.sh` timed a command that does not exist.
+After `make clean` removed `build/`, it reported c-native at **-0.04985 ns/step**
+with a bootstrap CI of [-0.0027, 0.0045] and marked it "real" -- a negative
+per-step time, from timing "No such file or directory" twice. It preflights now.
+Placing that check took three attempts because `$?` inside the `$( ... )` that
+captures timing is a subshell, and so is `slopes`; only the main loop is not.
