@@ -145,6 +145,14 @@ a decision.
 
 ## Measuring anything
 
+**Do not edit a script while a long measurement is running it.** The container
+mounts the repo live and every harness script re-execs into it, so a script is
+read from disk as the job runs. Editing `measure.sh`'s header mid-run killed a
+20-minute sbcl-under-qemu measurement with `unexpected EOF while looking for
+matching quote` — a syntax error in a file that was syntactically fine both
+before and after. Queue the edit, or let the run finish.
+
+
 Three instruments, and which one you may use is not a free choice.
 
 **Wall clock** — `harness/bench.sh`. Slope between two N, bootstrap CI. USE 40
