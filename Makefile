@@ -1,8 +1,9 @@
 # scheme-benchmarking
 
-.PHONY: help guard test smoke bench containment
+.PHONY: help setup guard test smoke bench containment
 
 help:
+	@echo "make setup       everything a fresh clone needs before make test works"
 	@echo "make guard       re-apply the no-push-upstream guard on vendored submodules"
 	@echo "make test        run the SonicScheme test suite"
 	@echo "make containment prove the container limits actually hold"
@@ -14,6 +15,14 @@ help:
 # succeeds. Run it after touching docker-compose.yml or tools/container.sh.
 containment:
 	@./tools/test-containment.sh
+
+# THREE OF THE FOUR PREREQUISITES LIVE OUTSIDE THIS REPOSITORY, so cloning it is
+# not enough: podman ships no compose provider, sonic/vendor/nanopass is a
+# submodule, and the push guard is local git config that is never cloned. Each
+# failure reads like something else -- a podman problem, a compiler bug, or
+# nothing at all until an accidental push succeeds.
+setup:
+	@./tools/setup.sh
 
 # The guard lives in local git config and is NOT cloned. Re-apply after any
 # fresh clone or `git submodule update --init`. See the hard rule in CLAUDE.md.
