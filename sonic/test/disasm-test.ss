@@ -32,6 +32,8 @@
         (sonic target-rv64)
         (sonic object)
         (sonic disasm)
+        ;; the real-program milestone 2 arm at the end of this file
+        (sonic pipeline) (sonic finalize) (sonic driver)
         (prefix (sonic preempt) preempt:))
 
 (define failures 0) (define checks 0)
@@ -438,6 +440,108 @@
          (not (poll-free? d "loop_with_poll")))
     (ck! "RV64 control: the loop without one is"
          (poll-free? d "loop_no_poll"))))
+
+
+;;; ==========================================================================
+;;; Milestone 2, on a REAL compiled inner loop rather than a fixture
+;;; ==========================================================================
+;;
+;; Everything above proves the PREDICATES work, on hand-written listings and on
+;; gcc's output. This compiles two programs through the whole driver and asks
+;; the question milestone 2 actually asks.
+;;
+;; ORDER IS DELIBERATE: nbody first. Compilation is not idempotent within a
+;; process (6gk.25 -- the name counter in lower.ss is never reset), so the first
+;; compile is the only one running from a clean state. nbody is the arm whose
+;; answer must be ZERO, and a contaminated compile reporting zero would be a
+;; FALSE PASS on the milestone. The control is second, where contamination could
+;; only turn its non-zero answer into a failure -- loud, not silent. When
+;; 6gk.25 is fixed this ordering stops mattering and the comment can go.
+;;
+;; A CHECK IS FOUND BY WHERE IT BRANCHES. `resolve-labels` places an
+;; `extra-labels` entry at (+ code-size offset), so the trap's address is
+;; computable rather than guessable -- which it had to be, because guessing it
+;; produced a confident zero for a control that has two.
+
+(define (extern-label-addrs target ls)
+  (let ((defined (filter symbol? ls)) (refs '()))
+    (let walk ((xs ls))
+      (unless (null? xs)
+        (let mem ((y (car xs)))
+          (cond ((and (pair? y) (eq? (car y) 'label) (pair? (cdr y)))
+                 (unless (memq (cadr y) refs) (set! refs (cons (cadr y) refs))))
+                ((pair? y) (mem (car y)) (mem (cdr y)))
+                (else 'no)))
+        (walk (cdr xs))))
+    (let loop ((rs refs) (n 4096) (acc '()))
+      (cond ((null? rs) acc)
+            ((memq (car rs) defined) (loop (cdr rs) n acc))
+            (else (loop (cdr rs) (+ n 64) (cons (cons (car rs) n) acc)))))))
+
+(define (code-size-of target ls)
+  (let cnt ((xs ls) (pc 0))
+    (cond ((null? xs) pc)
+          ((symbol? (car xs)) (cnt (cdr xs) pc))
+          (else (cnt (cdr xs) (+ pc (instruction-size target (car xs))))))))
+
+;; Returns (values disasm name trap-address) for the first function matching p.
+(define (compiled-loop-of path externs p)
+  (let* ((c (compile-sonic path externs))
+         (f (let find ((fs (compiled-functions c)))
+              (cond ((null? fs) (error 'compiled-loop-of "no such function" path))
+                    ((p (symbol->string (finalized-name (car fs)))) (car fs))
+                    (else (find (cdr fs)))))))
+    (let* ((nm (finalized-name f)) (ls (finalized-listing f))
+           (extra (extern-label-addrs 'x86-64 ls))
+           (cs (code-size-of 'x86-64 ls))
+           (trap (cond ((assq 'sonic-bounds-error extra)
+                        => (lambda (e) (+ cs (cdr e))))
+                       (else -1))))
+      (values (disassemble-object
+               (assemble-function 'x86-64 nm ls (list (cons 'extra-labels extra))))
+              (symbol->string nm) trap))))
+
+(when have-x86
+  ;; nbody FIRST -- see the note above.
+  (let-values (((d nm trap)
+                (compiled-loop-of "../bench/nbody/config-sonic.sps" nbody-externs
+                                  (lambda (s) (and (>= (string-length s) 6)
+                                                   (string=? (substring s 0 6) "inner%"))))))
+    (ck! "MILESTONE 2: nbody's inner loop is found in the emitted code"
+         (loop? (inner-loop d nm)))
+    (ck! "MILESTONE 2: and it contains no branch to the bounds-error trap"
+         (no-check-branch-to? d nm (list trap)))
+    ;; Non-vacuity from the other side: the trap is not merely unreachable, it
+    ;; is not named anywhere in the function.
+    (ck! "and the trap is not referenced by that function at all"
+         (= trap -1)))
+
+  ;; THE CONTROL. Same predicate, same pipeline, a bound the analysis cannot
+  ;; prove -- so the check survives and must be found. Without this the
+  ;; assertion above is satisfied by any program that fails to emit a check for
+  ;; any reason, including a broken elision pass.
+  (let ((ctl "/tmp/sonic-m2-control.sps"))
+    (with-output-to-file ctl
+      (lambda ()
+        (display "(define v (make-flvector 4 0.0))\n")
+        (display "(define (fill i n)\n")
+        (display "  (if (fx= i n) 0.0 (begin (flvector-set! v i 1.0) (fill (fx+ i 1) n))))\n")
+        (display "(define (main) (display (fill 0 (string->number (cadr (command-line))))) (newline))\n")
+        (display "(main)\n"))
+      'replace)
+    (let-values (((d nm trap)
+                  (compiled-loop-of ctl '(command-line length cadr string->number
+                                          display newline)
+                                    (lambda (s) (string=? s "fill")))))
+      (ck! "CONTROL: a bound the analysis cannot prove keeps its check"
+           (> trap -1))
+      (ck! "CONTROL: and the same predicate finds it inside the inner loop"
+           (pair? (check-branches-to d nm (list trap))))
+      (ck! "CONTROL: every one it found is a conditional branch to the trap"
+           (for-all (lambda (i)
+                      (and (conditional-branch? d i)
+                           (equal? (branch-target i) trap)))
+                    (check-branches-to d nm (list trap)))))))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
