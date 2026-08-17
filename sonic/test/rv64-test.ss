@@ -577,11 +577,19 @@
              (compile-sonic-to-file "test/rv64-tiny.sps" '() out 'rv64)
              (system (string-append "chmod +x " out))
              (zero? (system (string-append "qemu-riscv64 " out)))))
-      ;; THE BOUNDARY, and the control on the assertion above. nbody needs
-      ;; %make-flvector, which the minimal runtime does not define. It must fail
-      ;; at LABEL RESOLUTION, naming what it wanted -- a partial runtime that
-      ;; linked and produced wrong numbers is the dangerous version of this.
-      (ck! "and one needing a runtime helper fails to link, naming the helper"
+      ;; THE BOUNDARY, and the control on the assertion above. The RV64 runtime
+      ;; is incomplete, so a program needing a routine it does not define must
+      ;; fail at LABEL RESOLUTION -- a partial runtime that LINKED and produced
+      ;; wrong numbers is the dangerous version of this.
+      ;;
+      ;; ASSERTS THE PROPERTY, NOT THE CURRENT FRONTIER. An earlier version
+      ;; pinned "%make-flvector" and failed the moment that routine was written,
+      ;; because nbody then got further and asked for `display`. That is the
+      ;; frontier moving, which is progress rather than breakage -- but a test
+      ;; that has to be edited on every step of progress is measuring the step
+      ;; instead of the invariant. What must hold at every step is that the
+      ;; failure is an UNDEFINED LABEL: specific, and naming what is missing.
+      (ck! "and one needing a routine the runtime lacks fails to LINK, not silently"
            (let ((msg (guard (e (#t (format "~a ~s" (condition-message e)
                                             (condition-irritants e))))
                         (compile-sonic "../bench/nbody/config-sonic.sps"
@@ -589,8 +597,8 @@
                         "compiled, which it cannot yet do")))
              (and (string? msg)
                   (let loop ((i 0))
-                    (cond ((> (+ i 14) (string-length msg)) #f)
-                          ((string=? (substring msg i (+ i 14)) "%make-flvector") #t)
+                    (cond ((> (+ i 15) (string-length msg)) #f)
+                          ((string=? (substring msg i (+ i 15)) "undefined label") #t)
                           (else (loop (+ i 1))))))))))
 
 (newline)

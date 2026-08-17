@@ -912,6 +912,69 @@
       (jal  ra ,entry)
       (addi a0 zero ,exit-ok)
       (addi a7 zero ,rv64-sys-exit)
+      (ecall)
+
+      ;; ---- (make-flvector count fill) ----
+      ;;
+      ;; count in t3 and fill in fa0 -- raw-word argument 0 and raw-f64
+      ;; argument 0 for THIS target. The registers differ from the x86-64 copy
+      ;; above (rcx and xmm0) and so does the return: callconv-rv64 returns
+      ;; raw-word results in t3, where x86-64 uses rax. Reading the x86 routine
+      ;; and substituting register names would have been wrong in both places.
+      ;;
+      ;; t0, t1 and t2 are the RV64 scratch set (regs.ss), so they are outside
+      ;; the allocatable pools and free here.
+      ;;
+      ;; Layout is D29's, identical across targets: type word, length, then the
+      ;; elements, with the returned pointer aimed at element zero and carrying
+      ;; the heap tag.
+      %make-flvector
+      (lui  t0 ,(hi20 heap-pointer-cell))
+      (ld   t1 t0 ,(lo12 heap-pointer-cell))     ; t1 = raw base
+      ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN -- the header goes to
+      ;; [t1] and [t1+8], so a base within 16 bytes of the limit would fault on
+      ;; the write itself. Same ordering as the x86-64 routine, for the same
+      ;; reason.
+      ;;
+      ;; `blt` is the SIGNED compare, matching the x86 side's `jg`. Sound for
+      ;; the same reason recorded there: the heap sits well below 2^31, so every
+      ;; address compared is a small positive number and the signed and unsigned
+      ;; orderings agree.
+      (lui  t2 ,(hi20 (- (+ heap-base-address heap-size) heap-header-bytes)))
+      (addi t2 t2 ,(lo12 (- (+ heap-base-address heap-size) heap-header-bytes)))
+      (blt  t2 t1 sonic-heap-error)
+      (addi t0 zero ,heap-type-flvector)
+      (sd   t0 t1 0)                             ; [raw+0] = type
+      (sd   t3 t1 8)                             ; [raw+8] = length, raw count
+      ;; bump: heap_ptr = raw + 16 + 8*count
+      (slli t0 t3 3)
+      (addi t0 t0 ,heap-header-bytes)
+      (add  t0 t0 t1)
+      ;; AND ON THE END, before the payload is written: one large allocation can
+      ;; clear the base check and still run off the end.
+      (lui  t2 ,(hi20 (+ heap-base-address heap-size)))
+      (addi t2 t2 ,(lo12 (+ heap-base-address heap-size)))
+      (blt  t2 t0 sonic-heap-error)
+      (lui  t2 ,(hi20 heap-pointer-cell))
+      (sd   t0 t2 ,(lo12 heap-pointer-cell))
+      ;; fill the elements: t1 stays the raw base, t0 walks, t2 counts
+      (addi t0 t1 ,heap-header-bytes)
+      (addi t2 zero 0)
+      %mkfl-loop
+      (bge  t2 t3 %mkfl-done)
+      (fsd  fa0 t0 0)
+      (addi t0 t0 8)
+      (addi t2 t2 1)
+      (jal  zero %mkfl-loop)
+      %mkfl-done
+      (addi t3 t1 ,(+ heap-header-bytes heap-tag))
+      (jalr zero ra 0)
+
+      ;; The trap. Distinct exit code so a failure names itself in $?, the same
+      ;; contract the x86-64 traps keep.
+      sonic-heap-error
+      (addi a0 zero ,exit-heap-error)
+      (addi a7 zero ,rv64-sys-exit)
       (ecall)))
 
   (define (runtime-listing target entry . opt)
