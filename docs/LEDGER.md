@@ -2904,3 +2904,50 @@ countable but is **not the same program**, because removing AVX-512 removes
 `xmm16`–`xmm31` and therefore changes register allocation — which is precisely
 what those 67 instructions exist to exploit. It would answer a question about a
 different compilation.
+
+## D75 — "tested on both targets" means the encoder, not the compiler
+
+Checking whether Milestone 4 could be closed turned up a gap no bead tracked:
+**there is no way to compile a Scheme program to RV64.** `driver.ss` exports two
+entry points and neither takes a target —
+
+```
+(define (compile-sonic path externs))
+(define (compile-sonic-to-file path externs out))
+```
+
+— and `'x86-64` is hardcoded inside them at every stage: `select-program`,
+`finalize-program`, `runtime-listing`, `assemble-function`, `build-executable`,
+`instruction-size`. The symbol `rv64` does not appear in `driver.ss` at all.
+
+RV64 support is real and at a different level. `target-rv64.ss`, `regs.ss`,
+`finalize.ss`, `object.ss` and `gcmeta.ss` all handle it; `rv64-test.ss` and the
+RISC-V smoke gate exercise it, and the gate reads our own output back through
+`riscv64-linux-gnu-objdump`, which is a genuine check. But it assembles a
+**hand-written instruction body**:
+
+```
+(function-object-elf (assemble-function 'rv64 'sonic_nbody_inner body))
+```
+
+That drives the assembler directly. So RV64 is verified as an **encoder** and
+never as a **compilation target**, and every claim of the form "tested on both
+targets" means the back-end machinery is tested on both targets. This is not a
+defect in the RV64 code, which looks sound — it is a gap between what the tests
+establish and what the milestones read as. Filed as 1mp.6.
+
+**Milestone 4's own acceptance criterion is worse.** It names "the E6-DISASM
+packed-arithmetic assertion", and those assertions compile their fixtures *with
+gcc* — `-O3 -march=x86-64-v4` and `riscv64-linux-gnu-gcc -O3 -march=rv64gcv`.
+They validate `has-packed-arithmetic?`, the **analyser**, against a known-packed
+and known-scalar control pair. They are green today and would remain green if
+SonicScheme emitted nothing whatsoever. An acceptance criterion that passes
+independently of the thing it accepts is the same shape as every other entry in
+the failure catalogue — this time the *criterion* is the check that stopped
+checking.
+
+What is actually established on our own output: x86-64 carries packed arithmetic
+in the compiled nbody inner loop, at 128 bits, asserted via `compiled-loop-of`
+and passing. RV64 carries none, and cannot until 1mp.6 is addressed — separately
+from that, `slp`'s packed ops have no RV64 lowering (`p2add`/`p2sub`/`p2mul`/
+`p2div` are x86-64:1, rv64:0), so a driver target path alone would not suffice.
