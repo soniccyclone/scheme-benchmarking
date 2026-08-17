@@ -2805,3 +2805,58 @@ all. Milestone 3's instruction margin goes 3.4x → 3.16x → 2.95x across three
 corrections, each removing an error rather than adding precision, and **every
 correction worked against the claim**. M3 still passes on both arms; nothing
 rested on the difference.
+
+## D73 — four-lane packing on the stock layout emits nothing, and adjacency was never the shortage
+
+D65 and D66 chased four ADJACENT elements — a padded layout that works and is
+1.60x slower, an offset table that never fires. Both premises were wrong, and the
+measurement that settles it is one flag:
+
+```
+sonic (stock, four-lane off)       xmm=484    ymm=0
+sonic-v4-4  (four-lane, budget 4)  xmm=1012   ymm=0   results bit-identical
+sonic-v4-16 (four-lane, budget 16) xmm=3027   ymm=0   results bit-identical
+sonic-pad4  (padded layout)        xmm=455    ymm=18
+```
+
+Enabling `four-lane-packing?` over the stock benchmark emits **zero** 256-bit
+instructions at any unroll budget. The xmm growth from 484 to 3027 is unrolling
+alone. Results stay bit-identical, which is what a flag that changes no emitted
+code must do.
+
+**Adjacency is found already.** Instrumenting `slp.ss` shows four-lane packs
+seeding on stock nbody — 7 at growth budget 4, 45 at budget 16 — because
+unrolling folds body indices to literal offsets off a common base with `idx=#f`,
+and `store-at` compares indices with `eq?`, so `#f` matches `#f`. They die later,
+in `classify!`:
+
+```
+(cond ((adjacent-loads? ds) ... load)
+      ((same-op? ds)        ... op)
+      (else                 ... gather))
+```
+
+`same-op?` requires all four stored values to come from the *same* packable op.
+The seeds sit on the velocity array in the force loop, where **Newton's third law
+gives body i a `sub` and body j an `add` for the same pair**. Mixed ops, so the
+pack is a `gather`, and `narrow!` refuses a four-wide gather because assembling
+four scalars into a 256-bit register costs more than it saves. Both the
+classification and the demotion are right given what they are handed.
+
+So the fourth route — affine analysis at Lmach, the one left standing and called
+"the architecturally coherent one" in D67 — **does not help either**. It exists to
+prove more adjacency, and adjacency was never the shortage.
+
+What the evidence actually leaves open on the stock layout: teaching
+`classify!` and emission to treat a pack of MIXED add/sub as one operation — an
+`addsubpd`-style form, or a negated-operand rewrite. That was never on the route
+list. The alternative remains a layout change, which is route 1 and is measured
+slower.
+
+**Not added as a configuration**, deliberately, and the reasoning generalises:
+`sonic-u4` and `sonic-pad4` are rows because each has distinct measured
+behaviour. A `sonic-v4` row would be `sonic-u4` under a second name with a flag
+that provably changes no emitted instruction — a duplicate measurement and one
+more row on every benchmark run. Keeping a negative result measurable does not
+mean keeping every negative result as a configuration; this one is two lines and
+lives on the bead.
