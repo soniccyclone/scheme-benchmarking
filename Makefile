@@ -1,9 +1,11 @@
 # scheme-benchmarking
 
-.PHONY: help setup guard test smoke bench containment
+.PHONY: help setup build clean guard test smoke bench containment
 
 help:
 	@echo "make setup       everything a fresh clone needs before make test works"
+	@echo "make build       build the toolchain image, deliberately rather than mid-test"
+	@echo "make clean       remove build artifacts (not the image)"
 	@echo "make guard       re-apply the no-push-upstream guard on vendored submodules"
 	@echo "make test        run the SonicScheme test suite"
 	@echo "make containment prove the container limits actually hold"
@@ -15,6 +17,24 @@ help:
 # succeeds. Run it after touching docker-compose.yml or tools/container.sh.
 containment:
 	@./tools/test-containment.sh
+
+# DELIBERATELY, RATHER THAN AS A SURPRISE. The image builds Chez from source, so
+# the first `make test` on a fresh clone stalls for several minutes with no
+# explanation -- which reads like a hung test rather than a one-time compile.
+# Nothing else needs this target: compose builds the image on demand, so it is
+# here to make the cost visible and schedulable.
+build:
+	@$(if $(shell command -v podman 2>/dev/null),podman,docker) build -t sonic-scheme:dev .
+
+# The BUILD DIRECTORY, not the image. Benchmark artifacts accumulate -- compiled
+# cores, .fas and .zo files, emitted binaries, one subdirectory per benchmark --
+# and are all reproducible from `harness/compile.sh`. The image is left alone
+# because rebuilding it costs a Chez compile; `podman rmi sonic-scheme:dev` if
+# that is what you meant.
+clean:
+	@rm -rf build
+	@$(MAKE) -C sonic -s clean
+	@echo "[clean] removed build/ and compiled Scheme artifacts"
 
 # THREE OF THE FOUR PREREQUISITES LIVE OUTSIDE THIS REPOSITORY, so cloning it is
 # not enough: podman ships no compose provider, sonic/vendor/nanopass is a
