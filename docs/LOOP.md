@@ -27,9 +27,23 @@ difference. At 40 it is [0.8288, 0.9464] and real. Any claim about the gap to C
 needs 40; a table of min-of-N wall clock at one N, which is what this section
 used to hold, is not a result at all.
 
+This table names its own baseline, which the script that produced it did not:
+`bench.sh` printed `BASELINE` in the header and divided by whichever config
+measured first (D70), and `measure.sh` had the same bug under a `vs-C` heading
+(D69). Both compute the label from the divisor now. When re-measuring, check that
+the row marked `(baseline)` is the row the header names — that mismatch is the
+only thing that gave either bug away.
+
+**Instructions, and they now agree with wall clock.** sonic retires 664.00
+instructions/step against c-scalar's 654.00 — **1.02x**, not the parity-or-better
+the mislabelled column implied. Wall clock says the same thing: ratio 1.0507, CI
+[0.9926, 1.0979], no detected difference. Two instruments telling one story about
+where we stand against C is new as of D69/D70.
+
 Two things fall out and they set the order of everything below. **Milestone 3 is
-met on wall clock** — 5.85x with the interval nowhere near 1.0 — and needs only
-the decision in qaq.10 about its second instrument. And sonic is at PARITY with
+MET AND CLOSED**, both arms: 5.95x on wall clock (CI [0.1630, 0.1829]) and 3.16x
+fewer instructions, the latter with both sides forced onto qemu so the comparison
+is single-instrument (D68). And sonic is at PARITY with
 scalar C while 1.14x behind vectorized C, both established at 40 reps, which
 means **the whole remaining gap to Milestone 5 is the vectorization gap** — E5,
 not scalar tuning. Do not spend iterations shaving scalar code to reach M5.
@@ -47,49 +61,68 @@ opposite of nbody's diagnosis (D37).
 
 ## The queue, in dependency order
 
-102 of 112 closed. What remains is four DECISIONS and the work gated behind
-them. E1, E2, E4 and E7 are closed; every pass in the tree now has a test.
+105 of 114 closed. What remains is THREE decisions and the work gated behind
+them, plus one open bug that is actionable now. E1, E2, E4, E6-M3 and E7 are
+closed; every pass in the tree now has a test.
 
 ### Waiting on Nathan — do not decide these autonomously
 
-**`1mp.5` / `1mp.4` — how four lanes become reachable.** Both capabilities
-already exist: slp.ss has a complete four-lane arm behind the
-`four-lane-packing?` parameter, and vectorize.ss has the linearization. Neither
-helps, because four ADJACENT elements are never visible in one block --
-`store-at` needs the same base AND index vreg with differing offsets, and one
-iteration of nbody's position update writes three. Two ways out, and the first
-is not the agent's call:
-  (a) a padded four-wide layout, which CHANGES THE BENCHMARK;
-  (b) unrolling until indices fold to literals, which does not.
-Raising `specialize-growth-budget` was tried as (b) and does not get there --
-see `sonic-u4`.
+**`1mp.5` / `1mp.4` — how four lanes become reachable. THE DIAGNOSIS CHANGED;
+read this before re-planning.** Adjacency was never the blocker, and four
+iterations were spent on that wrong premise. Measured, by instrumenting slp.ss:
+four-lane packs DO seed on stock nbody — 7 at growth budget 4, 45 at budget 16 —
+because unrolling folds body indices to literal offsets off a common base with
+`idx=#f`, and `store-at` compares indices with `eq?`, so `#f` matches `#f`.
 
-**`qaq.10` — one question left, and it is narrow now.** A second counter exists
-(`harness/qemu-count.sh`) and `measure.sh` picks between them, labels which
-answered, and refuses rather than printing a number for a broken run — see D63.
-So M3's instruction arm IS obtainable: sonic 664.13 instructions/step against
-sbcl-5's 2231.77, a factor of 3.36, alongside the wall-clock 5.85x. The only
-open question is whether a milestone may be answered by TWO instruments that
-agree to ~1% rather than exactly. c-native remains uncountable by anything here,
-so Milestone 5's instruction comparison needs a reword regardless.
+They are then demoted by `narrow!` with `kind was gather`. The gate is
+`classify!`: `same-op?` requires all four stored values to come from the SAME
+packable op, else `gather`, and `narrow!` correctly refuses a four-wide gather
+because assembling four scalars into a 256-bit register costs more than it saves.
+The seeds sit on the VELOCITY array in the force loop, where Newton's third law
+gives body i a `sub` and body j an `add` for the same pair — mixed ops, so both
+the classification and the demotion are right.
+
+So the padded-layout route (`sonic-pad4`, built, **1.60x slower**) and the
+offset-table route (built, never fired, reverted) were both solving a problem
+that does not exist. The four routes are recorded on the bead. The cheap
+experiment nobody has run: get the POSITION update — uniformly `add` — to fold
+four literal store offsets off one base, and see whether the resulting `op` pack
+survives `narrow!` and emits ymm. That is smaller than any of the four routes and
+tests the thing that actually fails.
 
 **`xei` (E3) — the acceptance names an artifact that does not exist**, a
 hand-written core fixture. parse-test.ss does something stronger and passes.
 Reword or add the fixture.
 
-**`qaq.5` (M3) and `qaq.6` (M4)** are gated on the two above: M3 on `qaq.10`,
-M4 on `1mp.5`. Neither should be closed until its gate is decided -- M4 in
-particular must NOT close on vectorize-test.ss passing, since that assertion
-runs on a kernel that never ships.
+**`qaq.6` (M4) / `qaq.7` (M5) — the gates.** M4 must NOT close on
+vectorize-test.ss passing: that assertion runs on a kernel that never ships. M5's
+instruction comparison needs a reword regardless, because c-native emits AVX-512
+and NEITHER instrument can count it — callgrind cannot decode it and QEMU's TCG
+does not implement it.
 
 ### Actionable without a decision
 
-**`qaq.8` — Milestone 6: fannkuchredux.** Oracle arm already passes. The elision
-arm is open, and it is the same shape as M2: verify on the real compiled binary,
-assert in the suite with a control that can fail, file findings as beads.
+**`qaq.11` — the two instruction counters disagree by 6.17%, and only on our own
+output.** callgrind and qemu agree to `+0.0000%` on gcc's binary and differ by
+exactly 41 instructions/step on sonic's, identically at `N=200..400` and
+`N=2000..4000`, so it is a stable per-step difference that no N washes out. The
+block-decode suspect is RULED OUT: for the ten hottest blocks, QEMU's logged
+bytes are byte-identical to the file's. Checking that required going to the
+bytes, because **our emitted ELF has no section headers**, so `objdump -d`
+returns nothing and exits 0 — anything inspecting our binaries needs `-D` with an
+explicit offset.
 
-**`qaq.7` — Milestone 5** is 1.14x away and the gap is vectorization, so it
-follows E5 rather than leading it.
+Next experiment, unattempted: callgrind with `--dump-instr=yes` gives
+per-instruction-address counts; diff those against `qemu-count.sh`'s per-block
+accounting to localise the 41 to an ADDRESS. Arithmetic constraint for whoever
+picks it up — 8200 instructions over 200 steps, and no single block explains it
+(8200/400 = 20.5, 8200/600 = 13.67, neither an integer), so it is a combination
+of blocks or a per-execution effect.
+
+This does not block any milestone: forcing `SONIC_INSTRUMENT` puts both sides of
+a comparison on one counter, which makes the disagreement irrelevant to the
+ratio. It does mean **a callgrind figure and a qemu figure must never be divided
+by each other** until it is explained.
 
 ## Definition of done, per kind of bead
 
@@ -189,11 +222,37 @@ Five instances, all found by going and looking, none by anything failing:
 | `command -v scheme` | smoke gate skipped its compile and exited GREEN (D58) |
 | `N=11 REPS=9` | never crossed the container boundary; defaults used silently (D60) |
 | ten nbody configs | toolchains absent, oracle quietly ran on 9 of 19 (D61) |
+| `[n rejected as parallel]` | `REJECTED` set in a subshell; note always empty (D71) |
+| `vs-C` / `baseline %s` | header named one config, arithmetic used another (D69, D70) |
 
 So: when a gate passes, occasionally ask what it would take for it to fail, and
 check that that is still possible. When adding a gate, make it fail once on
 purpose before trusting it. This is the single highest-value habit on this
-project and it has paid out five times in one month.
+project and it has paid out seven times now.
+
+**A guard whose failure path cannot be reached is not a guard.** `bench.sh`'s
+serial-only threshold was hard-coded at 1.3, which a single-threaded nbody never
+reaches — so the reject-and-report path could not be exercised at all, and that
+is exactly why the broken note above survived. It is a parameter now
+(`PARALLEL_MAX`) *so that it can be made to fail*. Prefer a threshold you can
+inject over one you have to trust.
+
+**A label and its arithmetic drift apart unless one is computed from the other.**
+Both baseline bugs had the same shape: a name printed in a header, and a divisor
+picked independently by the code. Neither number was wrong — they just were not
+the numbers the columns claimed. Compute the label FROM the thing it labels, and
+refuse rather than fall back when the named thing is missing; a fallback is what
+lets the two disagree quietly.
+
+### Values crossing a `$( )` boundary travel in stdout, never in a variable
+
+Six occurrences now: `measure.sh` COUNTER, `count-slope.sh` INSTRUMENT,
+`bench.sh` rc, FAILED_WHY, and REJECTED, plus two preflight checks that had to
+move to the main shell. A function invoked as `x=$(f)` runs in a subshell, so
+every assignment it makes is discarded the moment it returns — silently, with the
+caller reading a default that looks plausible. In these scripts, if the caller
+needs it, **print it**; `count-slope.sh` returning `count<TAB>instrument` is the
+pattern to copy.
 
 ---
 
