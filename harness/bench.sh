@@ -23,8 +23,20 @@
 #   REPS=20 N1=1000000 N2=2000000 ./bench.sh chez-4 sbcl-5
 
 set -uo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/configs.sh"
 HERE="$(dirname "${BASH_SOURCE[0]}")"
+
+# NOTHING RUNS ON THE HOST -- the hard rule in CLAUDE.md. This one RUNS THE
+# BINARIES THIS COMPILER EMITS, dozens of times each, which is precisely the
+# thing the container limits exist for: a miscompiled program that loops for
+# ever is a class of bug this project produces, not a hypothetical. It had no
+# guard at all, so `make bench` ran every emitted binary on the host.
+#
+# It also could not see most of its own matrix from out there: racket, sbcl,
+# ecl, clisp and gnat live in the image (D61), not on the host.
+. "$(cd "$HERE/.." && pwd)/tools/container.sh"
+sonic_reexec sonic bash /work/harness/bench.sh "$@"
+
+source "$HERE/configs.sh"
 
 N1=${N1:-1000000}
 N2=${N2:-2000000}

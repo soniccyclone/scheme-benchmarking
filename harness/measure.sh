@@ -6,7 +6,14 @@
 # sizes; differencing two N values cancels it exactly. See LEDGER.md D17 for why
 # instruction count and not wall time is the primary instrument here.
 set -uo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/configs.sh"
+HERE_M="$(dirname "${BASH_SOURCE[0]}")"
+# NOTHING RUNS ON THE HOST -- and this one both compiles and RUNS emitted
+# binaries under callgrind. It also needs the toolchains that live in the image
+# rather than on the host (D61).
+. "$(cd "$HERE_M/.." && pwd)/tools/container.sh"
+sonic_reexec sonic bash /work/harness/measure.sh "$@"
+
+source "$HERE_M/configs.sh"
 
 N1=${N1:-1000000}
 N2=${N2:-2000000}
