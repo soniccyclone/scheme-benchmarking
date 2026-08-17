@@ -226,6 +226,17 @@
   ;; unified behind a sign.
   (define rv-branchy '(beq bne blt bge bltu bgeu jal))
 
+  ;; The standard RISC-V hi/lo split. `addi` and the load displacements
+  ;; SIGN-EXTEND their 12-bit immediate, so when the low half has bit 11 set the
+  ;; high half must be incremented to compensate. Getting this wrong is off-by-
+  ;; 4096 on exactly the addresses whose low half happens to be large, which is
+  ;; the kind of bug that passes every small test.
+  (define (rv-lo12 d)
+    (let ((l (bitwise-and d #xfff)))
+      (if (>= l 2048) (- l 4096) l)))
+  (define (rv-hi20 d)
+    (bitwise-and (ash (+ d 2048) -12) #xfffff))
+
   (define (substitute target i pc size labels)
     (define (at name)
       (or (hashtable-ref labels name #f)
@@ -252,12 +263,31 @@
                (else o)))
             i))
       ((rv64)
-       (if (memq (car i) rv-branchy)
-           (let* ((n (length i)) (t (list-ref i (- n 1))))
-             (if (symbol? t)
-                 (append (list-head i (- n 1)) (list (- (at t) pc)))
-                 i))
-           i))))
+       ;; PC-RELATIVE POOL ADDRESSING, resolved here rather than left to a
+       ;; linker. RISC-V builds an address from a pair -- `auipc` of the high 20
+       ;; bits and a load of the low 12 -- and the LOW HALF IS RELATIVE TO THE
+       ;; AUIPC'S PC, not to its own. That is why the real relocation
+       ;; (R_RISCV_PCREL_LO12_I) names the HI20's label instead of the symbol.
+       ;;
+       ;; The pair is emitted adjacently by target-rv64.ss's `r:const`, so the
+       ;; auipc sits exactly one instruction back and RV64 instructions are all
+       ;; four bytes. That assumption is CHECKED rather than trusted: a pass
+       ;; that separated the pair would otherwise produce an address that is
+       ;; wrong by whatever came between, silently.
+       (let ((out (map (lambda (o)
+                         (cond
+                          ((and (pair? o) (eq? (car o) 'pcrel-hi))
+                           (rv-hi20 (- (at (cadr o)) pc)))
+                          ((and (pair? o) (eq? (car o) 'pcrel-lo))
+                           (rv-lo12 (- (at (cadr o)) (- pc 4))))
+                          (else o)))
+                       i)))
+         (if (memq (car out) rv-branchy)
+             (let* ((n (length out)) (t (list-ref out (- n 1))))
+               (if (symbol? t)
+                   (append (list-head out (- n 1)) (list (- (at t) pc)))
+                   out))
+             out)))))
 
   ;; -> a list of instructions with every label resolved, in listing order.
   (define resolve-labels

@@ -138,12 +138,25 @@
 ;; address is built with auipc and the load carries the low 12 bits -- and both
 ;; relocate (reloc.ss). The immediate emitted is the pool offset; the linker
 ;; overwrites it.
+;; THE PAIR IS AGAINST THE POOL'S LABEL, not a raw offset. It used to emit the
+;; offset in both immediates with relocations attached, on the reasoning that a
+;; LINKER would overwrite them. That is right for an object and wrong for the
+;; static image build-executable writes, which applies no relocations -- nbody
+;; segfaulted on the first float it loaded. See 1mp.8.
+;;
+;; `pcrel-lo` names the same label as `pcrel-hi` rather than carrying its own
+;; displacement, because RISC-V computes the low half relative to the AUIPC's
+;; pc. That is the same reason the real R_RISCV_PCREL_LO12_I names the HI20's
+;; label instead of the symbol.
 (ck! "a flonum constant interns into the pool and loads via auipc + fld"
      (parameterize ((current-litpool (make-pool)))
        (let ((out (sel1 '(const v-t raw-f64 1.5))))
          (and (= (length out) 2)
               (eq? (car (car out)) 'auipc)
-              (equal? (cadr out) `(fld v-t ,(cadr (car out)) ,(caddr (car out))))))))
+              (pair? (caddr (car out)))
+              (eq? (car (caddr (car out))) 'pcrel-hi)
+              (equal? (cadr out)
+                      `(fld v-t ,(cadr (car out)) (pcrel-lo ,(cadr (caddr (car out))))))))))
 ;; Two references to the SAME constant must intern once. Interning twice would
 ;; not be wrong, but the pool is emitted into .rodata and nbody's inner loop
 ;; reads the same handful of constants every iteration.
@@ -152,8 +165,8 @@
        (let ((a (sel1 '(const v-t raw-f64 1.5)))
              (b (sel1 '(const v-u raw-f64 1.5)))
              (c (sel1 '(const v-w raw-f64 2.5))))
-         (and (= (caddr (car a)) (caddr (car b)))
-              (not (= (caddr (car a)) (caddr (car c))))))))
+         (and (equal? (caddr (car a)) (caddr (car b)))
+              (not (equal? (caddr (car a)) (caddr (car c))))))))
 ;; UPDATED: Lmach's chk now carries the expected TAG, so a type check is
 ;; selectable. It masks the primary tag out of the value and compares it against
 ;; the constant; numeric.ss fixes a 3-bit primary tag with fixnum = 000.

@@ -167,10 +167,23 @@
         ;; The immediates are the pool offset; the linker overwrites both via
         ;; the relocations, and emitting the offset rather than zero keeps the
         ;; disassembly readable when nothing has linked it yet.
-        (let* ((off (pool-intern-f64! (current-litpool) d))   ; returns the offset
-               (t (rv64-addr-scratch)))
-          `((auipc ,t ,off)
-            (fld ,dst ,t ,off))))
+        ;; AGAINST THE POOL'S LABEL, resolved by object.ss, rather than raw
+        ;; offsets left for a linker. The immediates used to be the pool offset
+        ;; with relocations attached, on the reasoning quoted above -- and that
+        ;; is right for an OBJECT, which is what reloc.ss serves. It is wrong
+        ;; for the static image build-executable writes: that writer applies no
+        ;; relocations, so the placeholders reached the running program and
+        ;; `auipc t0,272` meant +1,114,112 bytes where the pool was 272 away.
+        ;; nbody segfaulted on the first float it loaded.
+        ;;
+        ;; x86-64 has always done it this way -- `(mem rip ... (label %pool+N))`
+        ;; -- so this makes one mechanism serve both targets instead of two that
+        ;; agree only when a linker runs. See bead 1mp.8.
+        (let* ((off (pool-intern-f64! (current-litpool) d))
+               (t (rv64-addr-scratch))
+               (l (pool-label off)))
+          `((auipc ,t (pcrel-hi ,l))
+            (fld ,dst ,t (pcrel-lo ,l)))))
        ;; The empty list is a real Scheme object, not an immediate. numeric.ss
        ;; assigns tags to fixnums and flonums and to nothing else, so there is
        ;; no bit pattern to materialise -- and there does not need to be: the
