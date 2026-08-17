@@ -516,6 +516,51 @@
     (ck! "and the trap is not referenced by that function at all"
          (= trap -1)))
 
+  ;; --- Milestone 4, same reading, on the same compiled program -------------
+  ;;
+  ;; vectorize-test.ss already asserts packed arithmetic on both targets, but it
+  ;; does so on the VECTORIZER'S KERNEL -- emitted from a verdict, assembled, and
+  ;; read back. That is the right test for the pass and the only one available
+  ;; for RV64, which has no runtime to build a whole program with. This is the
+  ;; other half: the arithmetic is still packed in the binary the driver
+  ;; actually produces, after every pass downstream of the vectorizer has had a
+  ;; turn at it.
+  (let-values (((d nm trap)
+                (compiled-loop-of "../bench/nbody/config-sonic.sps" nbody-externs
+                                  (lambda (s) (and (>= (string-length s) 6)
+                                                   (string=? (substring s 0 6) "inner%"))))))
+    (ck! "MILESTONE 4: the compiled nbody inner loop really does carry packed arithmetic"
+         (has-packed-arithmetic? d (string->symbol nm)))
+    ;; 128-BIT, AND THAT IS THE MILESTONE'S PROBLEM RATHER THAN THIS TEST'S.
+    ;;
+    ;; vectorize-test.ss asserts 256-bit `ymm` and passes -- on the VECTORIZER'S
+    ;; KERNEL. The compiled binary is 128-bit `xmm` throughout, because
+    ;; `vectorize.ss` IS NOT IMPORTED BY driver.ss: nothing in the pipeline
+    ;; calls it. Every packed instruction that reaches a real program comes from
+    ;; slp.ss, which packs PAIRS -- its own header says "three components fill
+    ;; two lanes, not four or eight" and "two lanes fit in one 128-bit
+    ;; register".
+    ;;
+    ;; So this asserts what is true and names what is not, rather than asserting
+    ;; the width we want and failing. Milestone 4 is NOT met by this: its
+    ;; assertion passes on a kernel that never ships. See 1mp.
+    (ck! "and it is 128-bit xmm -- the pairs slp.ss packs, NOT vectorize.ss's 256-bit"
+         (and (has-packed-arithmetic? d (string->symbol nm) 'xmm)
+              (not (has-packed-arithmetic? d (string->symbol nm) 'ymm))))
+    (ck! "MILESTONE 4: the subtract, multiply and add are all packed"
+         (let ((ms (map insn-mnemonic
+                        (packed-arithmetic-insns d (string->symbol nm)))))
+           (and (member "vsubpd" ms) (member "vmulpd" ms) (member "vaddpd" ms) #t))))
+
+  ;; ANTI-VACUITY for the above: a scalar function from the SAME compiled
+  ;; program must answer the other way, or the predicate is matching anything
+  ;; this compiler emits.
+  (let-values (((d nm trap)
+                (compiled-loop-of "../bench/nbody/config-sonic.sps" nbody-externs
+                                  (lambda (s) (string=? s "subtract-pairs")))))
+    (ck! "and a scalar function in that same binary is NOT packed"
+         (not (has-packed-arithmetic? d (string->symbol nm)))))
+
   ;; THE CONTROL. Same predicate, same pipeline, a bound the analysis cannot
   ;; prove -- so the check survives and must be found. Without this the
   ;; assertion above is satisfied by any program that fails to emit a check for
