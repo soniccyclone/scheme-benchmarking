@@ -2135,3 +2135,59 @@ half of it. At the published N of 50,000,000 SonicScheme prints
 and -0.169059907: exact at the nine decimals the oracle states. Energy drifts
 1.5e-5 over fifty million steps and does not do so monotonically, which is the
 conservation check. Run time 3.18s.
+
+---
+
+## D62 -- elemrange's escape walk read the extern list where it meant to read the program
+
+Writing the first test elemrange.ss has ever had found a live soundness bug in
+it, in the one direction the file's own header says matters.
+
+`trackable-vectors` decides WHICH vectors may carry an element range. Its
+soundness argument is entirely the escape rule: the fixpoint learns a range by
+joining every `vector-set!` that names the vector, and that is a bound on the
+contents only if there is no other way to write them. So a vector is tracked
+only if EVERY occurrence of its name is the vector operand of `vector-ref`,
+`vector-set!` or `vector-length`. The header is explicit about the stakes if
+that fails -- "a wrong-answer bug of the worst kind: silent, and only on
+programs whose vectors are shared".
+
+The walk handled `top` and `letrec` in one case arm:
+
+    ((top letrec)
+     (for-each (lambda (b) (walk-value (binding-value b))) (cadr x))
+     (walk-value (caddr x)))
+
+`(letrec ([x e] ...) body)` keeps its body at `caddr`. `(top ([x e] ...)
+(extern ...) body)` does NOT -- `caddr` is the EXTERN LIST and the body is at
+`cadddr`. So the escape walk visited `(display)` and never the program. Every
+escape occurring in the body -- which is where all the code is -- was invisible,
+and the vector was tracked regardless.
+
+Measured, the same allocation and the same escape moved between the two
+positions:
+
+    escape in the BODY            -> ((perm . 0))   tracked, escape missed
+    the SAME escape in a BINDING  -> ()             correctly dropped
+    (caddr top)                   -> (display)
+
+Fixed by splitting the arm. The two forms do not have their body in the same
+place and should never have shared a case.
+
+WHAT IT COST TO FIX: nothing, which is worth recording because it was not the
+expected answer. The fix makes the analysis strictly more conservative, so the
+obvious risk was checks coming back and D42's fannkuch result regressing. It did
+not happen: the suite is green, `nbody emits NO bounds check at all` and
+`fannkuch-redux emits no bounds check either, once perm's contents are bounded`
+both still pass, Milestone 2's assertion on the compiled inner loop still holds,
+and the cross-agreement is unchanged. The vectors that actually carry element
+ranges are local ones that never escaped; the bug was latent rather than active.
+
+Latent is not harmless. It was one shared vector away from discharging a check
+the program needed, and nothing in the tree would have caught it -- the answer
+would simply have been slightly wrong, on a program nobody had written yet.
+
+The general lesson is the one this month keeps producing, in a new place: five
+passes in the shipping pipeline had no test file (cqs.19), and the first two
+tests written against them found a stale acceptance criterion and this. Coverage
+that looks complete -- 54 test files -- was not.

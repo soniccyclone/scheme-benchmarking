@@ -191,9 +191,25 @@
                (walk-value (binding-value b))
                (walk-value (caddr x))))
             ((lambda) (walk-value (caddr x)))
-            ((top letrec)
+            ;; SPLIT, because `top` and `letrec` do not have their body in the
+            ;; same place. `(letrec ([x e] ...) body)` keeps it at caddr, but
+            ;; `(top ([x e] ...) (extern ...) body)` has the EXTERN LIST there
+            ;; and the body at cadddr. Walking them together walked `(display)`
+            ;; and never the program, so every escape in the body was invisible
+            ;; and the vector was tracked anyway.
+            ;;
+            ;; That is unsound in the one direction that matters: the fixpoint
+            ;; then claims an element range the program can violate, and a check
+            ;; that was needed gets discharged. This file's own header calls it
+            ;; "a wrong-answer bug of the worst kind: silent, and only on
+            ;; programs whose vectors are shared" -- which is what nbody is,
+            ;; since its kernels take the vectors as parameters.
+            ((letrec)
              (for-each (lambda (b) (walk-value (binding-value b))) (cadr x))
              (walk-value (caddr x)))
+            ((top)
+             (for-each (lambda (b) (walk-value (binding-value b))) (cadr x))
+             (walk-value (cadddr x)))
             (else
              ;; Everything else -- call, tailcall, if, seq, phi, sigma, policy,
              ;; declare -- is walked with every element treated as a value. A
