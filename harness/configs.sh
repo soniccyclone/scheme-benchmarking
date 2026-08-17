@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/nbody"
 
-CONFIGS="sonic c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2b racket-2b chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
+CONFIGS="sonic sonic-u4 c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2b racket-2b chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
 
 mkdir -p "$BUILD"
 
@@ -50,6 +50,48 @@ EOF
     chmod +x "$BUILD/sonic"
 }
 cfg_run_sonic() { echo "$BUILD/sonic $1"; }
+
+# --- the same compiler, with the unroller allowed to grow the program -------
+#
+# `specialize-growth-budget` defaults to 1, meaning the program may not exceed
+# its starting size -- so `unroll-fully` stops almost immediately and every loop
+# index stays symbolic. Raising it is the half fold.ss was written for: "gcc's
+# 36 is not tighter loop control, it is the ABSENCE of a loop", and folding is
+# what turns a substituted literal into a deleted instruction.
+#
+# A SEPARATE CONFIGURATION rather than a change to `sonic`, so the standing
+# number stays comparable and the two can be measured against each other in one
+# run -- which is what D57 says a 1% claim requires.
+#
+# MEASURED AND IT BUYS NOTHING, which is why it is a row here rather than a new
+# default. Budget 4 unrolls hard -- 902 instructions become 1734, and the number
+# of functions carrying packed arithmetic goes from 5 to 17 -- and the program
+# is not faster: 63.93 ns/step against 63.78, ratio 1.0023, 95% CI
+# [0.8708, 1.1030], no detected difference. Budget 16 grows the program to 6306
+# instructions and is no better.
+#
+# A first pass at this with min-of-5 at one N said 5% faster. It was noise, and
+# D57 is exactly about that. Kept as a configuration so the negative result
+# stays measurable rather than becoming folklore.
+cfg_src_sonic_u4() { echo "config-sonic.sps"; }
+cfg_compile_sonic_u4() {
+    local drv="$BUILD/sonic-u4-build.ss"
+    cat > "$drv" <<EOF
+(import (chezscheme) (sonic driver) (sonic pipeline) (sonic specialize))
+(parameterize ((specialize-growth-budget 4))
+  (compile-sonic-to-file "$BENCH/config-sonic.sps" nbody-externs "$BUILD/sonic-u4"))
+EOF
+    . "$ROOT/tools/container.sh"
+    if sonic_in_container; then
+        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
+    else
+        "$ROOT/tools/container.sh" bash -c \
+            "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-u4-build.ss" \
+            || return 1
+    fi
+    chmod +x "$BUILD/sonic-u4"
+}
+cfg_run_sonic_u4() { echo "$BUILD/sonic-u4 $1"; }
 
 # --- configuration 6: C, the reference -------------------------------------
 # Two flag sets, because the pair separates "no vectorizer" from "worse scalar

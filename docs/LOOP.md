@@ -12,23 +12,32 @@ wasted hour, it is a wrong number in the ledger that later work is built on.
 
 ## Where the project actually stands
 
-Measured 2026-08-17, nbody at N=5,000,000, min of three, in the container:
+Slope of N=1,000,000 to 2,000,000, **40 reps**, bootstrap CI, baseline sonic:
 
-| config | time | against sonic |
-|---|---|---|
-| c-native (`gcc -O3 -march=native`) | 301 ms | sonic **1.11x behind** |
-| c-scalar | 328 ms | sonic **1.02x** — parity |
-| **sonic** | **335 ms** | — |
-| chez-4 | 757 ms | sonic 2.26x ahead |
-| sbcl-5 | 1903 ms | sonic **5.68x ahead** |
-| ecl-9 | 56196 ms | — |
+| config | ns/step | ratio vs sonic | verdict |
+|---|---|---|---|
+| **sonic** | **65.03** | — | baseline |
+| c-native (`gcc -O3 -march=native`) | 56.88 | 0.8746, CI [0.8288, 0.9464] | **real** |
+| c-scalar | 62.77 | 0.9653, CI [0.8932, 1.0352] | no detected difference |
+| sbcl-5 | 374.95 | 0.1709, CI [0.1552, 0.1843] | **real** (sonic 5.85x ahead) |
 
-Two things fall out and they set the order of everything below. **Milestone 3
-looks already met** and needs a bootstrap CI rather than any optimization work.
-And sonic is at parity with SCALAR C while 11% behind vectorized C, which means
-**the whole remaining gap to Milestone 5 is the vectorization gap** — E5, not
-scalar tuning. Do not spend iterations shaving scalar code to reach M5; the
-measurement says it is not there.
+REP COUNT IS LOAD-BEARING AND 15 IS NOT ENOUGH. The same c-native comparison at
+15 reps gave CI [0.8011, 1.0024] — an interval containing 1.0, i.e. no detected
+difference. At 40 it is [0.8288, 0.9464] and real. Any claim about the gap to C
+needs 40; a table of min-of-N wall clock at one N, which is what this section
+used to hold, is not a result at all.
+
+Two things fall out and they set the order of everything below. **Milestone 3 is
+met on wall clock** — 5.85x with the interval nowhere near 1.0 — and needs only
+the decision in qaq.10 about its second instrument. And sonic is at PARITY with
+scalar C while 1.14x behind vectorized C, both established at 40 reps, which
+means **the whole remaining gap to Milestone 5 is the vectorization gap** — E5,
+not scalar tuning. Do not spend iterations shaving scalar code to reach M5.
+
+That is not idle advice: raising the unroller's growth budget was tried and
+measured, unrolls hard (902 instructions to 1734, packed functions 5 to 17), and
+is NOT faster — ratio 1.0023, CI [0.8708, 1.1030]. It is kept as the `sonic-u4`
+configuration so the negative result stays measurable.
 
 fannkuch stands at roughly 1.2x behind gcc (D57), and instructions retired are
 2.51x at n=11 (D60). That gap is instructions, not scheduling, which is the
@@ -38,87 +47,45 @@ opposite of nbody's diagnosis (D37).
 
 ## The queue, in dependency order
 
-Seven items are open: five milestones, one back-end bead, and epic hygiene.
+102 of 112 closed. What remains is four DECISIONS and the work gated behind
+them. E1, E2, E4 and E7 are closed; every pass in the tree now has a test.
 
-### 1. `qaq.4` — Milestone 2: no bounds-check branch in the inner loop  (P1, READY)
+### Waiting on Nathan — do not decide these autonomously
 
-Acceptance: *disassembly assertion passes*. A gate on Milestone 4, not a result.
-`harness/disasm-sonic.sh` works and is the tool. The check-elision pass
-(`cqs.3`) is closed, so the machinery is in place; this is verification, not
-implementation. If the assertion fails, the finding is a bead against E4, not a
-reason to weaken the assertion.
+**`1mp.5` / `1mp.4` — how four lanes become reachable.** Both capabilities
+already exist: slp.ss has a complete four-lane arm behind the
+`four-lane-packing?` parameter, and vectorize.ss has the linearization. Neither
+helps, because four ADJACENT elements are never visible in one block --
+`store-at` needs the same base AND index vreg with differing offsets, and one
+iteration of nbody's position update writes three. Two ways out, and the first
+is not the agent's call:
+  (a) a padded four-wide layout, which CHANGES THE BENCHMARK;
+  (b) unrolling until indices fold to literals, which does not.
+Raising `specialize-growth-budget` was tried as (b) and does not get there --
+see `sonic-u4`.
 
-Assert it in the SUITE, not only by eye — a disassembly checked once by a human
-is a check that stops checking the moment the code moves. `sonic/test/disasm-test.ss`
-is where it belongs.
+**`qaq.10` — measure.sh cannot count sbcl, racket, ecl or clisp.** callgrind
+crashes on all four. M3's acceptance names measure.sh AND bench.sh; the bench.sh
+arm passes decisively. Either re-word the milestones that name a managed-runtime
+Lisp, or find a third instrument.
 
-### 2. `qaq.5` — Milestone 3: beat tuned scalar SBCL  (P1)
+**`xei` (E3) — the acceptance names an artifact that does not exist**, a
+hand-written core fixture. parse-test.ss does something stronger and passes.
+Reword or add the fixture.
 
-Acceptance: *`harness/measure.sh` and `harness/bench.sh` both show SonicScheme
-ahead of sbcl-5, with a bootstrap CI excluding 1.0.* The table above says the
-margin is 5.68x, so the work is producing the CI properly, not finding speed.
-`harness/bench.sh` drives `bootstrap.awk` for this. Run it, record the interval,
-close it. If the CI does not exclude 1.0 at a 5.68x margin, distrust the harness
-before believing the result.
+**`qaq.5` (M3) and `qaq.6` (M4)** are gated on the two above: M3 on `qaq.10`,
+M4 on `1mp.5`. Neither should be closed until its gate is decided -- M4 in
+particular must NOT close on vectorize-test.ss passing, since that assertion
+runs on a kernel that never ships.
 
-Note `measure.sh` now counts INSTRUCTIONS via callgrind (D60), so its comparison
-against sbcl-5 is instructions-per-step and deterministic; `bench.sh` is the
-wall-clock arm. Both are required by the acceptance and they answer different
-questions. Say which is which when recording the result.
+### Actionable without a decision
 
-### 3. `1mp` — E5: Vectorization  (P2, epic, HAS NO CHILDREN)
+**`qaq.8` — Milestone 6: fannkuchredux.** Oracle arm already passes. The elision
+arm is open, and it is the same shape as M2: verify on the real compiled binary,
+assert in the suite with a control that can fail, file findings as beads.
 
-**This is the real work, and it is not decomposed yet.** The epic says two beads
-sharing one legality analysis, not one bead with a flag, because AVX-512 is
-fixed width while RVV is length-agnostic with the vector length a runtime value
-the loop adapts to. Decompose it before implementing: file the legality
-analysis, the x86-64 lowering, and the RV64 lowering as separate beads with the
-dependency stated.
-
-Much of this may already exist — `vectorize.ss`, `veclegal.ss`, `slp.ss`,
-`vec-x86-64.ss` and `vec-rv64.ss` are all in the tree with passing tests, and
-nbody already emits four-lane unmasked packed code (D59 found it does not even
-use the three-lane path). So the first iteration on E5 is an AUDIT: establish
-what exists against what the epic asks for, and file beads for the difference.
-Do not assume the epic is untouched because it has no children.
-
-### 4. `qaq.6` — Milestone 4: packed arithmetic in the inner loop  (P2)
-
-Acceptance: *E6-DISASM packed-arithmetic assertion passes on x86-64 AND RV64.*
-Both targets — that is D22's first-class-RISC-V claim being cashed, and the RV64
-half is the one that will actually be missing. Depends on E5.
-
-### 5. `qaq.7` — Milestone 5: beat gcc -O3 -march=native  (P2)
-
-Acceptance: *`bench.sh` shows SonicScheme at or ahead of c-native with a
-bootstrap CI excluding 1.0.* 11% away, and per the standing table that 11% is
-vectorization. Depends on M4 in practice even where the bead graph does not say
-so.
-
-### 6. `qaq.8` — Milestone 6: Pentagon and loops carry fannkuchredux  (P3)
-
-Acceptance: *fannkuchredux passes its oracle and its bounds checks are elided.*
-The oracle arm already passes (`answers AGREE` at n=8, 9 and 11). The elision arm
-is the open half. `pentagon-test.ss` and `loops-test.ss` are green, so this is
-the same shape as M2: verify, assert in the suite, and file findings as beads.
-
-### 7. `6gk.24` — tail call with stack arguments needs the frame layout pass  (P2)
-
-Independent of the milestone chain; pick it up when the chain is blocked on
-something that needs Nathan.
-
-### Epic hygiene, do this first and it is cheap
-
-`xei` (E3) and `cqs` (E4) have **no open children** and are still open. E1 was in
-exactly that state and was blocking four epics for nothing. Check each one's
-acceptance against the code the way E1's was checked — `fixtures.ss` and a test
-importing only the contract, not the ledger's word for it — and close it if met.
-`6cm` (E7) has no children at all and, like E5, needs decomposing or closing.
-
-**Do not close an epic because its children are closed.** Verify the acceptance
-criterion itself. That is how E1 was closed and it is the standard.
-
----
+**`qaq.7` — Milestone 5** is 1.14x away and the gap is vectorization, so it
+follows E5 rather than leading it.
 
 ## Definition of done, per kind of bead
 
