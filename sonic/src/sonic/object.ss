@@ -68,7 +68,8 @@
           (sonic gcmeta)
           (prefix (sonic encode-x86-64) x86:)
           (prefix (sonic vec-x86-64) vx:)
-          (prefix (sonic encode-rv64) rv:))
+          (prefix (sonic encode-rv64) rv:)
+          (sonic elfexec))
 
   ;; --- targets --------------------------------------------------------------
 
@@ -89,18 +90,9 @@
     (case n ((1) 'x86-64) ((2) 'rv64)
       (else (error 'image-target "unknown target id in a function image" n))))
 
-  ;; EM_X86_64 and EM_RISCV. The RISC-V value is 243, not 62 plus something
-  ;; memorable; getting it wrong makes `ld` say "incompatible" and say nothing
-  ;; about which side is wrong.
-  (define (elf-machine t)
-    (case (check-target 'elf-machine t) ((x86-64) 62) ((rv64) 243)))
-
-  ;; EF_RISCV_FLOAT_ABI_DOUBLE. This must match the ABI of the objects we link
-  ;; against, and lp64d is what riscv64-linux-gnu-gcc uses here. The RVC bit is
-  ;; deliberately clear: we emit no compressed instructions, and it is not an
-  ;; ABI bit, so a linker sees no conflict with a toolchain object that sets it.
-  (define (elf-flags t)
-    (case (check-target 'elf-flags t) ((x86-64) 0) ((rv64) #x4)))
+  ;; elf-machine and elf-flags come from (sonic elfexec), which is where ELF
+  ;; format knowledge lives. This file used to define its own identical pair --
+  ;; see the note there on why one copy matters.
 
   ;; --- little-endian scalars ------------------------------------------------
   ;; Both targets are little-endian, and RISC-V defines little-endian

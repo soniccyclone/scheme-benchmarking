@@ -15,8 +15,32 @@
 
 (library (sonic elfexec)
   (export metadata-offset-for build-executable write-executable pool-offset-for
-          elf-load-base elf-text-vaddr elf-page-size)
+          elf-load-base elf-text-vaddr elf-page-size
+          elf-machine elf-flags)
   (import (chezscheme))
+
+  ;; EM_X86_64 and EM_RISCV. The RISC-V value is 243, not 62 plus something
+  ;; memorable; getting it wrong makes `ld` say "incompatible" and say nothing
+  ;; about which side is wrong.
+  ;;
+  ;; THESE LIVE HERE because this file is where ELF format knowledge belongs,
+  ;; and because object.ss had its own identical copy: two writers, one object
+  ;; and one executable, independently encoding the same two constants. They
+  ;; agreed, which is luck rather than structure -- a later edit to one would
+  ;; not touch the other, and the failure would be a linker complaining about
+  ;; an architecture mismatch with no indication of which side moved.
+  (define (elf-machine t)
+    (case t ((x86-64) 62) ((rv64) 243)
+      (else (error 'elf-machine "unknown target" t))))
+
+  ;; EF_RISCV_FLOAT_ABI_DOUBLE. This must match the ABI of the objects we link
+  ;; against, and lp64d is what riscv64-linux-gnu-gcc uses here. The RVC bit is
+  ;; deliberately clear: we emit no compressed instructions, and it is not an
+  ;; ABI bit, so a linker sees no conflict with a toolchain object that sets it.
+  ;; A gcc-built static binary carries 0x5 for that reason; ours is 0x4.
+  (define (elf-flags t)
+    (case t ((x86-64) 0) ((rv64) #x4)
+      (else (error 'elf-flags "unknown target" t))))
 
   (define elf-page-size 4096)
   (define elf-load-base #x400000)
@@ -87,15 +111,7 @@
     ;; the two -- two PT_LOAD segments, no sections -- so the only things that
     ;; vary are e_machine and e_flags.
     ;;
-    ;; e_flags IS NOT COPIED FROM GCC, and that is deliberate. A static binary
-    ;; from riscv64-linux-gnu-gcc carries 0x5 = EF_RISCV_RVC |
-    ;; EF_RISCV_FLOAT_ABI_DOUBLE. We emit 0x4: the double-float ABI is ours, but
-    ;; the RVC bit would claim compressed instructions, and encode-rv64.ss
-    ;; deliberately does not emit the C extension. Setting it would not break
-    ;; execution, which is exactly why it is worth getting right -- the header
-    ;; would simply describe a file we did not produce.
-    ;;
-    ;; x86-64 keeps e_flags 0, which is what gcc emits there.
+    ;; e_machine and e_flags come from the two definitions above.
     (unless (memq target '(x86-64 rv64))
       (error 'build-executable "no image writer for this target" target))
     (let* ((code-size (bytevector-length code))
@@ -124,14 +140,12 @@
              '(2 1 1 0)                             ; 64-bit, LSB, version, SysV
              '(0 0 0 0 0 0 0 0)                     ; padding
              (u16 2)                                ; ET_EXEC
-             (u16 (if (eq? target 'rv64) #xf3 #x3e)) ; EM_RISCV / EM_X86_64
+             (u16 (elf-machine target))
              (u32 1)                                ; version
              (u64 entry)
              (u64 elf-header-size)                  ; e_phoff
              (u64 0)                                ; e_shoff: no sections
-             ;; e_flags: RV64 declares the double-float ABI (0x4) and NOT
-             ;; EF_RISCV_RVC, because we emit no compressed instructions.
-             (u32 (if (eq? target 'rv64) #x4 0))
+             (u32 (elf-flags target))
              (u16 elf-header-size)
              (u16 ph-entry-size) (u16 ph-count)
              (u16 0) (u16 0) (u16 0)))              ; no section headers
