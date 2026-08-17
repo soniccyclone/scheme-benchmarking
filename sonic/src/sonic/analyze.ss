@@ -4,9 +4,15 @@
 ;;; runs the interval domain to a fixpoint with widening and narrowing, and
 ;;; reports for each vector reference whether its bounds check is provably dead.
 ;;;
-;;; The core language is s-expressions for now, so there is no reader and no
-;;; expander yet. That is deliberate ordering: a reader is a solved problem and
-;;; this is not, so it goes first.
+;;; THE READER AND EXPANDER EXIST NOW. This header used to say "there is no
+;;; reader and no expander yet", which recorded the deliberate ordering -- a
+;;; reader is a solved problem and interval analysis is not, so this went first.
+;;; That ordering held, and then E3 landed: read.ss and expand.ss are both
+;;; written, tested (16 and 27 assertions), and imported by driver.ss.
+;;;
+;;; What is still true, and is the part that matters here, is that THIS PASS
+;;; takes the core language directly as s-expressions. It does not go through
+;;; the reader, and nothing upstream of the core language is its concern.
 ;;;
 ;;; Core language, A-normalized. Every intermediate is named, which is a
 ;;; PRECONDITION rather than a nicety: the analysis attaches an abstract value
