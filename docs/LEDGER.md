@@ -2272,3 +2272,58 @@ sonic 664.13 instructions per step against sbcl-5's 2231.77, a factor of 3.36.
 Recorded also because it is the fourth time this month a green-looking artifact
 was measuring nothing -- after `deploy.resources.limits.memory`, `timeout
 --signal=KILL`, and `command -v scheme` skipping the smoke gate's compile.
+
+---
+
+## D64 -- a virtual may never be spelled like a physical register, and compilation is idempotent
+
+Two bugs with one cause, found by writing the first tests five pipeline passes
+had ever had, and worth an entry because the rule they produce is not obvious
+and the way they hid each other is instructive.
+
+**THE COLLISION.** `fresh!` in `lower.ss` names quoted constants `k1`, `k2`,
+`k3`, so the SEVENTH constant in a program came out `k7` -- which is an x86-64
+opmask register. `mask-reg?` then classified that VIRTUAL as a mask register and
+the encoder refused `movsd k7, [rip+%pool+8]`. Correct, and useless: the message
+named neither the virtual nor the pass three stages upstream that made it, and
+the program was an ordinary `flvector-set!` in a loop.
+
+RV64 was armed the same way and worse. It has physical `t2`..`t6`, and `"t"` is
+the most-used base in that file; nothing had reached the seventh `t` on that
+target yet.
+
+`fresh!` now SKIPS any name in the union of both targets' register sets.
+Skipping rather than re-spelling, because every separator is already claimed and
+both alternatives were tried and broke the suite: `.ddd` is essa's SSA suffix,
+which `base-of` strips, so naming virtuals `k.7` made them look SSA-renamed and
+miscompiled through it; `%` is the expander's, and a leading `%` is how the
+runtime labels `%pool` and `%gcmeta` are written. The reserved set is built from
+`regs.ss` rather than duplicated, so a register added there cannot drift out of
+this check.
+
+**THE ONE THAT HID IT.** `lower.ss`'s name counter was never reset, so a
+compile's output depended on how many compiles preceded it in the process. The
+same source CRASHED on compile #1 and SUCCEEDED on #2, because the second one's
+names started wherever the first stopped and stepped over `k7`. It now resets,
+and `run-x86-64-test.ss` asserts three compiles of one source produce
+byte-identical images.
+
+That test file already had a "same source compiles to the same bytes, twice
+running" assertion, and it passed throughout -- because ITS program never reached
+the collision. The new assertion uses the seven-constant program instead. An
+idempotence check is only as good as whether its input can expose a difference.
+
+**A MISATTRIBUTION WORTH RECORDING, because it cost two days.** Adding the
+counter reset appeared to miscompile `(if #f 7 9)` to 7 against Chez's 9, and I
+wrote that down as a SECOND, separate name-dependency to hunt before the reset
+could land. It was not separate. It belonged to the abandoned `k.7` spelling
+standing beside it at the time, and the reason that spelling was abandoned took
+the miscompile with it. What settled it was dumping the emitted branch lowering
+before and after the reset -- byte-for-byte the same `mov rbx,7 / cmp rbx,7 / je
+L.else` -- rather than re-reasoning about the note I had written.
+
+**THE GENERAL RULE.** Compiler-generated names and physical register names share
+a namespace unless something makes them disjoint, and nothing did. The failure is
+silent in the direction that matters: a name that happens not to collide today
+collides the moment a program has one more constant, or a target gains a
+register, or an unrelated pass shifts a counter.
