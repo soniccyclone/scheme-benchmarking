@@ -1,10 +1,25 @@
-;;; NOTHING IN THE COMPILATION PIPELINE CALLS THIS. Measured 2026-08-17 by
-;;; sweeping every import: driver.ss does not import (sonic vectorize), and the
-;;; only importers are vec-x86-64.ss, vec-rv64.ss and vectorize-test.ss. The
-;;; pass is written, has green assertions on BOTH targets including
-;;; length-agnostic RVV, and reaches no binary. Read that before treating a
-;;; green vectorize-test.ss as evidence about compiled output -- it tests the
-;;; kernel, not the program.
+;;; THIS FILE IS PARTLY LIVE, AND THE DISTINCTION MATTERS. An earlier version of
+;;; this header said "NOTHING IN THE COMPILATION PIPELINE CALLS THIS", which was
+;;; true when it was written and stopped being true with D59 -- that change wired
+;;; ONE predicate in and did not update the header. Re-measured by sweeping
+;;; imports:
+;;;
+;;;   LIVE, on every compile:
+;;;     `listing-uses-three-lane?` -- driver.ss:165 calls it to decide whether the
+;;;     runtime prologue needs its `kmovw k1` setup. That is D59: we stopped
+;;;     emitting an AVX-512 instruction unconditionally, so a binary only carries
+;;;     the mask setup when a three-lane op is actually present. Changing this
+;;;     predicate changes every emitted binary.
+;;;
+;;;   NOT LIVE:
+;;;     the EMITTERS -- `vec-emit-loop*` and everything downstream of a kernel.
+;;;     driver.ss does not import (sonic vectorize) and never calls them. They
+;;;     have green assertions on both targets, including length-agnostic RVV, and
+;;;     reach no binary.
+;;;
+;;; So a green vectorize-test.ss is NOT evidence about compiled output: it tests
+;;; the kernel, not the program. But do not read this file as dead either -- the
+;;; predicate above ships.
 ;;;
 ;;; WHY IT WAS NEVER WIRED, since it is not an oversight: vec-emit-loop* returns
 ;;; a LISTING of machine instructions, fully unrolled at fixed byte offsets,

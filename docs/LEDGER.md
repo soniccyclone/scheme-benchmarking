@@ -2860,3 +2860,47 @@ that provably changes no emitted instruction — a duplicate measurement and one
 more row on every benchmark run. Keeping a negative result measurable does not
 mean keeping every negative result as a configuration; this one is two lines and
 lives on the bead.
+
+## D74 — two claims about what is measurable, both checked rather than assumed
+
+**`vec-x86-64.ss` is partly live, and its header said otherwise.** The header
+opened `NOTHING IN THE COMPILATION PIPELINE CALLS THIS`. That was true when
+written and stopped being true with D59, which wired one predicate in without
+updating it: `driver.ss:165` calls `listing-uses-three-lane?` on every compile to
+decide whether the runtime prologue needs its `kmovw k1` setup. Changing that
+predicate changes every emitted binary.
+
+The emitters really are unwired — `driver.ss` does not import `(sonic vectorize)`
+and never calls `vec-emit-loop*` — and `vectorize.ss` and `vec-rv64.ss` are
+unwired outright, their headers accurate. Only this one file is mixed, and a
+blanket "dead" label on it is the more dangerous error of the two: it invites
+someone to change a shipping predicate believing nothing consumes it.
+
+**Milestone 5's instruction arm is blocked for a sharper reason than "AVX-512".**
+`c-native` is 570 instructions, of which 67 (11.8%) are EVEX-encoded. There are
+**zero zmm registers and zero mask registers**, so searching for those finds
+nothing and the binary reads as AVX2. What EVEX is buying is the upper sixteen
+vector registers:
+
+```
+12df:  62 e1 ff 08 12 c1     vmovddup    %xmm1,%xmm16
+1339:  62 c1 8d 08 59 c2     vmulpd      %xmm10,%xmm14,%xmm16
+1650:  62 e1 ff 08 10 1d f6  vmovsd      0x29f6(%rip),%xmm19
+```
+
+`xmm16`–`xmm31` are addressable only through EVEX. These are 128-bit operations
+using AVX-512VL purely for the extra registers, i.e. to cut spills.
+
+Neither instrument can count it: valgrind 3.25.1's VEX decoder has no EVEX and
+fails on `0x62 0xE1 0xFF 0x08 ...`; QEMU 10.1.0's TCG does not implement AVX-512
+and takes SIGILL (rc=132). Note `qemu-x86_64 -cpu help` *does* list `avx512f` and
+friends — that is the CPU model table, describing what a KVM guest could be told
+it has, not what TCG emulates. Probing it is misleading and I nearly read it as
+support. The binary runs fine natively; only counting is blocked, so M5's
+wall-clock arm is unaffected.
+
+And the obvious workaround fails on its own terms: `-mno-avx512f` would be
+countable but is **not the same program**, because removing AVX-512 removes
+`xmm16`–`xmm31` and therefore changes register allocation — which is precisely
+what those 67 instructions exist to exploit. It would answer a question about a
+different compilation.
