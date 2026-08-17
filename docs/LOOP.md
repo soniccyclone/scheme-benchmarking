@@ -64,10 +64,14 @@ is not the agent's call:
 Raising `specialize-growth-budget` was tried as (b) and does not get there --
 see `sonic-u4`.
 
-**`qaq.10` — measure.sh cannot count sbcl, racket, ecl or clisp.** callgrind
-crashes on all four. M3's acceptance names measure.sh AND bench.sh; the bench.sh
-arm passes decisively. Either re-word the milestones that name a managed-runtime
-Lisp, or find a third instrument.
+**`qaq.10` — one question left, and it is narrow now.** A second counter exists
+(`harness/qemu-count.sh`) and `measure.sh` picks between them, labels which
+answered, and refuses rather than printing a number for a broken run — see D63.
+So M3's instruction arm IS obtainable: sonic 664.13 instructions/step against
+sbcl-5's 2231.77, a factor of 3.36, alongside the wall-clock 5.85x. The only
+open question is whether a milestone may be answered by TWO instruments that
+agree to ~1% rather than exactly. c-native remains uncountable by anything here,
+so Milestone 5's instruction comparison needs a reword regardless.
 
 **`xei` (E3) — the acceptance names an artifact that does not exist**, a
 hand-written core fixture. parse-test.ss does something stronger and passes.

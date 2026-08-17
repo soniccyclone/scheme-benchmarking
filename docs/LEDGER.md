@@ -2191,3 +2191,76 @@ The general lesson is the one this month keeps producing, in a new place: five
 passes in the shipping pipeline had no test file (cqs.19), and the first two
 tests written against them found a stale acceptance criterion and this. Coverage
 that looks complete -- 54 test files -- was not.
+
+---
+
+## D63 -- two instruction counters, and a measurement that cannot be quietly wrong
+
+D60 replaced perf with callgrind because this host has no usable PMU. That was
+right and it was not enough: callgrind cannot run four of the nineteen
+configurations at all, and -- far worse -- it does not always say so.
+
+**THE FAILURE MODE, WHICH IS THE POINT OF THIS ENTRY.** Three instruction
+counts produced during one afternoon were confident, plausible, and wrong:
+
+    117,666   callgrind on c-native. It prints "vex amd64->IR: unhandled
+              instruction bytes: 0x62 ..." AND "I refs: 117,666" -- the total
+              up to the failure. An earlier sweep of mine recorded that number
+              as c-native's instruction count. It is not one.
+
+    103,015   qemu on the same binary, summed up to "uncaught target signal 4
+              (Illegal instruction)". `gcc -O3 -march=native` emits AVX-512 on
+              this host; valgrind's VEX cannot decode it and QEMU's TCG does not
+              implement it.
+
+    115,154   qemu on clisp-9, which exits 0, prints the correct energies, and
+              responds to N. Its qemu log is nevertheless byte-identical at
+              N=50 and N=200 -- 34,578 lines, 22,542 traces -- because clisp
+              re-executes itself and the child's log replaces the parent's. What
+              was counted is a prologue.
+
+Not one of them looked wrong. `measure.sh` printed a per-step of 0.00 for
+c-native and nobody noticed, because a table of numbers with a zero in it reads
+like a slow configuration rather than a broken instrument.
+
+**WHAT CATCHES IT: THE COUNT MUST CHANGE WHEN THE WORK CHANGES.** A real count
+varies with N; a crashed or truncated one does not. That single check found all
+three, and nothing else did -- not exit status, not output correctness, not
+plausibility.
+
+So it is not a step anyone has to remember. `harness/count-slope.sh` asks for
+instructions PER STEP, which cannot be computed from two equal counts, and
+refuses instead of reporting zero. That is D30's argument about the container
+limits -- a guarantee you have to remember to apply fails exactly when it
+matters -- applied to a measurement rather than to memory.
+
+**A SECOND COUNTER, AND WHY MIXING IS LABELLED.** `harness/qemu-count.sh` counts
+by summing, over translated blocks, executions x instructions-in-block, from
+`-d in_asm,exec,nochain`. `nochain` is load-bearing and its absence is silent:
+QEMU chains blocks and then jumps between them without logging, and the first
+version undercounted eight-fold (29,396 against callgrind's 243,031) while
+looking entirely reasonable. Cross-validated against callgrind on binaries both
+can run, the two converge as the run grows -- 0.9439 at N=200, 0.9965 at N=2000,
+1.0071 at N=20000 -- because they account for process startup differently and
+qemu counts a block entered but not completed as whole. They agree to under 1%
+at scale and NOT exactly, which is why `measure.sh` now carries an instrument
+column rather than presenting one number type.
+
+**WHAT CAN BE COUNTED HERE, AS OF THIS ENTRY:**
+
+    sonic, c-scalar, chez     callgrind
+    sbcl-5                    qemu, validated by the two-N check
+    racket-4, ecl-9           qemu answers; not validated, both too slow under
+                              nochain to check inside ten minutes
+    clisp-9                   NEITHER
+    c-native                  NEITHER, and this one has consequences
+
+c-native is Milestone 5's reference. Its instruction count is unobtainable on
+this host by any instrument available, so a milestone worded around comparing
+instructions against it cannot be satisfied as written -- that is bead qaq.10
+and it is Nathan's to resolve. Milestone 3's instruction arm IS now obtainable:
+sonic 664.13 instructions per step against sbcl-5's 2231.77, a factor of 3.36.
+
+Recorded also because it is the fourth time this month a green-looking artifact
+was measuring nothing -- after `deploy.resources.limits.memory`, `timeout
+--signal=KILL`, and `command -v scheme` skipping the smoke gate's compile.
