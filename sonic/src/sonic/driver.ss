@@ -48,12 +48,29 @@
           ;; for listing-uses-three-lane?: whether the prologue needs its k1
           ;; setup, which is AVX-512 and must not be emitted unconditionally.
           (sonic vec-x86-64)
-          (sonic target-x86-64))
+          (sonic target-x86-64) (sonic target-rv64))
 
   (define-record-type (compiled make-compiled compiled?)
     (fields image code pool entry listing functions globals lift-report metadata))
 
-  (define (compile-sonic path externs)
+  ;; THE TARGET IS A PARAMETER NOW, defaulting to x86-64 so every existing
+  ;; caller is unchanged. It used to be hardcoded at seven sites inside this
+  ;; procedure, which meant there was no way to ask for RV64 at all -- not even
+  ;; to be told no. That was the finding behind bead 1mp.6: "tested on both
+  ;; targets" described the back-end machinery, because no Scheme program could
+  ;; be compiled to RV64 by any route.
+  ;;
+  ;; Asking for rv64 now reaches `runtime-listing`, which refuses with a
+  ;; specific reason. That is the point: a refusal from the place the work is
+  ;; actually missing beats silently emitting the other architecture.
+  (define compile-sonic
+    (case-lambda
+      [(path externs) (compile-sonic path externs 'x86-64)]
+      [(path externs target) (compile-sonic/target path externs target)]))
+
+  (define (compile-sonic/target path externs target)
+    (unless (memq target '(x86-64 rv64))
+      (error 'compile-sonic "unknown target" target))
     (let* (;; UNROLL AFTER INLINING, BEFORE SSA. After inlining, because a loop
            ;; whose body still contains a call to a small procedure would be
            ;; unrolled around the call rather than around its body, and the
@@ -142,7 +159,21 @@
                ;; Packing first, and packing the MARKED spellings, leaves
                ;; contract.ss a packed multiply and a packed add to fuse into
                ;; one `vfmadd231pd` -- two lanes, one rounding each.
-               ((sprog slp-st) (slp-program dprog classes))
+               ;; SLP IS x86-64 ONLY, AND IT HAS TO BE GATED HERE. Its packed
+               ;; values are `raw-f64` vregs holding a 128-bit pair, and the
+               ;; only lowering for `p2add`/`p2sub`/`p2mul`/`p2splat`/`p2hi` is
+               ;; in target-x86-64.ss. Running it unconditionally meant an RV64
+               ;; compile died in selection with "target cannot select these
+               ;; ops (p2splat p2mul p2add p2sub p2hi)" -- a pass emitting
+               ;; operations the target cannot lower.
+               ;;
+               ;; Skipping it leaves the program CORRECT and scalar, which is
+               ;; the right default for a target with no packed lowering. When
+               ;; RV64 grows one -- RVV, or pairs -- this becomes a capability
+               ;; question rather than a target name.
+               ((sprog slp-st) (if (eq? target 'rv64)
+                                   (values dprog #f)
+                                   (slp-program dprog classes)))
                ((prog contract-st) (contract-program sprog)))
           (let* ((entry (caddr prog))
                  ;; SORTED: this list decides each global's ADDRESS, so an
@@ -152,8 +183,8 @@
             (parameterize ((current-litpool (make-pool))
                            (current-vreg-classes classes)
                            (current-globals gaddrs))
-              (let* ((selected (select-program x86-64-selector prog))
-                     (fns (finalize-program 'x86-64 arch-x86-64 selected
+              (let* ((selected (select-program (if (eq? target 'rv64) rv64-selector x86-64-selector) prog))
+                     (fns (finalize-program target (if (eq? target 'rv64) arch-rv64 arch-x86-64) selected
                                             (cadr prog) entry classes
                                             (lowered-params)))
                      ;; The prologue's k1 setup is AVX-512 and is emitted only
@@ -163,7 +194,7 @@
                      ;; counts instructions to place the GC frame maps.
                      (code-listing (apply append (map finalized-listing fns)))
                      (lane-mask? (listing-uses-three-lane? code-listing))
-                     (listing (append (runtime-listing 'x86-64 entry lane-mask?)
+                     (listing (append (runtime-listing target entry lane-mask?)
                                       code-listing))
                      (pool (pool-bytes (current-litpool)))
                      ;; The pool lands 16-ALIGNED past the code, so every pool
@@ -210,7 +241,7 @@
                      (n-instrs (lambda (l) (length (filter (lambda (i) (not (symbol? i))) l))))
                      (fb-at
                       (let walk ((fs fns)
-                                 (i (n-instrs (runtime-listing 'x86-64 entry lane-mask?)))
+                                 (i (n-instrs (runtime-listing target entry lane-mask?)))
                                  (acc '()))
                         (if (null? fs)
                             (reverse acc)
@@ -218,7 +249,7 @@
                                   (+ i (n-instrs (finalized-listing (car fs))))
                                   (cons (cons i (frame-tag-bits (car fs) classes))
                                         acc)))))
-                     (o (assemble-function 'x86-64 'program listing
+                     (o (assemble-function target 'program listing
                                            (list (cons 'constants pool)
                                                  (cons 'extra-labels extra)
                                                  (cons 'frame-bits-at fb-at))))
@@ -228,7 +259,7 @@
                      ;; the function object and this call took only the code.
                      ;; Nothing else was missing for the roots half of D21.
                      (meta (function-object-metadata o))
-                     (img (build-executable 'x86-64 (function-object-code o) pool
+                     (img (build-executable target (function-object-code o) pool
                                             (+ elf-text-vaddr start)
                                             #x600000 runtime-data-size meta)))
                 (make-compiled img (function-object-code o) pool
@@ -451,21 +482,30 @@
                         ((efacts) (element-ascent settled)))
             (call-with-values (lambda () (interval-ascent efacts)) drop3)))))
 
-  (define (listing-size listing)
-    (let loop ((xs listing) (pc 0))
-      (cond ((null? xs) pc)
-            ((symbol? (car xs)) (loop (cdr xs) pc))
-            (else (loop (cdr xs) (+ pc (instruction-size 'x86-64 (car xs))))))))
+  (define listing-size
+    (case-lambda
+      [(listing) (listing-size listing 'x86-64)]
+      [(listing target)
+       (let loop ((xs listing) (pc 0))
+         (cond ((null? xs) pc)
+               ((symbol? (car xs)) (loop (cdr xs) pc))
+               (else (loop (cdr xs) (+ pc (instruction-size target (car xs)))))))]))
 
-  (define (label-offset listing name)
-    (let loop ((xs listing) (pc 0))
-      (cond ((null? xs) (error 'label-offset "no such label in the listing" name))
-            ((eq? (car xs) name) pc)
-            ((symbol? (car xs)) (loop (cdr xs) pc))
-            (else (loop (cdr xs) (+ pc (instruction-size 'x86-64 (car xs))))))))
+  (define label-offset
+    (case-lambda
+      [(listing name) (label-offset listing name 'x86-64)]
+      [(listing name target)
+       (let loop ((xs listing) (pc 0))
+         (cond ((null? xs) (error 'label-offset "no such label in the listing" name))
+               ((eq? (car xs) name) pc)
+               ((symbol? (car xs)) (loop (cdr xs) pc))
+               (else (loop (cdr xs) (+ pc (instruction-size target (car xs)))))))]))
 
-  (define (compile-sonic-to-file path externs out)
-    (let ((c (compile-sonic path externs)))
-      (write-executable out (compiled-image c))
-      c))
+  (define compile-sonic-to-file
+    (case-lambda
+      [(path externs out) (compile-sonic-to-file path externs out 'x86-64)]
+      [(path externs out target)
+       (let ((c (compile-sonic path externs target)))
+         (write-executable out (compiled-image c))
+         c)]))
   )

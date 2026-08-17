@@ -11,7 +11,7 @@
 (import (chezscheme) (rnrs io simple)
         (sonic lang) (sonic fixtures) (sonic select)
         (sonic regs) (sonic target-rv64) (sonic encode-rv64) (sonic litpool)
-        (sonic numeric) (sonic elfexec))
+        (sonic numeric) (sonic elfexec) (sonic driver) (sonic pipeline))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -524,6 +524,36 @@
              (write-executable p2 i2)
              (system (string-append "chmod +x " p2))
              (= 7 (system (string-append "qemu-riscv64 " p2)))))))
+
+;;; --- how far a REAL program gets on RV64 ---------------------------------
+;;;
+;;; This pins the boundary rather than a capability, and the distinction is the
+;;; useful part. Compiling nbody for rv64 must fail -- there is no RV64 runtime
+;;; (bead 1mp.6) -- but it must fail AT THE RUNTIME, having got through
+;;; selection, register allocation, encoding and object emission on a real
+;;; program rather than a hand-written fixture.
+;;;
+;;; Asserting WHICH failure is the whole point. Before the driver took a target
+;;; argument there was no way to ask for rv64 at all; when there was, nbody died
+;;; in selection with "target cannot select these ops (p2splat p2mul p2add p2sub
+;;; p2hi)" because slp.ss packs unconditionally and only x86-64 can lower a
+;;; packed pair. A test that merely asserted "rv64 fails" would have passed
+;;; throughout and told us nothing about where the frontier actually is.
+(let ((msg (guard (e (#t (condition-message e)))
+             (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs 'rv64)
+             "compiled, which it cannot yet do")))
+  (ck! "a real program reaches the RV64 RUNTIME, i.e. everything before it handles rv64"
+       (and (string? msg)
+            (>= (string-length msg) 8)
+            (string=? (substring msg 0 8) "no RV64 ")))
+  ;; THE CONTROL. If this passed too, the assertion above would be matching a
+  ;; generic failure rather than the specific frontier.
+  (ck! "and it is NOT failing in selection any more"
+       (not (and (string? msg)
+                 (let loop ((i 0))
+                   (cond ((> (+ i 6) (string-length msg)) #f)
+                         ((string=? (substring msg i (+ i 6)) "select") #t)
+                         (else (loop (+ i 1))))))))) 
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
