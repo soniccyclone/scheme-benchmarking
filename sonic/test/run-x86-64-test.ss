@@ -1348,6 +1348,40 @@
              (y (call-with-port (open-file-input-port b) get-bytevector-all)))
          (equal? x y))))
 
+
+;; --- a tail call whose arguments overflow the register set -------------------
+;;
+;; `tail-call-sequence` used to REFUSE this: the outgoing area has to be written
+;; over the caller's own incoming area, and doing that safely needs a frame
+;; layout to say what there is still live. There is one now, so it emits.
+;;
+;; THE ROTATION IS THE TEST, not the arity. Ten arguments passed straight
+;; through make every store an identity, which would pass whether or not the
+;; ordering is right. Rotating them means every outgoing slot reads a caller
+;; slot that some other store overwrites, so an overwrite-before-read shows up
+;; as a wrong digit rather than as luck. The digits are place-valued for the
+;; same reason: any two arguments landing in the wrong order changes the answer.
+(run! "a ten-argument tail call, arguments passed straight through"
+      (string-append
+       "(define (go a b c d e f g h i j)\n"
+       "  (if (fx= a 0)\n"
+       "      (fx->fl (fx+ (fx+ (fx+ (fx+ a b) (fx+ c d)) (fx+ (fx+ e f) (fx+ g h))) (fx+ i j)))\n"
+       "      (go (fx- a 1) b c d e f g h i j)))\n"
+       "(define (main) (display (go 5 1 2 3 4 5 6 7 8 9)) (newline))\n(main)\n")
+      '(45.0))
+
+(run! "and the same call ROTATING all ten, so a clobbered slot cannot pass"
+      (string-append
+       "(define (go n a b c d e f g h i j)\n"
+       "  (if (fx= n 0)\n"
+       "      (fx->fl (fx+ (fx* a 1000000000) (fx+ (fx* b 100000000)\n"
+       "        (fx+ (fx* c 10000000) (fx+ (fx* d 1000000) (fx+ (fx* e 100000)\n"
+       "        (fx+ (fx* f 10000) (fx+ (fx* g 1000) (fx+ (fx* h 100)\n"
+       "        (fx+ (fx* i 10) j))))))))))\n"
+       "      (go (fx- n 1) b c d e f g h i j a)))\n"
+       "(define (main) (display (go 1 1 2 3 4 5 6 7 8 9 0)) (newline))\n(main)\n")
+      '(2345678901.0))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))
