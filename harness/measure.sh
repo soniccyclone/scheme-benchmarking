@@ -43,49 +43,42 @@ N2=${N2:-2000000}
 # REPS defaults to 1 and there is now no reason to raise it: a simulated count
 # is the same integer every time. It is kept so the min/max columns still work
 # if someone wants to prove that to themselves.
-REPS=${REPS:-1}
-
 here_m="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-count() {  # exact instruction count for one run
-    # $1 is a command line, deliberately unquoted so its arguments split -- the
-    # same shape the perf invocation this replaces had.
-    "$here_m/harness/count-instructions.sh" $1 2>/dev/null | cut -f1
-}
+# ONE SLOPE PER CONFIGURATION, THROUGH count-slope.sh, and the delegation is the
+# point rather than tidiness. That script refuses a measurement whose count does
+# not change with N, which is the only thing that has ever caught a broken one
+# here: callgrind reports a total alongside "unhandled instruction" and QEMU
+# sums a log up to an "uncaught target signal", so both hand back plausible
+# numbers for runs that died. This table printed a per-step of 0.00 for c-native
+# on exactly that basis before anyone looked twice.
+#
+# It also picks the instrument -- callgrind first, because every instruction
+# figure in the ledger came from it, then qemu-count for the four
+# managed-runtime Lisps it crashes on -- and says which one answered. A
+# callgrind number and a qemu number agree to about 1% at scale and NOT exactly,
+# so the column is there to stop the two being read as interchangeable.
+#
+# REPS is gone. A simulated count is the same integer every time; repeating it
+# measured nothing and only made the table slower.
 
-# The slope between N1 and N2, sampled REPS times; prints "median min max".
-slope() {  # $1 = run command at N1, $2 = run command at N3
-    local i a b
-    for i in $(seq "$REPS"); do
-        a=$(count "$1"); b=$(count "$2")
-        [ -z "$a" ] || [ -z "$b" ] && { echo ""; return; }
-        awk -v a="$a" -v b="$b" -v d="$((N2 - N1))" 'BEGIN{printf "%.2f\n", (b-a)/d}'
-    done | sort -n | awk '{v[NR]=$1} END{printf "%s %s %s", v[int((NR+1)/2)], v[1], v[NR]}'
-}
-
-if [ "$REPS" -gt 1 ]; then
-    printf '%-12s %14s %14s %14s %10s\n' config "per-step" min max vs-C
-    printf '%-12s %14s %14s %14s %10s\n' ------ -------------- -------------- -------------- ----------
-else
-    printf '%-12s %16s %16s %14s %10s\n' config "N=$N1" "N=$N2" per-step vs-C
-    printf '%-12s %16s %16s %14s %10s\n' ------ ---------------- ---------------- -------------- ----------
-fi
+printf '%-12s %14s %10s %12s\n' config per-step vs-C instrument
+printf '%-12s %14s %10s %12s\n' ------ -------------- ---------- ------------
 
 base=""
 for c in ${*:-$CONFIGS}; do
-    if [ "$REPS" -gt 1 ]; then
-        read -r per lo hi <<< "$(slope "$(cfg_run "$c" "$N1")" "$(cfg_run "$c" "$N2")")"
-        [ -z "$per" ] && { printf '%-12s  measurement failed\n' "$c"; continue; }
-        [ -z "$base" ] && base="$per"
-        rel=$(awk -v p="$per" -v b="$base" 'BEGIN{printf "%.2fx", p/b}')
-        printf '%-12s %14s %14s %14s %10s\n' "$c" "$per" "$lo" "$hi" "$rel"
-    else
-        i1=$(count "$(cfg_run "$c" "$N1")")
-        i2=$(count "$(cfg_run "$c" "$N2")")
-        [ -z "$i1" ] && { printf '%-12s  measurement failed\n' "$c"; continue; }
-        per=$(awk -v a="$i1" -v b="$i2" -v n1="$N1" -v n2="$N2" 'BEGIN{printf "%.2f", (b-a)/(n2-n1)}')
-        [ -z "$base" ] && base="$per"
-        rel=$(awk -v p="$per" -v b="$base" 'BEGIN{printf "%.2fx", p/b}')
-        printf '%-12s %16d %16d %14s %10s\n' "$c" "$i1" "$i2" "$per" "$rel"
+    out=$("$here_m/harness/count-slope.sh" "$N1" "$N2" "$(cfg_run "$c" @N)" 2>&1)
+    per=$(printf '%s' "$out" | awk -F'\t' '/instructions\/step/ {print $1}')
+    ins=$(printf '%s' "$out" | awk -F'\t' '/instructions\/step/ {print $3}')
+    if [ -z "$per" ]; then
+        # The refusal, not a blank. Which one it was matters: "no instrument
+        # could count this" and "the count did not change with the work" are
+        # different failures and only the second implies a broken measurement.
+        why=$(printf '%s' "$out" | sed -n 's/^REFUSED: //p' | head -1)
+        printf '%-12s  %s\n' "$c" "${why:-measurement failed}"
+        continue
     fi
+    [ -z "$base" ] && base="$per"
+    rel=$(awk -v p="$per" -v b="$base" 'BEGIN{printf "%.2fx", p/b}')
+    printf '%-12s %14s %10s %12s\n' "$c" "$per" "$rel" "$ins"
 done
