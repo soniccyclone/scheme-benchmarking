@@ -561,6 +561,29 @@
     (ck! "and a scalar function in that same binary is NOT packed"
          (not (has-packed-arithmetic? d (string->symbol nm)))))
 
+  ;; --- Milestone 6: fannkuch-redux, the same reading -----------------------
+  ;;
+  ;; run-x86-64-test.ss already asserts both halves of M6 at their own levels:
+  ;; the oracle (228 and 16 at n=7, ref.c's answers and Chez's) and the IR count
+  ;; of surviving bounds checks (zero). This is the third reading, on the
+  ;; emitted code, and it is the one M2 is held to.
+  ;;
+  ;; fannkuch is the harder elision. Its loop guard is `(fx< i j)` with `j` from
+  ;; `(vector-ref perm 0)`, so bounding it needs "every element of perm is below
+  ;; n" -- a statement about the array's CONTENTS, not about any scalar the
+  ;; interval domain tracks. SPEC.md picked the program for that shape and
+  ;; elemrange.ss supplies the fact. Which makes this assertion the end-to-end
+  ;; check on the pass whose escape rule D62 had to fix.
+  (let-values (((d nm trap)
+                (compiled-loop-of "../bench/fannkuch/config-sonic.sps" '(display newline)
+                                  (lambda (s) (string=? s "count-flips")))))
+    (ck! "MILESTONE 6: fannkuch's count-flips loop is found in the emitted code"
+         (loop? (inner-loop d nm)))
+    (ck! "MILESTONE 6: and carries no branch to the bounds-error trap"
+         (no-check-branch-to? d nm (list trap)))
+    (ck! "and the trap is not named in that function at all"
+         (= trap -1)))
+
   ;; THE CONTROL. Same predicate, same pipeline, a bound the analysis cannot
   ;; prove -- so the check survives and must be found. Without this the
   ;; assertion above is satisfied by any program that fails to emit a check for
