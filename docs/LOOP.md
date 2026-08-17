@@ -109,6 +109,36 @@ a decision.
 
 ---
 
+## Measuring anything
+
+Three instruments, and which one you may use is not a free choice.
+
+**Wall clock** — `harness/bench.sh`. Slope between two N, bootstrap CI. USE 40
+REPS, not 15: the c-native comparison at 15 gives an interval containing 1.0 and
+at 40 gives [0.8288, 0.9464]. A min-of-N at a single N is not a result and D57 is
+the entry about why.
+
+**Instructions per step** — `harness/measure.sh`, which drives
+`harness/count-slope.sh`. It picks callgrind first (every instruction figure in
+the ledger came from it), falls back to `harness/qemu-count.sh` for the
+managed-runtime Lisps callgrind crashes on, reports WHICH instrument answered,
+and refuses rather than printing a number for a broken run.
+
+**Never quote a single instruction count.** Ask for a slope. Two equal counts
+have zero slope, and that is the only check that has ever caught a broken
+measurement here — callgrind prints a total alongside "unhandled instruction",
+QEMU sums a log up to an "uncaught target signal", and clisp's log stops early
+because it re-executes itself. Three plausible wrong numbers, all found by the
+count not changing when the work changed, none by anything else. D63.
+
+What cannot be counted on this host at all: **c-native** (`-march=native` emits
+AVX-512; neither valgrind's VEX nor QEMU's TCG decodes it) and **clisp-9**.
+racket and ecl produce a count but cannot be validated — the two-N check does not
+finish. c-native being uncountable is why Milestone 5's instruction comparison
+needs rewording rather than an instrument.
+
+---
+
 ## Before closing ANYTHING
 
 ```
