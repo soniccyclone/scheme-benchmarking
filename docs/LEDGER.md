@@ -2982,3 +2982,19 @@ environment gains capability**, and neither of these had anything watching.
 
 Both refusals corrected to say what is actually missing. They still refuse; they
 no longer claim the work is unverifiable.
+
+**Correction, same session.** This entry first called the remaining work
+"bounded", having counted what EXISTS and inferred the rest was small without
+measuring it. Measured: `x86-64-listing` is **689 lines, 289 emitted
+instructions, 39 helper routines** — allocation (5 labels), boxing and tagging
+(5), string conversion (7), integer division (3), the error trap, plus entry,
+heap and gcmeta setup, the command-line walk and the exit path. Those helpers
+are hand-written runtime, not compiler output, so an RV64 version must reproduce
+behaviour rather than port encodings, against a different register convention,
+different addressing modes and a different syscall ABI.
+
+So it is a feature, not a tidy-up, and the "bounded" framing should not be used
+to decide it. What does not change is the validation route: qemu-riscv64 makes it
+checkable against SPEC.md exactly as x86-64 is. Estimating a remainder by sizing
+the part already built is its own small lesson — the same error shape as
+validating an instrument on the binary that cannot exercise it (D72).
