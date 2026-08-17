@@ -67,28 +67,42 @@ closed; every pass in the tree now has a test.
 
 ### Waiting on Nathan — do not decide these autonomously
 
-**`1mp.5` / `1mp.4` — how four lanes become reachable. THE DIAGNOSIS CHANGED;
-read this before re-planning.** Adjacency was never the blocker, and four
-iterations were spent on that wrong premise. Measured, by instrumenting slp.ss:
-four-lane packs DO seed on stock nbody — 7 at growth budget 4, 45 at budget 16 —
-because unrolling folds body indices to literal offsets off a common base with
-`idx=#f`, and `store-at` compares indices with `eq?`, so `#f` matches `#f`.
+**`1mp.5` / `1mp.4` — how four lanes become reachable. ALL FOUR ROUTES ARE NOW
+CHARACTERISED; the decision is which of two NEW options to take, or neither.**
 
-They are then demoted by `narrow!` with `kind was gather`. The gate is
-`classify!`: `same-op?` requires all four stored values to come from the SAME
-packable op, else `gather`, and `narrow!` correctly refuses a four-wide gather
-because assembling four scalars into a 256-bit register costs more than it saves.
-The seeds sit on the VELOCITY array in the force loop, where Newton's third law
-gives body i a `sub` and body j an `add` for the same pair — mixed ops, so both
-the classification and the demotion are right.
+Measured (D73): enabling the existing `four-lane-packing?` arm on the stock
+layout emits **zero** 256-bit instructions at any unroll budget.
 
-So the padded-layout route (`sonic-pad4`, built, **1.60x slower**) and the
-offset-table route (built, never fired, reverted) were both solving a problem
-that does not exist. The four routes are recorded on the bead. The cheap
-experiment nobody has run: get the POSITION update — uniformly `add` — to fold
-four literal store offsets off one base, and see whether the resulting `op` pack
-survives `narrow!` and emits ymm. That is smaller than any of the four routes and
-tests the thing that actually fails.
+```
+sonic (stock, four-lane off)       xmm=484    ymm=0
+sonic-v4-16 (four-lane, budget 16) xmm=3027   ymm=0   results bit-identical
+sonic-pad4  (padded layout)        xmm=455    ymm=18
+```
+
+Adjacency was never the shortage — four-lane packs DO seed (7 at budget 4, 45 at
+16), and die in `classify!`, where `same-op?` needs all four values from one
+packable op. The force loop mixes `sub` and `add` for the same pair by Newton's
+third law, so the pack is a `gather` and `narrow!` correctly refuses it four
+wide. Both the classification and the demotion are right.
+
+| route | status |
+|---|---|
+| 1. padded layout | BUILT, emits 18 ymm, **1.60x slower** |
+| 2. offset-table adjacency | BUILT, never fires, reverted — solved a non-problem |
+| 3. Lmach from an SSA kernel | BLOCKED on name correspondence |
+| 4. affine analysis at Lmach | shown by D73 to be aimed at the wrong gap |
+
+Route 4 was the one D67 left standing as "architecturally coherent". It proves
+more adjacency, and adjacency is already found, so it does not help.
+
+**What the evidence leaves open**, and neither is on the original route list:
+  (a) teach `classify!` and emission to treat a MIXED add/sub pack as one
+      operation — an `addsubpd`-style form, or a negated-operand rewrite;
+  (b) accept the layout change, which is route 1 and is measured slower.
+
+(a) is the only path to 256-bit on the unmodified benchmark. It is a real change
+to a shipping pass and its payoff is unknown, so it is Nathan's call, not the
+loop's.
 
 **`xei` (E3) — the acceptance names an artifact that does not exist**, a
 hand-written core fixture. parse-test.ss does something stronger and passes.
