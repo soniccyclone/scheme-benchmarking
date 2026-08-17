@@ -2688,3 +2688,44 @@ qaq.12. That is the **fifth** subshell assignment to vanish in this harness
 (measure.sh `COUNTER`, count-slope.sh `INSTRUMENT`, bench.sh `rc` and
 `FAILED_WHY`, now `REJECTED`); in these scripts a value crossing a `$( )`
 boundary travels in stdout, never in a variable.
+
+## D71 — a rejection counter that could not be reported, and a threshold that could not be tested
+
+D70 removed `bench.sh`'s `[n rejected as parallel]` note because it never
+printed: `REJECTED` was assigned inside `slopes()`, which is called as
+`$(slopes "$c")`, so the value lived and died in a subshell. This restores it
+the way `count-slope.sh` already returns its instrument — **in stdout**. Two
+lines: the count, then the samples, the samples staying on one line because
+`bootstrap.awk` reads one configuration's samples per line.
+
+It is not cosmetic. A sample is rejected when `cpu/elapsed` exceeds the
+threshold, i.e. when something else was running on the box. **A median over 40
+clean samples and a median over 2 survivors of 40 are different measurements**,
+and the table could not previously tell you which one you were reading.
+
+**The threshold is now injectable, and that is the more interesting half.**
+`PARALLEL_MAX` defaults to the operating value of 1.3. It is a parameter because
+a single-threaded nbody never reaches 1.3 — so the reject-and-report path could
+not be exercised at all, which is precisely how the note that reports it stayed
+broken without anyone noticing. A guard whose failure path cannot be reached is
+not a guard; it is an assertion about the world that nothing checks.
+
+Verified across all three regimes:
+
+```
+PARALLEL_MAX=0.80   sonic   refused: all 8 samples rejected as parallel
+PARALLEL_MAX=0.86   sonic   94.9514  (baseline) [8/10 rejected as parallel]
+PARALLEL_MAX=1.3    sonic   94.3208  (baseline)
+```
+
+Measured in passing, and worth knowing: this host's `cpu/elapsed` for a serial
+nbody run sits between 0.80 and 0.90, not at 1.0. The gap is process startup and
+I/O inside elapsed but outside CPU. The operating threshold of 1.3 therefore has
+roughly 0.4 of headroom above the observed value rather than 0.3.
+
+**Also measured, and a caution rather than a fix.** At `N1=200000 N2=400000` the
+same configuration returned medians ranging from 63.2 to 99.3 ns/step across
+repeated runs — a 35% swing with nothing changed. At the default
+`N1=1000000 N2=2000000` it returns 62.9 stably. Small-N runs of this harness are
+not trustworthy even though the slope cancels startup, so the defaults are
+load-bearing and the `N1=... N2=...` knobs are for iteration, not for results.

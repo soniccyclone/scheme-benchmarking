@@ -43,6 +43,13 @@ N2=${N2:-2000000}
 REPS=${REPS:-15}
 WARMUP=${WARMUP:-3}
 BASELINE=${BASELINE:-c-scalar}
+# THE SERIAL-ONLY THRESHOLD, INJECTABLE SO THE REJECTION PATH CAN BE EXERCISED.
+# cpu/elapsed above this rejects a sample as contended. 1.3 is the operating
+# value; it is a parameter because a single-threaded nbody never trips it, so
+# the reject-and-report path was untestable by construction -- which is how the
+# note that reports it stayed broken without anyone noticing (qaq.12).
+# PARALLEL_MAX=0 rejects everything, which is the test.
+PARALLEL_MAX=${PARALLEL_MAX:-1.3}
 
 # Elapsed nanoseconds for one run, plus a serial-only verdict.
 # TIMEFORMAT gives CPU at millisecond precision, which is plenty for a ratio
@@ -74,10 +81,21 @@ slopes() {
     for ((i = 0; i < REPS; i++)); do
         run_ns "$cmd1"; t1=$ELAPSED_NS; local r1=$RATIO
         run_ns "$cmd2"; t2=$ELAPSED_NS; local r2=$RATIO
-        if awk -v a="$r1" -v b="$r2" 'BEGIN{exit !(a>1.3 || b>1.3)}'; then rej=$((rej+1)); continue; fi
+        if awk -v a="$r1" -v b="$r2" -v m="$PARALLEL_MAX" 'BEGIN{exit !(a>m || b>m)}'; then rej=$((rej+1)); continue; fi
         vals+=("$(awk -v a="$t1" -v b="$t2" -v n1="$N1" -v n2="$N2" 'BEGIN{printf "%.4f", (b-a)/(n2-n1)}')")
     done
-    REJECTED=$rej
+    # THE REJECTED COUNT TRAVELS IN STDOUT, NOT IN A VARIABLE, and that is the
+    # whole fix. This used to be `REJECTED=$rej`, read by the caller as
+    # ${REJECTED:-0} -- but this function is invoked as $(slopes "$c"), so the
+    # assignment happened in a subshell and never arrived. It was always 0 and
+    # the note it fed was always empty, which is indistinguishable from a run
+    # where nothing was ever rejected. Fifth time an assignment has vanished
+    # across a $( ) boundary here; count-slope.sh returns its instrument the
+    # same way for the same reason.
+    #
+    # TWO LINES: the count, then the samples. The samples stay on ONE line
+    # because bootstrap.awk reads one configuration's samples per line.
+    echo "$rej"
     # A FAILED RUN IS NOT A SLOW ONE. Reporting the wall clock of a command that
     # exited non-zero is how a missing binary became a measurement.
     echo "${vals[@]}"
@@ -112,31 +130,37 @@ for c in ${*:-$CONFIGS}; do
     # a subshell cannot reach this loop. Two earlier attempts put it in each of
     # them and both still reported a number for a missing binary.
     if ! eval "$(cfg_run "$c" "$N1")" >/dev/null 2>&1; then
-        printf '%s%s%s%s%s\n' "$c" "$US" "" "$US" "refused: the command does not run" >> "$work/rows"
+        printf '%s%s%s%s%s%s%s\n' "$c" "$US" "" "$US" "0" "$US" "refused: the command does not run" >> "$work/rows"
         continue
     fi
-    s=$(slopes "$c")
+    raw=$(slopes "$c")
+    rej=$(printf '%s\n' "$raw" | head -1)
+    s=$(printf '%s\n' "$raw" | tail -n +2)
     [ -z "$s" ] && {
-        printf '%s%s%s%s%s\n' "$c" "$US" "" "$US" "refused: all samples rejected as parallel" >> "$work/rows"
+        printf '%s%s%s%s%s%s%s\n' "$c" "$US" "" "$US" "$rej" "$US" \
+            "refused: all $rej samples rejected as parallel" >> "$work/rows"
         continue; }
     med=$(printf '%s\n' $s | tr ' ' '\n' | sort -n | awk '{a[NR]=$1} END{print (NR%2)?a[(NR+1)/2]:(a[NR/2]+a[NR/2+1])/2}')
     # A NON-POSITIVE PER-STEP TIME IS NOT A RESULT. More work cannot take less
     # time, so a slope at or below zero means the measurement is measuring
     # something else -- a failing command, or an N the program ignores.
     if awk -v m="$med" 'BEGIN{exit !(m <= 0)}'; then
-        printf '%s%s%s%s%s\n' "$c" "$US" "" "$US" "refused: per-step time $med is not positive" >> "$work/rows"
+        printf '%s%s%s%s%s%s%s\n' "$c" "$US" "" "$US" "$rej" "$US" "refused: per-step time $med is not positive" >> "$work/rows"
         continue
     fi
     printf '%s\n' "$s" > "$work/samples.$c"
-    printf '%s%s%s%s%s\n' "$c" "$US" "$med" "$US" "" >> "$work/rows"
+    printf '%s%s%s%s%s%s%s\n' "$c" "$US" "$med" "$US" "$rej" "$US" "" >> "$work/rows"
 done
-# THE "[n rejected as parallel]" NOTE IS GONE, AND IT NEVER PRINTED. It read
-# ${REJECTED:-0}, which `slopes` sets -- but `slopes` is invoked as $(slopes
-# "$c"), so the assignment happens in a subshell and cannot reach here. REJECTED
-# was therefore always 0 and the note was always empty. Same subshell trap this
-# harness has hit four times; removed rather than left looking like a feature.
-# Filed as a bead to surface the count through slopes' OUTPUT, which is the fix
-# that actually works.
+# THE "[n rejected as parallel]" NOTE WORKS NOW, AND IT NEVER DID BEFORE. It
+# read ${REJECTED:-0}, assigned inside `slopes` -- which is invoked as $(slopes
+# "$c"), so the assignment lived in a subshell and never arrived. Always 0,
+# always empty, and indistinguishable from a run where nothing was rejected.
+# The count comes back in the function's OUTPUT now (qaq.12).
+#
+# IT IS NOT COSMETIC. A serial-only sample is rejected when cpu/elapsed exceeds
+# 1.3, i.e. when something else was running on the box. A median over 40 clean
+# samples and a median over 6 survivors of 40 are different measurements, and
+# the table could not previously tell you which one you were reading.
 
 printf 'slope of N=%s to N=%s, %s reps, baseline %s\n\n' "$N1" "$N2" "$REPS" "$BASELINE"
 printf '%-14s %12s  %s\n' config ns/step 'bootstrap 95% CI on ratio vs baseline'
@@ -148,16 +172,17 @@ printf '%-14s %12s  %s\n' -------------- ------------ --------------------------
 basefile="$work/samples.$BASELINE"
 [ -f "$basefile" ] || printf 'NO BASELINE: %s did not measure, so no ratios are shown.\n\n' "$BASELINE" >&2
 
-while IFS=$US read -r c med why; do
+while IFS=$US read -r c med rej why; do
+    note=""; [ "${rej:-0}" -gt 0 ] && note=" [${rej}/${REPS} rejected as parallel]"
     if [ -n "$why" ]; then
         printf '%-14s  %s\n' "$c" "$why"
     elif [ ! -f "$basefile" ]; then
-        printf '%-14s %12s  %s\n' "$c" "$med" "--"
+        printf '%-14s %12s  %s%s\n' "$c" "$med" "--" "$note"
     elif [ "$c" = "$BASELINE" ]; then
-        printf '%-14s %12s  %s\n' "$c" "$med" "(baseline)"
+        printf '%-14s %12s  %s%s\n' "$c" "$med" "(baseline)" "$note"
     else
         ci=$(printf '%s\n%s\n' "$(cat "$basefile")" "$(cat "$work/samples.$c")" \
              | awk -f "$HERE/bootstrap.awk")
-        printf '%-14s %12s  %s\n' "$c" "$med" "$ci"
+        printf '%-14s %12s  %s%s\n' "$c" "$med" "$ci" "$note"
     fi
 done < "$work/rows"
