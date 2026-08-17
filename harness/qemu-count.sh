@@ -66,9 +66,35 @@ trap 'rm -rf "$WORK"' EXIT
 # 243,031, an eight-fold undercount that looks like a plausible number.
 # qemu's own help for the flag says it plainly: "do not chain compiled TBs so
 # that exec and cpu show".
-qemu-x86_64 -d in_asm,exec,nochain -D "$WORK/q.log" "$BIN" "$@" >/dev/null 2>&1
+qemu-x86_64 -d in_asm,exec,nochain -D "$WORK/q.log" "$BIN" "$@" \
+    >/dev/null 2>"$WORK/q.err"
+rc=$?
 
-[ -s "$WORK/q.log" ] || { echo "qemu produced no log for $BIN"; exit 1; }
+[ -s "$WORK/q.log" ] || { echo "qemu produced no log for $BIN" >&2; exit 1; }
+
+# A CRASHED RUN STILL LEAVES A LOG, AND COUNTING IT GIVES A PLAUSIBLE NUMBER.
+# This is the trap callgrind falls into on the same binaries: it prints
+# "unhandled instruction" AND an `I refs:` total, and that total is the count up
+# to the failure. Reading it as the program's instruction count is silently
+# wrong.
+#
+# Measured here: `gcc -O3 -march=native` emits AVX-512 on this host, QEMU's TCG
+# does not implement AVX-512, and c-native dies with "uncaught target signal 4
+# (Illegal instruction)". The partial count was 103,015 -- and IDENTICAL at
+# N=200, 400 and 800, because the program always dies in the same place. That
+# invariance is the only thing that gave it away.
+if grep -q 'uncaught target signal' "$WORK/q.err"; then
+    echo "REFUSED: $BIN did not run to completion under qemu." >&2
+    grep 'uncaught target signal' "$WORK/q.err" | head -1 >&2
+    echo "Counting a crashed run yields a partial total that looks like a real" >&2
+    echo "one and does not vary with N. QEMU's TCG does not implement AVX-512," >&2
+    echo "so anything built with -march=native on this host lands here." >&2
+    exit 1
+fi
+if [ "$rc" -ne 0 ]; then
+    echo "REFUSED: $BIN exited $rc under qemu; a partial count is not a count." >&2
+    exit 1
+fi
 
 python3 - "$WORK/q.log" "$WORK" <<'PY'
 import sys, re, subprocess, collections, os

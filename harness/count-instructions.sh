@@ -47,17 +47,20 @@ shift
 out=$(valgrind --tool=callgrind --callgrind-out-file=/dev/null "$BIN" "$@" 2>&1 >/dev/null)
 
 if echo "$out" | grep -q 'unhandled instruction'; then
-    echo "REFUSED: valgrind could not decode an instruction in $BIN."
-    echo
-    echo "$out" | grep -A2 'unhandled instruction' | head -4
-    echo
-    echo "If those bytes start 0xC5 or 0x62 this is an AVX-512 form, which VEX"
-    echo "does not decode. The runtime's k1 setup used to do this to every"
-    echo "binary we emit; see D59. A program that genuinely needs three-lane"
-    echo "work cannot be counted this way."
+    # TO STDERR, ALL OF IT. A caller reads this script's stdout as a number, so
+    # a diagnostic printed there is captured and parsed as one -- measure.sh
+    # fell straight into that and reported the refusal text as a count.
+    echo "REFUSED: valgrind could not decode an instruction in $BIN." >&2
+    echo >&2
+    echo "$out" | grep -A2 'unhandled instruction' | head -4 >&2
+    echo >&2
+    echo "If those bytes start 0xC5 or 0x62 this is an AVX-512 form, which VEX" >&2
+    echo "does not decode. Two things reach this: our own three-lane work, and" >&2
+    echo "gcc -march=native on an AVX-512 host -- so c-native lands here too." >&2
+    echo "harness/qemu-count.sh counts what this cannot." >&2
     exit 1
 fi
 
 n=$(echo "$out" | sed -n 's/.*I   refs:[[:space:]]*//p' | tr -d ',')
-[ -n "$n" ] || { echo "no count from callgrind:"; echo "$out" | tail -5; exit 1; }
+[ -n "$n" ] || { echo "no count from callgrind:" >&2; echo "$out" | tail -5 >&2; exit 1; }
 printf '%s\t%s\n' "$n" "$(basename "$BIN")"
