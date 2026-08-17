@@ -160,6 +160,8 @@ test-suite:
 	@$(CHEZ) -q $(LIBS) --script test/dce-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/cse-test.ss
+	@echo
+	@$(CHEZ) -q $(LIBS) --script test/fold-test.ss
 
 clean:
 	@find . -name '*.so' -delete
