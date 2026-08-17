@@ -126,6 +126,31 @@
        "(define (main) (fill! 0) (display (flvector-ref v 3)) (newline))\n(main)\n")
       '(3.0))
 
+;; A VIRTUAL MUST NEVER BE SPELLED LIKE A PHYSICAL REGISTER.
+;;
+;; This program failed to compile at all. `fresh!` in lower.ss names quoted
+;; constants `k1`, `k2`, ... and the seventh one came out `k7` -- which is an
+;; x86-64 opmask register. From there `mask-reg?` classified the virtual as a
+;; mask and the encoder refused `movsd k7, [rip+%pool+8]`: correct, and useless,
+;; because the message named neither the virtual nor the pass that made it.
+;;
+;; It takes seven constants to reach `k7`, which is why the shorter store loop
+;; above never tripped it. RV64 was armed the same way and worse -- it has
+;; physical `t2`..`t6`, and `t` is the most-used base in lower.ss.
+;;
+;; IT ALSO ONLY FAILED ON THE FIRST COMPILE IN A PROCESS, because the counter is
+;; never reset: a second compile started numbering wherever the first stopped
+;; and stepped straight over the collision. So this assertion is only worth
+;; anything as long as nothing compiles ahead of it in this file -- which is a
+;; property of the file, not of the test, and is why 6gk.25 stays open.
+(run! "a virtual is never spelled like a register, however many constants it takes"
+      (string-append
+       "(define v (make-flvector 4 0.0))\n"
+       "(define (fill i n)\n"
+       "  (if (fx= i n) 0.0 (begin (flvector-set! v i 1.0) (fill (fx+ i 1) n))))\n"
+       "(define (main) (display (fill 0 4)) (newline))\n(main)\n")
+      '(0.0))
+
 ;; A tail-recursive accumulator. This is the loop shape the whole benchmark is
 ;; built from, and it is where proper tail calls stop being a language-lawyer
 ;; point: without them the frame grows per iteration.

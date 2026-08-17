@@ -32,6 +32,9 @@
           lower-stats-unchecked lower-stats-emitted)
   (import (chezscheme)
           (sonic repr)
+          ;; for the reserved-name set: a virtual must never be spelled the
+          ;; same as a physical register. See `fresh!`.
+          (sonic regs)
           (sonic order)
           (sonic numeric)
           (nanopass)
@@ -253,9 +256,41 @@
           op)))
 
   (define counter 0)
+  ;; EVERY PHYSICAL REGISTER NAME, BOTH TARGETS. A virtual that happens to be
+  ;; spelled like one is indistinguishable from it by the time the back end
+  ;; looks, and the failure lands three passes later wearing someone else's
+  ;; clothes.
+  ;;
+  ;; Measured: `(fresh! "k")` names quoted constants, so the seventh constant in
+  ;; a program became `k7` -- an x86-64 opmask register. `mask-reg?` then
+  ;; classified that virtual as a mask and the encoder refused
+  ;; `movsd k7, [rip+%pool+8]`, correctly and uselessly: the message named
+  ;; neither the virtual nor this line. RV64 was armed the same way and worse,
+  ;; since it has physical `t2`..`t6` and `t` is the most-used base in this
+  ;; file; nothing had reached the seventh `t` there yet.
+  ;;
+  ;; SKIPPING rather than re-spelling, because the separators are all spoken
+  ;; for: `.ddd` is essa's SSA suffix (it strips it in `base-of`), `%` is the
+  ;; expander's, and a leading `%` is how the runtime labels `%pool`/`%gcmeta`
+  ;; are written. Skipping changes no convention and costs one comparison.
+  (define reserved-register-names
+    (let ((names '()))
+      (for-each
+       (lambda (a)
+         (set! names (append (arch-value a) (arch-raw a) (arch-float a)
+                             (arch-mask a) (arch-scratch a)
+                             (map car (arch-structural a))
+                             names)))
+       (list arch-x86-64 arch-rv64))
+      names))
+
+  (define (register-name? s) (and (memq s reserved-register-names) #t))
+
   (define (fresh! prefix)
-    (set! counter (+ counter 1))
-    (string->symbol (string-append prefix (number->string counter))))
+    (let loop ()
+      (set! counter (+ counter 1))
+      (let ((s (string->symbol (string-append prefix (number->string counter)))))
+        (if (register-name? s) (loop) s))))
 
   ;; --- checks ---------------------------------------------------------------
   ;; Returns the chk instructions that must be emitted for this primcall, and
