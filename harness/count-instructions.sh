@@ -38,8 +38,11 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 sonic_reexec sonic bash /work/harness/count-instructions.sh "$@"
 
 BIN=${1:-}
-[ -n "$BIN" ] || { echo "usage: count-instructions.sh <binary> [args...]"; exit 2; }
-[ -x "$BIN" ] || { echo "not executable: $BIN"; exit 2; }
+[ -n "$BIN" ] || { echo "usage: count-instructions.sh <binary> [args...]" >&2; exit 2; }
+# TO STDERR like every other diagnostic here. A caller reads this script's
+# stdout as a number, and "not executable: env" parsed as one is how a slope
+# came back as "the count did not change" with a misleading reason attached.
+[ -x "$BIN" ] || { echo "not executable: $BIN" >&2; exit 2; }
 shift
 
 # --callgrind-out-file=/dev/null: the profile is not wanted, only the total.
