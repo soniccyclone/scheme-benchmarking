@@ -39,8 +39,35 @@
 #
 # EITHER COUNTER, whichever can do the job. callgrind is preferred because every
 # instruction figure in the ledger came from it; qemu-count.sh answers for the
-# programs it crashes on. The instrument used is reported, because a callgrind
-# number and a qemu number agree to within about 1% at scale and NOT exactly.
+# programs it crashes on. The instrument used is REPORTED IN THE OUTPUT, and
+# that column is load-bearing rather than informational.
+#
+# AN EARLIER VERSION OF THIS COMMENT SAID THE TWO AGREE "to within about 1% at
+# scale". I wrote that without measuring it. Measured -- same binary, same N,
+# slope between N=200 and N=400 so startup cancels:
+#
+#     ref-scalar (gcc -O2)   callgrind 130781   qemu 130781   +0.0000%
+#     sonic                  callgrind 132800   qemu 141000   +6.1747%
+#
+# Exact on gcc's output, 6% on ours. So the honest rule is that figures from
+# DIFFERENT instruments are not comparable at all until that is explained, and
+# a ratio between a callgrind config and a qemu config -- which is exactly what
+# a milestone comparing sonic to sbcl would be -- carries an unbounded error,
+# not a 1% one. The refusal below when the two points of one slope come from
+# different instruments is therefore the minimum, not the whole guard.
+#
+# HENCE SONIC_INSTRUMENT, WHICH IS THE ACTUAL ANSWER TO THAT PROBLEM. Set it to
+# `qemu` or `callgrind` to force one instrument, and a comparison ACROSS configs
+# becomes single-instrument, which makes the 6% disagreement irrelevant to it --
+# whichever tool is right, both sides are counted the same way, so the RATIO is
+# sound even where the absolute number is in question. Forcing an instrument
+# that cannot run the program REFUSES rather than falling back, because a
+# fallback would silently reintroduce the mix the force exists to prevent.
+#
+# So a milestone that compares sonic against sbcl runs both under qemu, since
+# qemu is the only instrument that can run sbcl at all. The default -- prefer
+# callgrind, fall back -- stays right for looking at ONE config, where the
+# ledger's existing callgrind figures are the comparable ones.
 #
 #   harness/count-slope.sh <N1> <N2> <command with @N for the step count>
 #
@@ -63,9 +90,13 @@ N1=${1:-}; N2=${2:-}; TEMPLATE=${3:-}
 # preserved -- getting either wrong makes a working program look unrunnable.
 count_one() {
     local cmd="$1" n envpart rest prog args abs
-    n=$("$here/harness/count-instructions.sh" $cmd 2>/dev/null | cut -f1)
-    if [ -n "$n" ]; then echo "$n	callgrind"; return 0; fi
 
+    # SPLIT OFF ANY `env VAR=value` PREFIX FIRST, for BOTH instruments. The
+    # previous version did this only on the qemu path and handed the raw string
+    # to callgrind, so a config carrying an env prefix invoked
+    # count-instructions.sh with "env" as the binary. It never showed, because
+    # every env-prefixed config here is a managed Lisp that callgrind declines
+    # anyway -- the bug was masked by a second failure.
     envpart=""; rest="$cmd"
     while :; do
         case "$rest" in
@@ -75,10 +106,38 @@ count_one() {
         esac
     done
     prog="${rest%% *}"; args="${rest#* }"
-    abs=$(command -v "$prog" 2>/dev/null || echo "$prog")
+    [ "$args" = "$rest" ] && args=""
+
+    # RESOLVE TO AN ABSOLUTE PATH BEFORE EITHER INSTRUMENT RUNS, AGAINST THE
+    # REPO ROOT AS WELL AS THE CWD. The container's working_dir is /work/sonic,
+    # because that is where the test suite runs -- but every caller, and this
+    # script's own usage example, writes paths relative to the REPO ROOT. So
+    # `build/nbody/sonic` did not resolve, and the refusal that came back said
+    # "no instrument could count this program": a path that was never found,
+    # reported as a limitation of the instruments. qemu-count.sh needs the
+    # absolute form regardless, and its own header says a bare name there fails
+    # in a way that looks like a real limitation.
+    if [ -x "$prog" ]; then
+        abs=$(cd "$(dirname "$prog")" && pwd)/$(basename "$prog")
+    elif [ -x "$here/$prog" ]; then
+        abs="$here/$prog"
+    else
+        abs=$(command -v "$prog" 2>/dev/null || echo "$prog")
+    fi
+    # DISTINGUISHED FROM `none`, so the caller can say which of the two things
+    # went wrong instead of blaming the instruments for a missing file.
+    [ -x "$abs" ] || { printf '\tnotfound\n'; return 0; }
+
+    if [ "${SONIC_INSTRUMENT:-}" != qemu ]; then
+        n=$(env $envpart "$here/harness/count-instructions.sh" "$abs" $args 2>/dev/null | cut -f1)
+        if [ -n "$n" ]; then echo "$n	callgrind"; return 0; fi
+        # Forced callgrind must FAIL rather than fall through, or the force is
+        # advisory and the caller silently gets the mix it was avoiding.
+        if [ "${SONIC_INSTRUMENT:-}" = callgrind ]; then printf '\tnone\n'; return 0; fi
+    fi
     n=$(env $envpart "$here/harness/qemu-count.sh" "$abs" $args 2>/dev/null | cut -f1)
     if [ -n "$n" ]; then echo "$n	qemu"; return 0; fi
-    echo "	none"
+    printf '\tnone\n'
 }
 
 # THE INSTRUMENT COMES BACK IN THE OUTPUT, not in a variable. count_one is
@@ -87,9 +146,23 @@ count_one() {
 r1=$(count_one "${TEMPLATE//@N/$N1}"); a=${r1%%	*}; ia=${r1##*	}
 r2=$(count_one "${TEMPLATE//@N/$N2}"); b=${r2%%	*}; ib=${r2##*	}
 
+if [ "$ia" = notfound ] || [ "$ib" = notfound ]; then
+    echo "REFUSED: the program was not found, so nothing was measured." >&2
+    echo "  looked for: ${TEMPLATE//@N/$N1}" >&2
+    echo "  relative to the cwd ($PWD) and to the repo root ($here)." >&2
+    echo "This is DELIBERATELY a different message from the one below: a missing" >&2
+    echo "file used to be reported as the instruments declining, which sent me" >&2
+    echo "looking at callgrind instead of at the path." >&2
+    exit 1
+fi
 if [ -z "$a" ] || [ -z "$b" ]; then
     echo "REFUSED: no instrument could count this program." >&2
-    echo "callgrind and qemu-count both declined; see their messages with 2>&1." >&2
+    if [ -n "${SONIC_INSTRUMENT:-}" ]; then
+        echo "SONIC_INSTRUMENT=$SONIC_INSTRUMENT was forced, so there was no" >&2
+        echo "fallback; unset it to let the other instrument try." >&2
+    else
+        echo "callgrind and qemu-count both declined; see their messages with 2>&1." >&2
+    fi
     exit 1
 fi
 if [ "$ia" != "$ib" ]; then

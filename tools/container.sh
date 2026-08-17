@@ -110,7 +110,7 @@ sonic_assert_limits() {
 # boundary: the script re-exec'd inside and read its own defaults, and the run
 # LOOKED fine while ignoring what was asked for. Forwarded explicitly, and only
 # these, so the container's environment stays a known quantity.
-SONIC_ENV_FORWARD="N N1 N2 REPS WARMUP TOP NBODY BASELINE CONFIGS EVENT"
+SONIC_ENV_FORWARD="N N1 N2 REPS WARMUP TOP NBODY BASELINE CONFIGS EVENT SONIC_INSTRUMENT"
 
 sonic_run() {
     local service=$1; shift

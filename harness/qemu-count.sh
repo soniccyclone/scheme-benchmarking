@@ -107,19 +107,69 @@ log, work = sys.argv[1], sys.argv[2]
 blocks = {}          # guest addr -> hex bytes
 execs  = collections.Counter()
 
+# ONE BUFFER PER TRANSLATION RECORD, ASSIGNED RATHER THAN ACCUMULATED. QEMU
+# retranslates the same guest address -- on a TB flush, or when cpu flags
+# differ -- and emits a fresh IN: record each time. The first version of this
+# parser did `blocks[addr] = blocks.get(addr, "") + bytes`, which concatenated
+# every retranslation of an address onto the previous one, so a block
+# translated twice was credited with twice its instructions on every execution.
+#
+# THIS IS HYGIENE, NOT A FIX FOR THE DISAGREEMENT BELOW. I changed it while
+# chasing that, and re-measuring afterwards produced byte-identical totals, so
+# retranslation-accumulation was either not happening on these binaries or not
+# material. Recorded plainly because a comment that claims the credit for a
+# number it did not move is how a wrong explanation outlives its measurement.
+#
+# THE DISAGREEMENT IS REAL AND UNEXPLAINED. Against callgrind on identical
+# binaries, slope per step between N=200 and N=400 -- startup cancels, so this
+# is loop body only, and neither run reported an uncounted block:
+#
+#     ref-scalar   callgrind 130781   qemu 130781   +0.0000%   exact
+#     sonic        callgrind 132800   qemu 141000   +6.1747%   41 insns/step
+#
+# Exact agreement on gcc's output and 6% on ours is not instrument spread.
+#
+# THE OBVIOUS SUSPECT IS RULED OUT. I expected this script's own block decode:
+# it counts instructions by feeding OBJD-T bytes to `objdump -D -b binary`,
+# which has no boundary information, so a block resynchronising differently
+# there than in the ELF would be miscounted on every execution. Checked
+# directly -- our emitted ELF has no sections, so `objdump -d` yields nothing
+# and the comparison has to be made at the byte level. For the ten hottest
+# blocks, the bytes QEMU logged are IDENTICAL to the file's bytes at that
+# vaddr (file offset = vaddr - 0x400000, one LOAD at zero). Same objdump, same
+# flags, a stream starting on a real instruction boundary: the block accounting
+# here is sound.
+#
+# So the difference is in what the two tools COUNT, not in how this script
+# parses. Unresolved; tracked as a bead. Next step there is callgrind with
+# --dump-instr=yes, diffed against this script's per-block accounting, which
+# localises the 41 instructions per step to an address instead of guessing.
+#
+# UNTIL THAT IS RESOLVED, a qemu figure and a callgrind figure ARE NOT
+# COMPARABLE for our binaries, and count-slope.sh's refusal to mix instruments
+# across the two points of one slope is doing more work than I credited it for.
 addr = None
+cur  = []
 for line in open(log, errors="replace"):
     if line.startswith("OBJD-T:"):
         if addr is not None:
-            blocks[addr] = blocks.get(addr, "") + line.split(":", 1)[1].strip()
+            cur.append(line.split(":", 1)[1].strip())
     elif line.startswith("0x") and line.rstrip().endswith(":"):
+        if addr is not None and cur:
+            blocks[addr] = "".join(cur)
         addr = int(line.split(":")[0], 16)
+        cur = []
     elif line.startswith("Trace "):
         m = re.search(r"\[[0-9a-f]+/([0-9a-f]+)/", line)
         if m:
             execs[int(m.group(1), 16)] += 1
     elif line.startswith("IN:"):
+        if addr is not None and cur:
+            blocks[addr] = "".join(cur)
         addr = None
+        cur  = []
+if addr is not None and cur:
+    blocks[addr] = "".join(cur)
 
 if not blocks or not execs:
     sys.exit("parsed no blocks (%d) or no executions (%d) -- qemu log format changed?"

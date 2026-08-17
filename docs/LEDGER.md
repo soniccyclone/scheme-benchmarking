@@ -2512,3 +2512,67 @@ offset-table adjacency DOES NOT FIRE (D66); Lmach emission from an SSA kernel is
 BLOCKED by name correspondence (here); affine analysis at Lmach is UNATTEMPTED
 and is the coherent one. c-native is 256-bit and 1.15x faster, so the width is
 still worth having.
+
+## D68 — two instruction counters agree exactly on gcc's output and differ 6.17% on ours
+
+`count-slope.sh`'s header claimed a callgrind figure and a qemu figure "agree to
+within about 1% at scale". I wrote that sentence. Nobody had measured it, and it
+is wrong.
+
+Measured on identical binaries, by SLOPE between N=200 and N=400 so process
+startup cancels and only loop body remains:
+
+```
+ref-scalar (gcc -O2)   callgrind 130781   qemu 130781   +0.0000%
+sonic                  callgrind 132800   qemu 141000   +6.1747%   41 insns/step
+```
+
+Exact on gcc's output, 6% on ours. That asymmetry is the informative part: two
+counters that agree to the instruction on one binary are not exhibiting
+"instrument spread" on another, so one of them is specifically wrong about what
+we emit.
+
+**The obvious suspect is ruled out.** `qemu-count.sh` counts instructions per
+basic block by feeding QEMU's logged `OBJD-T` bytes to `objdump -D -b binary`,
+which has no boundary information — a block resynchronising differently there
+than in the ELF would be miscounted on every execution, which is the right shape
+for a fixed per-step offset. Checking it required going to the bytes, because
+**our emitted ELF has no section headers at all** (`readelf`: "There are no
+sections in this file", two LOAD program headers and nothing else), and
+`objdump -d` disassembles only marked sections — so it returns zero instructions
+and exits 0, which reads like an empty block rather than a tool that could not do
+the job. Any inspection of our binaries needs `-D` with an explicit offset.
+
+At the byte level, file offset = vaddr − 0x400000: for the ten hottest blocks,
+QEMU's logged bytes are **identical** to the file's bytes. Same objdump, same
+flags, a stream starting on a real instruction boundary. The block accounting is
+sound, and the disagreement is in what the two tools count, not in how we parse.
+Also excluded: uncounted blocks (the "no in_asm record" note fires on neither
+binary), startup accounting (the slope cancels it), and retranslation
+accumulation in the parser — that last was a genuine latent bug, `blocks[addr]`
+appended across retranslations of one address instead of assigning; fixed as
+hygiene, and the totals did not move, so it was not this.
+
+**The consequence, and it is the part that matters.** qaq.10 exists because
+callgrind cannot run racket, sbcl, ecl or clisp, so a milestone comparing sonic
+against sbcl is a ratio between a callgrind number and a qemu number — carrying
+an unbounded error, not a 1% one. But that framing was itself the mistake. The
+fix is not to decide how much cross-instrument disagreement a milestone may
+tolerate; it is to **force one instrument across both sides**, via
+`SONIC_INSTRUMENT=qemu|callgrind`. Then whichever tool is right, both sides are
+counted the same way and the RATIO is sound even where the absolute number is
+still in question. Forcing an instrument that cannot run the program refuses
+rather than falling back, because a fallback silently reintroduces the mix the
+force exists to prevent.
+
+**A second bug fell out, and it is the same shape as the counting bugs.** The
+container's `working_dir` is `/work/sonic`, because that is where the suite runs,
+but every caller — including `count-slope.sh`'s own documented usage example —
+writes paths relative to the repo root. So `build/nbody/sonic` did not resolve,
+and the refusal said *"no instrument could count this program"*: a path that was
+never found, reported as a limitation of the instruments. It now resolves against
+the repo root as well as the cwd, and a missing file gets a **different refusal
+message** from an instrument declining. Third time this project has had a check
+fail for a reason other than the one it named (D57's drift, D61's dropped
+configs) — the pattern is that a diagnostic which cannot distinguish two causes
+will be read as the more interesting one.
