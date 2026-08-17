@@ -102,27 +102,28 @@ does not implement it.
 
 ### Actionable without a decision
 
-**`qaq.11` — the two instruction counters disagree by 6.17%, and only on our own
-output.** callgrind and qemu agree to `+0.0000%` on gcc's binary and differ by
-exactly 41 instructions/step on sonic's, identically at `N=200..400` and
-`N=2000..4000`, so it is a stable per-step difference that no N washes out. The
-block-decode suspect is RULED OUT: for the ten hottest blocks, QEMU's logged
-bytes are byte-identical to the file's. Checking that required going to the
-bytes, because **our emitted ELF has no section headers**, so `objdump -d`
-returns nothing and exits 0 — anything inspecting our binaries needs `-D` with an
-explicit offset.
+Nothing. All remaining beads are the decisions above or gated behind them.
 
-Next experiment, unattempted: callgrind with `--dump-instr=yes` gives
-per-instruction-address counts; diff those against `qemu-count.sh`'s per-block
-accounting to localise the 41 to an ADDRESS. Arithmetic constraint for whoever
-picks it up — 8200 instructions over 200 steps, and no single block explains it
-(8200/400 = 20.5, 8200/600 = 13.67, neither an integer), so it is a combination
-of blocks or a per-execution effect.
+`qaq.11` — the 6.17% instrument disagreement — is **closed** (D72). It was our
+own counter: `objdump` wraps any instruction longer than 7 bytes onto a
+continuation line carrying an address but no mnemonic, and `qemu-count.sh`
+counted that as a second instruction, so every instruction of 8+ bytes was
+double-counted on every execution. Both instruments now agree to the hundredth
+on both binaries.
 
-This does not block any milestone: forcing `SONIC_INSTRUMENT` puts both sides of
-a comparison on one counter, which makes the disagreement irrelevant to the
-ratio. It does mean **a callgrind figure and a qemu figure must never be divided
-by each other** until it is explained.
+Two things from it are worth carrying forward:
+
+- **`harness/count-diff.sh` exists now.** It diffs the two counters PER ADDRESS.
+  When two measurements disagree, this turns "these totals differ" into "they
+  differ at this address", which is the only form of the question that is
+  answerable. Reach for it before theorising.
+- **Validate an instrument on the thing you intend to measure.** The counter had
+  been cross-checked against gcc's output and agreed perfectly — because gcc's
+  binary contains none of the long-instruction forms that trigger the bug. A
+  check run where the difference cannot appear is worse than no check: it
+  produces documented confidence. Third instance in the ledger (D57, D61, D72).
+- **Any qemu-sourced instruction figure predating D72 is wrong** by an amount
+  that varies per binary. Re-measure; do not scale.
 
 ## Definition of done, per kind of bead
 

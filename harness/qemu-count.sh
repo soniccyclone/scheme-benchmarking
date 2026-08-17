@@ -117,37 +117,39 @@ execs  = collections.Counter()
 # THIS IS HYGIENE, NOT A FIX FOR THE DISAGREEMENT BELOW. I changed it while
 # chasing that, and re-measuring afterwards produced byte-identical totals, so
 # retranslation-accumulation was either not happening on these binaries or not
-# material. Recorded plainly because a comment that claims the credit for a
-# number it did not move is how a wrong explanation outlives its measurement.
+# material.
 #
-# THE DISAGREEMENT IS REAL AND UNEXPLAINED. Against callgrind on identical
-# binaries, slope per step between N=200 and N=400 -- startup cancels, so this
-# is loop body only, and neither run reported an uncounted block:
+# THE REAL BUG WAS IN count_insns, AND IT WAS THIS SCRIPT'S FAULT. Against
+# callgrind on identical binaries this counter read 6.17% high on our output and
+# exactly right on gcc's:
 #
-#     ref-scalar   callgrind 130781   qemu 130781   +0.0000%   exact
-#     sonic        callgrind 132800   qemu 141000   +6.1747%   41 insns/step
+#     ref-scalar   callgrind 653.90/step   qemu 653.90   +0.0000%
+#     sonic        callgrind 664.00/step   qemu 705.00   +6.1747%
 #
-# Exact agreement on gcc's output and 6% on ours is not instrument spread.
+# Localised per address by harness/count-diff.sh: 954 addresses agreed, 114 were
+# counted by qemu and given ZERO by callgrind, and NOTHING went the other way.
+# callgrind's address set was a strict subset of ours, which is the signature of
+# over-decoding rather than of a disagreement about execution.
 #
-# THE OBVIOUS SUSPECT IS RULED OUT. I expected this script's own block decode:
-# it counts instructions by feeding OBJD-T bytes to `objdump -D -b binary`,
-# which has no boundary information, so a block resynchronising differently
-# there than in the ELF would be miscounted on every execution. Checked
-# directly -- our emitted ELF has no sections, so `objdump -d` yields nothing
-# and the comparison has to be made at the byte level. For the ten hottest
-# blocks, the bytes QEMU logged are IDENTICAL to the file's bytes at that
-# vaddr (file offset = vaddr - 0x400000, one LOAD at zero). Same objdump, same
-# flags, a stream starting on a real instruction boundary: the block accounting
-# here is sound.
+# The cause: OBJDUMP WRAPS AN INSTRUCTION LONGER THAN 7 BYTES ONTO A
+# CONTINUATION LINE, and that line carries an ADDRESS but no mnemonic:
 #
-# So the difference is in what the two tools COUNT, not in how this script
-# parses. Unresolved; tracked as a bead. Next step there is callgrind with
-# --dump-instr=yes, diffed against this script's per-block accounting, which
-# localises the 41 instructions per step to an address instead of guessing.
+#     401a61:  48 8b 1c 25 68 00 60    mov    0x600068,%rbx
+#     401a68:  00
 #
-# UNTIL THAT IS RESOLVED, a qemu figure and a callgrind figure ARE NOT
-# COMPARABLE for our binaries, and count-slope.sh's refusal to mix instruments
-# across the two points of one slope is doing more work than I credited it for.
+# One instruction, two lines that both match `^\s+[0-9a-f]+:\t`. Every
+# instruction of 8 bytes or more was therefore counted TWICE, on every execution
+# of its block. We emit absolute-addressed forms like the one above; gcc -O2 has
+# none in its hot blocks, which is exactly why it agreed to +0.0000% and we did
+# not -- the bug was invisible precisely where it was being validated.
+#
+# Requiring a MNEMONIC FIELD -- a second tab followed by non-space -- fixes it.
+# After: 954 addresses agree, 3 disagree, +0.0022% total, and the slopes match
+# callgrind's to the hundredth on both binaries.
+#
+# The lesson worth keeping: cross-validating two instruments on a binary that
+# does not exercise the difference proves nothing. The validation ran on gcc's
+# output for months and the counter was wrong the whole time on ours.
 addr = None
 cur  = []
 for line in open(log, errors="replace"):
@@ -183,7 +185,7 @@ def count_insns(hexbytes):
     out = subprocess.run(["objdump", "-D", "-b", "binary", "-m", "i386:x86-64", p],
                          capture_output=True, text=True).stdout
     # one instruction per line of the form "   0:\t<bytes>\t<mnemonic>"
-    return sum(1 for l in out.splitlines() if re.match(r"^\s+[0-9a-f]+:\t", l))
+    return sum(1 for l in out.splitlines() if re.match(r"^\s+[0-9a-f]+:\t[^\t]*\t\s*\S", l))
 
 sizes, total, unknown = {}, 0, 0
 for a, n in execs.items():

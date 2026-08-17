@@ -57,11 +57,12 @@ here_m="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # figure in the ledger came from it, then qemu-count for the four
 # managed-runtime Lisps it crashes on -- and says which one answered.
 #
-# THAT COLUMN IS A WARNING, NOT A FOOTNOTE. An earlier version of this comment
-# said the two instruments "agree to about 1% at scale". Measured (D68), by
-# slope so startup cancels: exact on gcc's output, 6.17% on ours. So a ROW
-# COUNTED BY ONE INSTRUMENT AND A ROW COUNTED BY THE OTHER DO NOT FORM A VALID
-# RATIO, and the vs- column across such a pair is not meaningful.
+# THAT COLUMN IS NOT DECORATION. An earlier version of this comment said the two
+# instruments "agree to about 1% at scale", unmeasured. Measured, they differed
+# by 6.17% on our binaries and 0.0000% on gcc's -- a bug in qemu-count.sh, now
+# fixed (D72), after which they agree exactly on both. The column stays because
+# callgrind still cannot run four of the configurations here at all, and because
+# a cross-check that only ever ran on gcc's output is what hid that bug.
 #
 # Set SONIC_INSTRUMENT=qemu (or callgrind) to force one across the whole table,
 # which is what a milestone comparison needs -- qemu being the only instrument

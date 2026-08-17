@@ -2729,3 +2729,63 @@ repeated runs — a 35% swing with nothing changed. At the default
 `N1=1000000 N2=2000000` it returns 62.9 stably. Small-N runs of this harness are
 not trustworthy even though the slope cancels startup, so the defaults are
 load-bearing and the `N1=... N2=...` knobs are for iteration, not for results.
+
+## D72 — the 6.17% was our own counter, and gcc's output was the wrong place to validate it
+
+D68 recorded that callgrind and `qemu-count.sh` agree to `+0.0000%` on gcc's
+output and differ by 6.17% on ours, ruled out the block-decode suspect by
+byte-comparison, and left it unexplained. It is explained, and the bug was ours.
+
+**Localising it was the whole trick.** Two totals cannot say *where* they differ,
+and every aggregate check had already come back clean. `harness/count-diff.sh`
+(new) asks callgrind for `--dump-instr=yes`, expands QEMU's per-block accounting
+to per-address, and diffs. On sonic at N=200:
+
+```
+addresses counted by both and agreeing : 954
+addresses where they disagree          : 114
+  qemu only (callgrind never saw them) : 114
+  callgrind only (qemu never saw them) : 0
+```
+
+callgrind's address set was a strict **subset** of ours. That is the signature of
+over-decoding — inventing instruction boundaries — not of two tools disagreeing
+about what executed.
+
+**The cause.** `objdump` wraps any instruction longer than 7 bytes onto a
+continuation line, and that line carries an **address but no mnemonic**:
+
+```
+401a61:  48 8b 1c 25 68 00 60    mov    0x600068,%rbx
+401a68:  00
+```
+
+One instruction, two lines, both matching `^\s+[0-9a-f]+:\t`. So every
+instruction of 8 bytes or more was counted **twice, on every execution of its
+block**. Requiring a mnemonic field — a second tab followed by non-space — fixes
+it. After: 954 agree, 3 disagree, `+0.0022%`, and the slopes match to the
+hundredth on both binaries:
+
+```
+sonic       callgrind 664.00   qemu 664.00
+ref-scalar  callgrind 653.90   qemu 653.90
+```
+
+**Why it hid for so long, which is the part worth keeping.** We emit
+absolute-addressed forms like `mov 0x600068,%rbx`; `gcc -O2` has none in its hot
+blocks. The counter was cross-validated *against gcc's output* — and agreed
+perfectly there, because gcc's binary does not contain the construct that
+triggers the bug. **A cross-check run on a binary that does not exercise the
+difference proves nothing**, and it is worse than no check, because it produces
+documented confidence. The earlier claim that the two "converge to within 0.7% at
+scale" came from exactly that validation and was cited on qaq.5 as grounds for
+trusting a cross-instrument margin.
+
+The general form, and it now has three instances in this ledger (D57's drift,
+D61's dropped configs, this): **validate an instrument on the thing you intend to
+measure, not on the thing that is convenient to measure.**
+
+One consequence to note: the previously reported qemu figures were inflated in
+proportion to how many long instructions a binary contains, which is not uniform
+across configurations. Any qemu-sourced instruction number recorded before this
+entry is wrong by an unknown amount and must be re-measured, not scaled.

@@ -43,26 +43,29 @@
 # that column is load-bearing rather than informational.
 #
 # AN EARLIER VERSION OF THIS COMMENT SAID THE TWO AGREE "to within about 1% at
-# scale". I wrote that without measuring it. Measured -- same binary, same N,
-# slope between N=200 and N=400 so startup cancels:
+# scale". I wrote that without measuring it, and when measured it was worse than
+# claimed: exact on gcc's output, 6.17% on ours. That turned out to be a bug in
+# qemu-count.sh -- it counted objdump's continuation line for any instruction
+# longer than 7 bytes as a second instruction, and we emit such forms where gcc
+# -O2 does not. Fixed; see that script's header. Measured after the fix, slope
+# between N=200 and N=400:
 #
-#     ref-scalar (gcc -O2)   callgrind 130781   qemu 130781   +0.0000%
-#     sonic                  callgrind 132800   qemu 141000   +6.1747%
+#     ref-scalar (gcc -O2)   callgrind 653.90   qemu 653.90   exact
+#     sonic                  callgrind 664.00   qemu 664.00   exact
 #
-# Exact on gcc's output, 6% on ours. So the honest rule is that figures from
-# DIFFERENT instruments are not comparable at all until that is explained, and
-# a ratio between a callgrind config and a qemu config -- which is exactly what
-# a milestone comparing sonic to sbcl would be -- carries an unbounded error,
-# not a 1% one. The refusal below when the two points of one slope come from
-# different instruments is therefore the minimum, not the whole guard.
+# So the instruments now agree to the hundredth on both. The instrument column
+# stays, because "they agree today on these two binaries" is not "they are
+# interchangeable" -- callgrind still cannot run four configurations at all, and
+# the whole reason the 6% went unnoticed for so long is that the cross-check had
+# only ever been run on a binary that did not exercise the difference.
 #
-# HENCE SONIC_INSTRUMENT, WHICH IS THE ACTUAL ANSWER TO THAT PROBLEM. Set it to
-# `qemu` or `callgrind` to force one instrument, and a comparison ACROSS configs
-# becomes single-instrument, which makes the 6% disagreement irrelevant to it --
-# whichever tool is right, both sides are counted the same way, so the RATIO is
-# sound even where the absolute number is in question. Forcing an instrument
-# that cannot run the program REFUSES rather than falling back, because a
-# fallback would silently reintroduce the mix the force exists to prevent.
+# SONIC_INSTRUMENT FORCES ONE, and it is still worth having now that the two
+# agree. Set it to `qemu` or `callgrind` and a comparison ACROSS configs becomes
+# single-instrument, so the ratio holds whatever either tool is doing in the
+# absolute -- which is the property that let Milestone 3 be answered while the
+# 6% was still unexplained. Forcing an instrument that cannot run the program
+# REFUSES rather than falling back, because a fallback would silently reintroduce
+# the mix the force exists to prevent.
 #
 # So a milestone that compares sonic against sbcl runs both under qemu, since
 # qemu is the only instrument that can run sbcl at all. The default -- prefer
