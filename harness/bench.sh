@@ -47,6 +47,12 @@ BASELINE=${BASELINE:-c-scalar}
 # Elapsed nanoseconds for one run, plus a serial-only verdict.
 # TIMEFORMAT gives CPU at millisecond precision, which is plenty for a ratio
 # test; the elapsed figure used for the measurement is the nanosecond one.
+# THE RUN'S EXIT STATUS IS CHECKED, because timing a command that does not exist
+# produces a number rather than an error. Measured: after `make clean` removed
+# build/, this script reported c-native at -0.04985 ns/step with a bootstrap CI
+# of [-0.0027, 0.0045] and marked it "real" -- a NEGATIVE per-step time from
+# timing "No such file or directory" twice. Nothing in the table said the binary
+# was missing.
 run_ns() {
     local cmd="$1" t0 t1 cpu
     TIMEFORMAT='%3U %3S'
@@ -63,6 +69,7 @@ slopes() {
     local c="$1" i t1 t2 vals=() rej=0
     local cmd1 cmd2
     cmd1="$(cfg_run "$c" "$N1")"; cmd2="$(cfg_run "$c" "$N2")"
+
     for ((i = 0; i < WARMUP; i++)); do eval "$cmd1" >/dev/null 2>&1; done
     for ((i = 0; i < REPS; i++)); do
         run_ns "$cmd1"; t1=$ELAPSED_NS; local r1=$RATIO
@@ -71,6 +78,8 @@ slopes() {
         vals+=("$(awk -v a="$t1" -v b="$t2" -v n1="$N1" -v n2="$N2" 'BEGIN{printf "%.4f", (b-a)/(n2-n1)}')")
     done
     REJECTED=$rej
+    # A FAILED RUN IS NOT A SLOW ONE. Reporting the wall clock of a command that
+    # exited non-zero is how a missing binary became a measurement.
     echo "${vals[@]}"
 }
 
@@ -80,9 +89,31 @@ printf '%-14s %12s  %s\n' config ns/step 'bootstrap 95% CI on ratio vs baseline'
 printf '%-14s %12s  %s\n' -------------- ------------ -------------------------------------
 
 for c in ${*:-$CONFIGS}; do
+    # PREFLIGHT, IN THE MAIN SHELL. Timing a command that does not exist yields
+    # a number: after `make clean` removed build/, this script reported c-native
+    # at -0.04985 ns/step with a CI of [-0.0027, 0.0045] and marked it "real" --
+    # a NEGATIVE per-step time, from timing "No such file or directory" twice.
+    #
+    # It has to run here rather than inside `slopes` or `run_ns`, because both of
+    # those are invoked through $( ... ) and an exit status or a variable set in
+    # a subshell cannot reach this loop. Two earlier attempts put it in each of
+    # them and both still reported a number for a missing binary.
+    if ! eval "$(cfg_run "$c" "$N1")" >/dev/null 2>&1; then
+        printf '%-14s  refused: the command does not run\n' "$c"
+        continue
+    fi
     s=$(slopes "$c")
-    [ -z "$s" ] && { printf '%-14s  all samples rejected as parallel\n' "$c"; continue; }
+    [ -z "$s" ] && {
+        printf '%-14s  refused: all samples rejected as parallel\n' "$c"
+        continue; }
     med=$(printf '%s\n' $s | tr ' ' '\n' | sort -n | awk '{a[NR]=$1} END{print (NR%2)?a[(NR+1)/2]:(a[NR/2]+a[NR/2+1])/2}')
+    # A NON-POSITIVE PER-STEP TIME IS NOT A RESULT. More work cannot take less
+    # time, so a slope at or below zero means the measurement is measuring
+    # something else -- a failing command, or an N the program ignores.
+    if awk -v m="$med" 'BEGIN{exit !(m <= 0)}'; then
+        printf '%-14s  refused: per-step time %s is not positive\n' "$c" "$med"
+        continue
+    fi
     if [ -z "$base" ]; then base="$s"; ci="(baseline)"
     else ci=$(printf '%s\n%s\n' "$base" "$s" | awk -f "$HERE/bootstrap.awk"); fi
     note=""; [ "${REJECTED:-0}" -gt 0 ] && note=" [${REJECTED} rejected as parallel]"

@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/nbody"
 
-CONFIGS="sonic sonic-u4 c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2b racket-2b chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
+CONFIGS="sonic sonic-u4 sonic-pad4 c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2b racket-2b chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
 
 mkdir -p "$BUILD"
 
@@ -92,6 +92,42 @@ EOF
     chmod +x "$BUILD/sonic-u4"
 }
 cfg_run_sonic_u4() { echo "$BUILD/sonic-u4 $1"; }
+
+# --- four-lane packing, which needs a padded layout AND a written pad ---------
+#
+# The first configuration in this table to emit 256-bit packed arithmetic.
+# `bench/nbody/config-sonic-pad4.sps` is config-sonic.sps with a stride of 4
+# instead of 3 and the pad slot written; slp.ss's four-lane arm is enabled with
+# the parameter it has always had and nothing ever set.
+#
+# BOTH HALVES ARE REQUIRED AND THAT WAS NOT THE PREDICTION. slp.ss says
+# four-lane is "off until a padded layout exists to point it at". A padded
+# layout alone changes nothing -- measured, ymm=0 -- because `store-at` seeds
+# from four stores sharing a base and an index vreg, and a program that leaves
+# slot 3 alone still emits three. With the pad WRITTEN: ymm=2, vmulpd and vaddpd
+# on ymm in both halves of the unrolled position update.
+#
+# The energies are bit-identical to config-sonic.sps, which is the check that
+# says the layout changed and the arithmetic did not.
+cfg_src_sonic_pad4() { echo "config-sonic-pad4.sps"; }
+cfg_compile_sonic_pad4() {
+    local drv="$BUILD/sonic-pad4-build.ss"
+    cat > "$drv" <<EOF
+(import (chezscheme) (sonic driver) (sonic pipeline) (sonic slp))
+(parameterize ((four-lane-packing? #t))
+  (compile-sonic-to-file "$BENCH/config-sonic-pad4.sps" nbody-externs "$BUILD/sonic-pad4"))
+EOF
+    . "$ROOT/tools/container.sh"
+    if sonic_in_container; then
+        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
+    else
+        "$ROOT/tools/container.sh" bash -c \
+            "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-pad4-build.ss" \
+            || return 1
+    fi
+    chmod +x "$BUILD/sonic-pad4"
+}
+cfg_run_sonic_pad4() { echo "$BUILD/sonic-pad4 $1"; }
 
 # --- configuration 6: C, the reference -------------------------------------
 # Two flag sets, because the pair separates "no vectorizer" from "worse scalar
