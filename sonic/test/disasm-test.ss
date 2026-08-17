@@ -226,6 +226,82 @@
     (jl (label top))
     (ret)))
 
+;; --- the shape THIS compiler emits ------------------------------------------
+;;
+;; Everything above is gcc's rotated counted loop, where the latch IS the test.
+;; A SonicScheme loop is a procedure that tail-calls itself: the exit test is a
+;; conditional branch FORWARD to the join, and the back edge is a plain `jmp`
+;; backward. The loop finder recognized only the first spelling, so `inner-loop`
+;; raised "this function has no loop" for all seventeen of nbody's compiled
+;; functions and milestone 2 could not be stated about our own output at all.
+(define x86-selfcall-loop
+  '((mov rax (imm 0))
+    top
+    (add rax rcx)
+    (cmp rax rsi)
+    (jge (label done))
+    (jmp (label top))
+    done
+    (ret)))
+
+;; The same, with a check branching to a trap ahead of the loop's own exit.
+(define x86-selfcall-checked
+  '((mov rax (imm 0))
+    top
+    (cmp rax rdx)
+    (jge (label trap))
+    (add rax rcx)
+    (cmp rax rsi)
+    (jge (label done))
+    (jmp (label top))
+    trap
+    (ret)
+    done
+    (ret)))
+
+(when have-x86
+  (let ((d (emit! 'x86-64 'sonic_selfcall x86-selfcall-loop)))
+    (ck! "a self-tail-call loop is found at all, unconditional back edge and all"
+         (loop? (inner-loop d "sonic_selfcall")))
+    (ck! "and the latch it found is the unconditional jmp, not the exit test"
+         (let ((l (inner-loop d "sonic_selfcall")))
+           (and (not (conditional-branch? d (loop-latch-insn d l)))
+                (string=? (insn-mnemonic (loop-latch-insn d l)) "jmp")))))
+
+  ;; THE REFUSAL, and it matters more than the finding. With an unconditional
+  ;; latch the loop's own exit test is an ordinary conditional branch sitting in
+  ;; the body, so "every conditional branch but the latch" would report it as a
+  ;; bounds check -- a check that is not there, in a loop that is clean. The
+  ;; predicate refuses instead of answering, because an assertion that says what
+  ;; we want to hear is worth less than no assertion.
+  (ck! "bounds-check-branches REFUSES on that shape rather than miscounting"
+       (raises? (lambda () (bounds-check-branches
+                            (emit! 'x86-64 'sonic_selfcall x86-selfcall-loop)
+                            "sonic_selfcall"))))
+
+  ;; Identified by DESTINATION instead: a check is a branch to the trap, which
+  ;; is what target-x86-64.ss emits (`(jge (label sonic-bounds-error))`).
+  ;; The trap's address, computed from the listing the way
+  ;; harness/disasm-sonic.sh computes its label map: sum instruction-size up to
+  ;; the label. `label-offset` in driver.ss does the same thing and is private.
+  (let* ((d (emit! 'x86-64 'sonic_sc_chk x86-selfcall-checked))
+         (trap (let walk ((xs x86-selfcall-checked) (pc 0))
+                 (cond ((null? xs) (error 'trap-label "no trap label" xs))
+                       ((symbol? (car xs))
+                        (if (eq? (car xs) 'trap) pc (walk (cdr xs) pc)))
+                       (else (walk (cdr xs)
+                                   (+ pc (instruction-size 'x86-64 (car xs)))))))))
+    (ck! "check-branches-to finds the check by where it branches"
+         (equal? (map insn-mnemonic (check-branches-to d "sonic_sc_chk" (list trap)))
+                 '("jge")))
+    (ck! "and does NOT count the loop's own exit test, which the old reading would"
+         (= 1 (length (check-branches-to d "sonic_sc_chk" (list trap))))))
+
+  (let* ((d (emit! 'x86-64 'sonic_selfcall x86-selfcall-loop))
+         (trap 999999))
+    (ck! "a clean self-tail-call loop has no branch to any trap"
+         (no-check-branch-to? d "sonic_selfcall" (list trap)))))
+
 (define rv-loop-checked
   '((addi a0 zero 0)
     top

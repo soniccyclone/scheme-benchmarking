@@ -87,6 +87,7 @@
           inner-loop function-loops
 
           no-bounds-check? bounds-check-branches loop-exit-branches
+          check-branches-to no-check-branch-to? loop-latch-insn
           has-packed-arithmetic? packed-arithmetic-insns
           poll-free? poll-sequences poll-window
           contraction-insns)
@@ -347,11 +348,24 @@
   (define-record-type (loop make-loop loop?)
     (fields head latch insns))
 
-  ;; A backward conditional branch is a loop latch and its target is the head.
-  ;; That is the whole loop finder, and it is enough: it recognizes the rotated
-  ;; counted loop every optimizing compiler emits, which is the shape milestone
-  ;; 2 is about. It does not recognize an irreducible loop, and it should not
-  ;; pretend to.
+  ;; A backward branch is a loop latch and its target is the head. BOTH
+  ;; spellings count, and the second one is not gcc's:
+  ;;
+  ;;   CONDITIONAL latch -- the rotated counted loop every optimizing C compiler
+  ;;   emits, and the shape the controls in disasm-test.ss are built from.
+  ;;
+  ;;   UNCONDITIONAL latch -- what THIS compiler emits. A loop here is a
+  ;;   procedure that tail-calls itself, so the exit test is a conditional
+  ;;   branch FORWARD to the join and the back edge is a plain `jmp` backward
+  ;;   to a label after the prologue. Measured on nbody's force loop:
+  ;;   `UNCOND jmp 0x4 (from 0x118)`.
+  ;;
+  ;; Recognizing only the first meant `inner-loop` raised "this function has no
+  ;; loop" for all seventeen of nbody's compiled functions, so milestone 2 could
+  ;; not be stated about our own output at all.
+  ;;
+  ;; It still does not recognize an irreducible loop, and it should not pretend
+  ;; to.
   (define (function-loops d name)
     (let* ((is (function-insns d name))
            (lo (insn-address (car is)))
@@ -361,7 +375,7 @@
          ((null? xs) (reverse acc))
          (else
           (let* ((i (car xs)) (t (branch-target i)))
-            (if (and (conditional-branch? d i) t
+            (if (and (or (conditional-branch? d i) (unconditional-branch? d i)) t
                      (<= t (insn-address i)) (>= t lo) (<= t hi))
                 (loop (cdr xs)
                       (cons (make-loop t (insn-address i)
@@ -394,12 +408,62 @@
   ;; Every conditional branch in the body except the latch itself. In a rotated
   ;; counted loop there are none, and each one that is there is a test the
   ;; iteration did not require.
+  (define (loop-latch-insn d l)
+    (let find ((xs (loop-insns l)))
+      (cond ((null? xs) #f)
+            ((= (insn-address (car xs)) (loop-latch l)) (car xs))
+            (else (find (cdr xs))))))
+
+  ;; ONLY MEANINGFUL WHEN THE LATCH IS THE TEST, so it refuses otherwise.
+  ;;
+  ;; "Every conditional branch but the latch" is a sound reading of a rotated
+  ;; counted loop, where the latch IS the loop's only control. It is NOT sound
+  ;; for a loop whose latch is an unconditional `jmp` -- the shape this compiler
+  ;; emits -- because there the loop's own exit test is a conditional branch
+  ;; sitting in the body, and this would report it as a check that is not there.
+  ;;
+  ;; Refusing rather than answering: the whole value of milestone 2 is that the
+  ;; assertion is trustworthy, and a predicate that quietly counts loop control
+  ;; as a bounds check would make it say what we want to hear. Use
+  ;; `check-branches-to` on our own output, which identifies a check by where it
+  ;; BRANCHES rather than by what it is not.
   (define (bounds-check-branches d name)
-    (let ((l (inner-loop d name)))
+    (let* ((l (inner-loop d name))
+           (latch (loop-latch-insn d l)))
+      (unless (and latch (conditional-branch? d latch))
+        (error 'bounds-check-branches
+               (string-append
+                "this loop's latch is unconditional, so its exit test is an "
+                "ordinary conditional branch in the body and counting "
+                "non-latch branches would report it as a bounds check. Use "
+                "check-branches-to with the trap addresses instead")
+               name))
       (filter (lambda (i)
                 (and (conditional-branch? d i)
                      (not (= (insn-address i) (loop-latch l)))))
               (loop-insns l))))
+
+  ;; A check identified POSITIVELY, by its destination.
+  ;;
+  ;; target-x86-64.ss emits a surviving check as a compare plus a branch to a
+  ;; runtime trap -- `(jge (label sonic-bounds-error))`, and the type and
+  ;; division checks likewise. So in a LINKED image, where those labels have
+  ;; addresses, a check is exactly a conditional branch whose target is one of
+  ;; them. That needs no inference from loop shape and cannot mistake the
+  ;; loop's own control for a check, which is the failure the predicate above
+  ;; refuses to risk.
+  ;;
+  ;; `targets` is a list of addresses -- resolve the trap labels from the label
+  ;; map the way harness/disasm-sonic.sh does.
+  (define (check-branches-to d name targets)
+    (let ((l (inner-loop d name)))
+      (filter (lambda (i)
+                (and (conditional-branch? d i)
+                     (let ((t (branch-target i))) (and t (memv t targets) #t))))
+              (loop-insns l))))
+
+  (define (no-check-branch-to? d name targets)
+    (null? (check-branches-to d name targets)))
 
   ;; The stronger reading, for a LINKED image where displacements are real: a
   ;; branch whose target leaves the body. On a relocatable object gcc leaves the
