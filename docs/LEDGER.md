@@ -2789,3 +2789,19 @@ One consequence to note: the previously reported qemu figures were inflated in
 proportion to how many long instructions a binary contains, which is not uniform
 across configurations. Any qemu-sourced instruction number recorded before this
 entry is wrong by an unknown amount and must be re-measured, not scaled.
+
+**Re-measured under D72's correction**, single instrument, `N=1,000,000` to
+`2,000,000`:
+
+```
+sonic       664.00 instructions/step     was 705.00    -5.8%
+c-scalar    654.00                       was 654.00     0.0%
+sbcl-5     1961.00                       was 2231.00   -12.1%
+```
+
+The inflation tracked how many long-instruction forms each binary contains, and
+gcc's had none in its hot blocks — so the correction moved sbcl most and C not at
+all. Milestone 3's instruction margin goes 3.4x → 3.16x → 2.95x across three
+corrections, each removing an error rather than adding precision, and **every
+correction worked against the claim**. M3 still passes on both arms; nothing
+rested on the difference.
