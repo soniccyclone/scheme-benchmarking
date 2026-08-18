@@ -11,7 +11,8 @@
 (import (chezscheme) (rnrs io simple)
         (sonic lang) (sonic fixtures) (sonic select)
         (sonic regs) (sonic target-rv64) (sonic encode-rv64) (sonic litpool)
-        (sonic numeric) (sonic elfexec) (sonic driver) (sonic pipeline))
+        (sonic numeric) (sonic elfexec) (sonic driver) (sonic pipeline)
+        (sonic twoaddr))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -624,6 +625,38 @@
            (guard (e (#t #f))
              (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs 'rv64)
              #t))))
+
+;;; --- the reserved scratch registers are shared, and nothing arbitrated ----
+;;;
+;;; regs.ss reserves t0/t1/t2 so passes can use a register the allocator will
+;;; never hand out. THREE independent consumers draw from that set, and until
+;;; today two of them had both taken t0:
+;;;
+;;;   twoaddr.ss scratch-table   (rv64 (raw-word . t0))   two-address fixups
+;;;   rv64-addr-scratch          t1                       address computation
+;;;   rv64-overflow-scratch      (t0 t1)                  the overflow idiom
+;;;
+;;; twoaddr.ss checks its table against regs.ss on every lookup, which confirms
+;;; each register IS reserved. Nothing checked that two consumers had not picked
+;;; the SAME reserved one -- so a global address computed into t0 was overwritten
+;;; by a value staged through t0, and nbody stored 5 to address 5. That was found
+;;; by single-stepping a segfault half a megabyte into the program; this would
+;;; have caught it at build time.
+(ck! "the address scratch and the two-address scratch are different registers"
+     (not (eq? (rv64-addr-scratch) (scratch-for 'rv64 'raw-word))))
+
+;; KNOWN OVERLAP, PINNED RATHER THAN ASSERTED AWAY. rv64-overflow-scratch names
+;; a PAIR and currently overlaps both of the above: four register-demands
+;; against three integer scratches. It has not bitten because an overflow check
+;; is arithmetic and does not compute an address, so the sequences do not
+;; interleave -- but that is a property nothing enforces, and it is the same
+;; reasoning that made the t0 collision look safe.
+;;
+;; This asserts the overlap EXISTS, so the day someone resolves it this test
+;; fails and points at the note rather than passing silently.
+(ck! "the overflow scratch pair still overlaps the others (unresolved, bead 1mp.9)"
+     (let ((ov (rv64-overflow-scratch)))
+       (and (memq (rv64-addr-scratch) ov) #t)))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
