@@ -143,10 +143,25 @@
 
   ;; The offset at which the CALLEE finds its i'th incoming stack argument,
   ;; measured from its own stack pointer after the prologue. See the diagram on
-  ;; `frame-layout`: past the whole frame, past the return address, then i
-  ;; words up.
-  (define (frame-incoming-offset f i)
-    (+ (frame-layout-bytes f) slot-bytes (* slot-bytes i)))
+  ;; `frame-layout`: past the whole frame, past the return address if there is
+  ;; one, then i words up.
+  ;;
+  ;; THE RETURN-ADDRESS WORD IS x86-64 ONLY, and this used to add it
+  ;; unconditionally. `call` PUSHES the return address, so an x86-64 callee's
+  ;; rsp is 8 lower than the caller's outgoing area and the word must be
+  ;; stepped over. RV64's `jal` writes the return address into `ra`, a
+  ;; REGISTER: nothing is pushed, the callee's sp is exactly the caller's, and
+  ;; stepping over a word that is not there reads 8 bytes too high.
+  ;;
+  ;; Measured before the fix, in a nested counted loop: a return sequence did
+  ;; `ld t0,8(sp)` where the value sat at [sp+0], loaded a stack address
+  ;; instead of its accumulator, and returned it. The garbage became the outer
+  ;; loop's bound, so `j < n` compared against a pointer and the program never
+  ;; terminated. The cause was three frames away from the symptom.
+  (define (frame-incoming-offset target f i)
+    (+ (frame-layout-bytes f)
+       (if (eq? target 'rv64) 0 slot-bytes)
+       (* slot-bytes i)))
 
   ;; Substitute the symbolic `(incoming i)` displacements the tail-call emitters
   ;; leave behind. Selection cannot compute these -- the offset is measured from
@@ -157,12 +172,12 @@
   ;; Rewritten everywhere rather than at known positions, because the two
   ;; targets put it in different places: x86-64 inside a memory operand,
   ;; RV64 as a bare offset field on the store.
-  (define (patch-incoming frame x)
+  (define (patch-incoming target frame x)
     (cond
      ((and (pair? x) (eq? (car x) 'incoming))
-      (frame-incoming-offset frame (cadr x)))
-     ((pair? x) (cons (patch-incoming frame (car x))
-                      (patch-incoming frame (cdr x))))
+      (frame-incoming-offset target frame (cadr x)))
+     ((pair? x) (cons (patch-incoming target frame (car x))
+                      (patch-incoming target frame (cdr x))))
      (else x)))
 
   ;; TWO SPILLED VREGS CONNECTED BY A MOVE SHARE A SLOT.
@@ -1332,7 +1347,7 @@
                 (apply append
                        (map (lambda (sa)
                               (let* ((p (car sa)) (c (cadr sa))
-                                     (off (frame-incoming-offset frame (caddr sa)))
+                                     (off (frame-incoming-offset target frame (caddr sa)))
                                      (r (hashtable-ref assign p #f)))
                                 (cond
                                  (r ((spiller-reload sp) r off c))
@@ -1413,7 +1428,7 @@
           ;; address the call just pushed.
           (make-finalized name
                           (patch-incoming
-                           frame
+                           target frame
                            (if (and (pair? listing) (symbol? (car listing)))
                                (cons (car listing) (append head (cdr listing)))
                                (append head listing)))
