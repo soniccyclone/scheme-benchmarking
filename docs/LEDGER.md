@@ -3167,3 +3167,45 @@ procedure, closes more than half of it.
 That is the entire content of the correction: four routes of vectorization work
 were aimed at a gap that was never there, while the actual gap was a pass this
 compiler already had, already tested, and was never allowed to run.
+
+## D80 — SonicScheme permits contraction, as a configuration and not as a default
+
+`harness/smoke-riscv.sh` has carried this since 2026-08-06:
+
+> The oracle's nine decimals HIDE a real divergence. RISC-V gcc contracts to
+> `fmadd.d` by default (one rounding, not two) while baseline x86-64 has no FMA
+> to contract into, and vectorization reassociates the accumulation.
+> Bit-exactness across ISAs holds ONLY with contraction and vectorization both
+> off. See … **the open decision on whether SonicScheme permits contraction.**
+
+D79 measured what that decision is worth: 7.7%, and more than half the gap to
+`gcc -O3 -march=native`. This settles it.
+
+**Both, and they are for different things.** The temptation is to read this as a
+choice between a fast build and a correct one. It is not — it is two questions
+that were being answered by one configuration.
+
+- **`sonic`, contraction OFF, stays the default and the reference.** The 19-way
+  bit-exact cross-agreement is the project's strongest correctness asset, and
+  the smoke gate is explicit that it holds *only* with contraction off. A
+  compiler whose output agrees to the bit with eighteen other implementations
+  has proved something a nine-decimal match cannot. That is worth more than
+  7.7%.
+- **`sonic-fma`, contraction ON, is the performance configuration**, and it is
+  what a comparison against `gcc -O3` should use, because gcc takes
+  `-ffp-contract=fast` by default. Comparing our non-contracted build against
+  its contracted one measured a policy difference and reported it as a
+  performance gap.
+
+**Milestone 5 therefore compares `sonic-fma` against `c-native`** — contracted
+against contracted, like with like. Under the old asymmetric comparison the gap
+read 1.141x; measured symmetrically it is **1.053x**. Nothing about the compiler
+changed between those two numbers, which is precisely why the asymmetry was
+worth finding.
+
+**What this does NOT license.** Contraction is permitted *where the source asks
+for it*, which is D24's mechanism working as designed — a named, lexically
+scoped permission, default off. It is not a global flag and it is not on for the
+reference build. Vectorization-driven reassociation, the other half of the smoke
+gate's note, remains off and is a separate question: reassociation changes
+results by a route no permission currently covers.

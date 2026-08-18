@@ -85,58 +85,13 @@ evidence gathered and its cost sized — none is waiting on more measurement.
 
 ### Waiting on Nathan — do not decide these autonomously
 
-**`1mp.5` / `1mp.4` — how four lanes become reachable. ALL FOUR ROUTES ARE NOW
-CHARACTERISED; the decision is which of two NEW options to take, or neither.**
-
-Measured (D73): enabling the existing `four-lane-packing?` arm on the stock
-layout emits **zero** 256-bit instructions at any unroll budget.
-
-```
-sonic (stock, four-lane off)       xmm=484    ymm=0
-sonic-v4-16 (four-lane, budget 16) xmm=3027   ymm=0   results bit-identical
-sonic-pad4  (padded layout)        xmm=455    ymm=18
-```
-
-Adjacency was never the shortage — four-lane packs DO seed (7 at budget 4, 45 at
-16), and die in `classify!`, where `same-op?` needs all four values from one
-packable op. The force loop mixes `sub` and `add` for the same pair by Newton's
-third law, so the pack is a `gather` and `narrow!` correctly refuses it four
-wide. Both the classification and the demotion are right.
-
-| route | status |
-|---|---|
-| 1. padded layout | BUILT, emits 18 ymm, **1.60x slower** |
-| 2. offset-table adjacency | BUILT, never fires, reverted — solved a non-problem |
-| 3. Lmach from an SSA kernel | BLOCKED on name correspondence |
-| 4. affine analysis at Lmach | shown by D73 to be aimed at the wrong gap |
-
-Route 4 was the one D67 left standing as "architecturally coherent". It proves
-more adjacency, and adjacency is already found, so it does not help.
-
-**What the evidence leaves open**, and neither is on the original route list:
-  (a) teach `classify!` and emission to treat a MIXED add/sub pack as one
-      operation — an `addsubpd`-style form, or a negated-operand rewrite;
-  (b) accept the layout change, which is route 1 and is measured slower.
-
-(a) is the only path to 256-bit on the unmodified benchmark. It is a real change
-to a shipping pass and its payoff is unknown, so it is Nathan's call, not the
-loop's.
-
-**`1mp.6` — the driver has no RV64 target path.** Filed this session while
-checking whether M4 could close. `compile-sonic` hardcodes `'x86-64` at every
-stage and takes no target argument, so **no Scheme program has ever been compiled
-to RV64**. What exists is an ENCODER target: `rv64-selector` is a full 588-line
-backend, and `regs`/`finalize`/`object` all handle rv64, exercised by
-`rv64-test.ss` and a smoke gate that reads our own output back through
-`riscv64-linux-gnu-objdump` — but on a HAND-WRITTEN body passed to
-`assemble-function`. So every "tested on both targets" claim means the back-end
-machinery is tested on both targets.
-
-Missing: the runtime entry listing, an `EM_RISCV` image in `elfexec.ss`
-(`e_machine` is hardcoded `0x3e`), and a driver target argument. Both code-level
-gaps refuse LOUDLY, which is why this was never a live hazard. D76: the old
-justification — "an RV64 runtime written blind would be validated by nothing" —
-expired when the container gained qemu-riscv64 for instruction counting.
+**`1mp.5` / `1mp.4` — CLOSED. Four-lane packing was not the path.** D79 measured
+the premise wrong: we already emit MORE packed arithmetic than `gcc -O3
+-march=native` (36 against 25), and c-native uses no 256-bit at all. Four routes
+were explored against a gap that did not exist in the direction assumed. The
+mechanism is recorded on the bead if 256-bit is ever wanted for its own sake —
+the packs die on `(sub sub sub add)` and one sign-mask xor makes them uniform,
+since `a + b` is exactly `a - (-b)` in IEEE-754.
 
 **`xei` (E3) — the acceptance names an artifact that does not exist**, a
 hand-written core fixture. parse-test.ss does something stronger and passes.
