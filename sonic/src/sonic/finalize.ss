@@ -1057,15 +1057,28 @@
                         ((and (symbol? src) (reg-class arch src) (not (scratchy? src)))
                          (cons (cadr i) src))
                         ((and (pair? src) (eq? (car src) 'mem)) (cons (cadr i) src))
+                        ;; An IMMEDIATE source writes a copy destination and
+                        ;; reads no register: a copy operation with no source.
+                        ;; See emit-mov.
+                        ((and (pair? src) (eq? (car src) 'imm))
+                         (cons (cadr i) (list 'as-written i)))
                         (else #f)))))
                ;; RV64 spells a register move `addi rd, rs, 0` and a float one
                ;; `fsgnj.d rd, rs, rs`.
                ((addi)
-                (and (= (length i) 4) (eqv? (cadddr i) 0)
-                     (symbol? (cadr i)) (symbol? (caddr i))
-                     (reg-class arch (cadr i)) (reg-class arch (caddr i))
-                     (not (scratchy? (cadr i))) (not (scratchy? (caddr i)))
-                     (cons (cadr i) (caddr i))))
+                (and (= (length i) 4)
+                     (symbol? (cadr i)) (reg-class arch (cadr i))
+                     (not (scratchy? (cadr i)))
+                     (if (eqv? (cadddr i) 0)
+                         (and (symbol? (caddr i)) (reg-class arch (caddr i))
+                              (not (scratchy? (caddr i)))
+                              (cons (cadr i) (caddr i)))
+                         ;; `addi rd, zero, imm` is RV64's spelling of the
+                         ;; sourceless copy operation -- it has no
+                         ;; move-immediate, so this is where x86-64 writes
+                         ;; `(mov rd (imm n))`. See emit-mov.
+                         (and (eq? (caddr i) 'zero)
+                              (cons (cadr i) (list 'as-written i))))))
                ((fsgnj.d)
                 (and (= (length i) 4) (eq? (caddr i) (cadddr i))
                      (symbol? (cadr i)) (symbol? (caddr i))
@@ -1202,13 +1215,27 @@
           (else #f)))
 
       (define (emit-mov dst src)
+        ;; A COPY OPERATION WITH NO SOURCE is carried as-written and emitted
+        ;; verbatim. `resolve-parallel-copy` reorders (dst . src) pairs and
+        ;; `emit-mov` rebuilds each one, which cannot reconstruct an instruction
+        ;; that reads no register -- there is nothing to rebuild it FROM. So the
+        ;; instruction rides in the source slot instead.
+        ;;
+        ;; Sound for the reordering too: the payload is a pair and every
+        ;; destination is a symbol, so it never matches one and can never be
+        ;; part of a cycle. That is exactly right -- an operation that reads
+        ;; nothing has no incoming edge, and only needs to be ordered after
+        ;; anything that READS its destination, which the ready rule enforces
+        ;; from the destination alone.
+        (if (and (pair? src) (eq? (car src) 'as-written))
+            (cadr src)
         ;; `float-register?`, not membership in the allocatable pool: a cycle is
         ;; broken through the float SCRATCH, which sits outside that pool, and
         ;; asking the pool spells the move `mov xmm15, xmm0`.
         (let ((float? (float-register? arch dst)))
           (if (eq? target 'rv64)
               (if float? `(fsgnj.d ,dst ,src ,src) `(addi ,dst ,src 0))
-              (if float? `(movsd ,dst ,src) `(mov ,dst ,src)))))
+              (if float? `(movsd ,dst ,src) `(mov ,dst ,src))))))
 
       ;; --- a self tail call jumps PAST the prologue ---------------------------
       ;;
