@@ -552,79 +552,39 @@
 ;;; selection, register allocation, encoding and object emission on a real
 ;;; program rather than a hand-written fixture.
 ;;;
-;;; Asserting WHICH failure is the whole point. Before the driver took a target
-;;; argument there was no way to ask for rv64 at all; when there was, nbody died
-;;; in selection with "target cannot select these ops (p2splat p2mul p2add p2sub
-;;; p2hi)" because slp.ss packs unconditionally and only x86-64 can lower a
-;;; packed pair. A test that merely asserted "rv64 fails" would have passed
-;;; throughout and told us nothing about where the frontier actually is.
-(let ((msg (guard (e (#t (condition-message e)))
-             (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs 'rv64)
-             "compiled, which it cannot yet do")))
-  ;; THE FRONTIER MOVES, AND THIS ASSERTION MOVED WITH IT. It first read "must
-  ;; fail in the RUNTIME, not in selection", which was right when there was no
-  ;; RV64 runtime at all. Writing one pushed nbody PAST that point and this
-  ;; failed -- correctly. The frontier is now label resolution, and what
-  ;; matters is unchanged: the failure must be specific and must name what is
-  ;; missing, rather than being a generic refusal somewhere upstream.
-  (ck! "nbody on rv64 fails in LINKING, not in selection: everything earlier handles it"
-       (not (and (string? msg)
-                 (let loop ((i 0))
-                   (cond ((> (+ i 6) (string-length msg)) #f)
-                         ((string=? (substring msg i (+ i 6)) "select") #t)
-                         (else (loop (+ i 1)))))))))
+;;; NBODY ON RISC-V, RUN, AND HELD TO THE SAME ORACLE AS x86-64.
+;;;
+;;; This is the claim D75 said could not be made: "tested on both targets" meant
+;;; the back-end machinery, because no Scheme program had ever been lowered to
+;;; RV64. Ten defects later it can (D81).
+;;;
+;;; The energies are compared BIT FOR BIT against the x86-64 build, not to nine
+;;; decimals. Nine decimals is what SPEC.md publishes and would pass here too,
+;;; but the value of this target is that it agrees EXACTLY -- the smoke gate is
+;;; explicit that cross-ISA bit-exactness holds only with contraction and
+;;; vectorization off, which is what config-sonic.sps compiles as. A weaker
+;;; comparison would hide exactly the divergence that check exists to catch.
+(ck! "nbody compiles for rv64 with no error at all"
+     (guard (e (#t #f))
+       (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs 'rv64)
+       #t))
 
-;;; --- a compiled Scheme program, on RV64, executed -------------------------
-;;;
-;;; THE FIRST TIME A SCHEME PROGRAM RUNS ON THIS TARGET. The assertions above
-;;; climb a ladder: our bytes match binutils, then our IMAGE runs (exit 42 from
-;;; three hand-written instructions), then a real program reaches the runtime
-;;; boundary. This is the top of it -- source, through the whole pipeline, to a
-;;; process the kernel ran.
-;;;
-;;; EXIT 0 IS A WEAK CLAIM ON ITS OWN and is not left to stand alone. The
-;;; runtime exits with `exit-ok` unconditionally, so a program that never
-;;; executed would also exit 0. The second assertion is what gives it teeth: a
-;;; program needing a runtime helper must FAIL TO LINK, naming the helper. If
-;;; both hold, the pipeline is discriminating between what the runtime provides
-;;; and what it does not, rather than accepting everything.
 (if (not qemu-available?)
-    (display "  SKIP qemu-riscv64 absent; the compiled RV64 program is not run\n")
-    (let ((out "/tmp/sonic-rv64-tiny"))
-      (ck! "a Scheme program compiles to RV64 and the kernel runs it"
+    (display "  SKIP qemu-riscv64 absent; nbody is not run on rv64\n")
+    (let ((rv "/tmp/sonic-nbody-rv64") (x8 "/tmp/sonic-nbody-x86"))
+      (ck! "nbody RUNS on rv64 under qemu"
            (guard (e (#t #f))
-             (compile-sonic-to-file "test/rv64-tiny.sps" '() out 'rv64)
-             (system (string-append "chmod +x " out))
-             (zero? (system (string-append "qemu-riscv64 " out)))))
-      ;; THE BOUNDARY, and the control on the assertion above. The RV64 runtime
-      ;; is incomplete, so a program needing a routine it does not define must
-      ;; fail at LABEL RESOLUTION -- a partial runtime that LINKED and produced
-      ;; wrong numbers is the dangerous version of this.
-      ;;
-      ;; ASSERTS THE INVARIANT, NOT THE FRONTIER -- and it has now been rewritten
-      ;; twice for exactly that reason, which is the lesson. It first pinned
-      ;; "%make-flvector" and failed when that routine was written; then it
-      ;; pinned "undefined label" and failed when the last extern was written
-      ;; and nbody reached the ENCODER instead. Each failure was progress.
-      ;;
-      ;; What must hold regardless of how far nbody gets is that it does not
-      ;; QUIETLY produce an image while the target is incomplete. It must raise.
-      ;; The specific reason belongs in a bead, not in an assertion that has to
-      ;; be edited every time the work advances.
-      ;; nbody now COMPILES for rv64 -- selection, allocation, encoding, object
-      ;; emission, the runtime and all six externs. It does not yet RUN: the
-      ;; float-constant rule emits an auipc/fld pair with RELOCATIONS, expecting
-      ;; a linker to patch them, and build-executable is a static image writer
-      ;; rather than a linker. The placeholders survive into the image and the
-      ;; load goes wild. Tracked as a bead; x86-64 avoids it entirely by
-      ;; resolving its RIP-relative form through %pool+N labels.
-      ;;
-      ;; ASSERTED AT COMPILE, NOT AT RUN, deliberately. Pinning the crash would
-      ;; be a test that has to be deleted the day it is fixed.
-      (ck! "nbody compiles for rv64 end to end"
+             (compile-sonic-to-file "../bench/nbody/config-sonic.sps"
+                                    nbody-externs rv 'rv64)
+             (system (string-append "chmod +x " rv))
+             (zero? (system (string-append "qemu-riscv64 " rv " > " rv ".out")))))
+      (ck! "and its energies are BIT-IDENTICAL to the x86-64 build's"
            (guard (e (#t #f))
-             (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs 'rv64)
-             #t))))
+             (compile-sonic-to-file "../bench/nbody/config-sonic.sps"
+                                    nbody-externs x8 'x86-64)
+             (system (string-append "chmod +x " x8))
+             (system (string-append x8 " 1000 > " x8 ".out"))
+             (zero? (system (string-append "cmp -s " rv ".out " x8 ".out")))))))
 
 ;;; --- the reserved scratch registers are shared, and nothing arbitrated ----
 ;;;
