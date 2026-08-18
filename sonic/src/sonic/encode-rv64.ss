@@ -105,6 +105,21 @@
   (define (enc-u opcode rd imm20)
     (bitwise-ior (ash (bitwise-and imm20 #xfffff) 12) (ash rd 7) opcode))
 
+  ;; R4: the fused multiply-adds, and the only format here with FOUR register
+  ;; operands. rs3 rides in the top five bits where every other format keeps
+  ;; funct7, which is why it needs its own encoder rather than a wider funct.
+  ;;
+  ;;   31..27 rs3 | 26..25 fmt | 24..20 rs2 | 19..15 rs1 | 14..12 rm | 11..7 rd
+  ;;
+  ;; `fmt` is 01 for double. The RV64 selector has emitted these since contract.ss
+  ;; existed; the ENCODER did not know them, so a contracted RV64 build died with
+  ;; "no such rv64gc instruction (fmadd.d)". D79 measured fused multiply-add as
+  ;; the whole remaining gap to gcc -O3, so this is the instruction that gap is
+  ;; made of.
+  (define (enc-r4 opcode funct3 fmt rd rs1 rs2 rs3)
+    (bitwise-ior (ash rs3 27) (ash fmt 25) (ash rs2 20) (ash rs1 15)
+                 (ash funct3 12) (ash rd 7) opcode))
+
   (define (enc-j opcode rd imm)
     (bitwise-ior (ash (bits imm 20 20) 31) (ash (bits imm 10 1) 21)
                  (ash (bits imm 11 11) 20) (ash (bits imm 19 12) 12)
@@ -152,6 +167,14 @@
   ;; and `ecall` was absent from this encoder -- which is a prerequisite for
   ;; bead 1mp.6 that sizing the RV64 gap by counting what EXISTS did not reveal.
   (define op-system  #b1110011)
+  ;; The four fused multiply-add opcodes, and the 2-bit format field that says
+  ;; DOUBLE. Distinct opcodes rather than a funct: the ISA spends four of them
+  ;; here because the sign combinations are not expressible as a funct7.
+  (define op-madd    #b1000011)
+  (define op-msub    #b1000111)
+  (define op-nmsub   #b1001011)
+  (define op-nmadd   #b1001111)
+  (define fmt-double #b01)
 
   ;; Rounding mode `dyn`, i.e. take the mode from fcsr. This is what gcc emits
   ;; for ordinary double arithmetic and it is what the differential test pins:
@@ -217,6 +240,15 @@
       (jal   j ,op-jal)                  ; (jal rd target)
       (jalr  jalr ,op-jalr #b000)        ; (jalr rd rs1 imm)
       ;; --- D extension. rd and both sources are FPRs ---------------------
+      ;; R4, four register operands: (fmadd.d rd rs1 rs2 rs3) = rs1*rs2 + rs3.
+      ;; The NEGATED forms follow RISC-V's naming, which negates the PRODUCT:
+      ;; fnmadd.d is -(rs1*rs2) - rs3 and fnmsub.d is -(rs1*rs2) + rs3. Getting
+      ;; that backwards is a sign error the oracle catches but the manual's
+      ;; naming invites, so it is written out here.
+      (fmadd.d   r4 ,op-madd  ,rm-dyn ,fmt-double)
+      (fmsub.d   r4 ,op-msub  ,rm-dyn ,fmt-double)
+      (fnmsub.d  r4 ,op-nmsub ,rm-dyn ,fmt-double)
+      (fnmadd.d  r4 ,op-nmadd ,rm-dyn ,fmt-double)
       (fadd.d    fr ,op-fp ,rm-dyn #b0000001)
       (fsub.d    fr ,op-fp ,rm-dyn #b0000101)
       (fmul.d    fr ,op-fp ,rm-dyn #b0001001)
@@ -332,6 +364,9 @@
         ((jalr)  (arity! 3) (enc-i (car f) (cadr f)
                                  (gpr-number (car ops)) (gpr-number (cadr ops))
                                  (simm12 who (caddr ops))))
+        ((r4)    (arity! 4) (enc-r4 (car f) (cadr f) (caddr f)
+                                 (fpr-number (car ops)) (fpr-number (cadr ops))
+                                 (fpr-number (caddr ops)) (fpr-number (cadddr ops))))
         ((fr)    (arity! 3) (enc-r (car f) (cadr f) (caddr f)
                                  (fpr-number (car ops)) (fpr-number (cadr ops))
                                  (fpr-number (caddr ops))))

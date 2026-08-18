@@ -301,6 +301,13 @@
     ;; because a fixed word is exactly the kind of encoding it is easy to
     ;; transcribe confidently and wrongly.
     (ecall)
+    ;; R4: the fused multiply-adds. Four register operands, and the only
+    ;; instructions here whose rs3 rides where funct7 normally sits -- so the
+    ;; bytes are the only way to know the field order is right. Both the plain
+    ;; and negated forms, because RISC-V negates the PRODUCT and the naming
+    ;; invites getting that backwards.
+    (fmadd.d  fa0 fa1 fa2 fa3)   (fmsub.d  ft0 ft1 ft2 ft3)
+    (fnmsub.d fs0 fs1 fs2 fs3)   (fnmadd.d fa4 fa5 fa6 fa7)
     ;; RV64I / RV64M register-register
     (add   a0 a1 a2)   (sub   t0 t1 t2)   (mul  s2 s3 s4)   (div  t3 t4 t5)
     (slt   a7 s7 t6)   (sltu  a1 a2 a3)   (xor  s11 s10 s9) (and  a4 a5 a6)

@@ -3269,3 +3269,42 @@ pointed somewhere none of my guesses had.
 
 And the arithmetic found what the reading could not: totalling every `sp`
 adjustment over one run gave `-64 ×1, +64 ×2`, which names the bug outright.
+
+## D82 — RISC-V gets fused multiply-add, which is where D79 said the gap was
+
+The RV64 selector has emitted `fmadd.d` for as long as `contract.ss` has existed.
+The **encoder did not know it**, so the first contracted RV64 build died with
+
+```
+no such rv64gc instruction (fmadd.d)
+```
+
+That is the same shape as the missing `ecall` (D77): a capability the compiler
+believed it had, absent one level down, and invisible because nothing had ever
+asked for it. `fp-contract` defaults off (D24) and no benchmark granted it until
+D79.
+
+The fused multiply-adds are **R4 format** — four register operands, with `rs3`
+riding in the top five bits where every other format keeps `funct7`. That is why
+they need their own encoder rather than a wider `funct` field, and why the field
+order cannot be checked by reading: all four forms are now in the differential
+listing, and **all 73 instructions encode byte-identically to binutils**.
+
+The naming trap is worth recording because the manual invites it: RISC-V negates
+the **product**, so `fnmadd.d` is `-(rs1*rs2) - rs3` and `fnmsub.d` is
+`-(rs1*rs2) + rs3`. Getting that backwards is a sign error the oracle catches but
+the mnemonic does not suggest.
+
+Emitted, on `config-sonic-fma.sps`:
+
+```
+57 fmul.d   39 fmadd.d   26 fsub.d   19 fadd.d   18 fnmsub.d   17 fdiv.d   1 fnmadd.d
+```
+
+58 fused multiply-adds, and the energies are `-0.169075164 / -0.169087605` — the
+published values. That the *negated* forms give correct answers is the check on
+the sign convention above.
+
+So both targets now reach the capability D79 identified as the whole remaining
+gap to `gcc -O3 -march=native`, and on RISC-V it arrived by adding one
+instruction format the encoder was missing rather than by writing a pass.
