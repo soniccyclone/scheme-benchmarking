@@ -90,7 +90,26 @@
   ;; Note what this does NOT owe the collector: t0 here holds a raw address, not
   ;; a tagged value, so `scratch-live` stays clear across these sequences. The
   ;; bit exists for calling-convention windows, which these are not.
-  (define rv64-addr-scratch (make-parameter 't0))
+  ;; t1, NOT t0, AND THE DIFFERENCE IS LOAD-BEARING. twoaddr.ss keeps its own
+  ;; scratch table -- `(rv64 (raw-word . t0) (raw-f64 . ft11))` -- so the
+  ;; two-address fixup materialises through t0. This parameter used to name t0
+  ;; as well, and the two mechanisms collided in emitted code:
+  ;;
+  ;;     lui  t0,0x600        ; global address, from r:gset
+  ;;     addi t0,t0,88        ;   = 0x600058
+  ;;     addi t0,zero,5       ; the VALUE, staged through the same register
+  ;;     sd   t0,0(t0)        ; store 5 to address 5 -> SIGSEGV
+  ;;
+  ;; Both were drawing legitimately from the three registers regs.ss reserves
+  ;; (t0 t1 t2); both simply took the first one, and nothing arbitrated. The
+  ;; float path never showed it because the value lives in an f-register and
+  ;; reusing t0 for the address is then free -- which is why every float global
+  ;; store in the same function was correct.
+  ;;
+  ;; This separates the two uses. It does NOT make the scratch set self-
+  ;; arbitrating: rv64-overflow-scratch still names a pair, and a fourth
+  ;; consumer would have the same problem again. See bead 1mp.9.
+  (define rv64-addr-scratch (make-parameter 't1))
   (define rv64-overflow-scratch (make-parameter '(t0 t1)))
 
   ;; Where a failed check goes. One label per check name; the handler is E3's.

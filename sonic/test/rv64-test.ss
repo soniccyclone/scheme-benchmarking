@@ -52,12 +52,17 @@
              `((addi v-seven zero 7)
                (mul v-off v-i v-seven)
                (add v-idx v-off v-k)
-               (slli t0 v-idx 3)
-               (add t0 v-b t0)
+               ;; t1, not t0: rv64-addr-scratch moved off t0 because
+               ;; twoaddr.ss's own scratch table also names t0 for raw-word,
+               ;; and the two collided in emitted code -- a global address
+               ;; computed into t0 and then overwritten by a value staged
+               ;; through it. See bead 1mp.9.
+               (slli t1 v-idx 3)
+               (add t1 v-b t1)
                ;; -1, not 0: the displacement absorbs the heap pointer tag,
                ;; because a pointer is tagged and nothing strips it before the
                ;; load. See numeric.ss `heap-element-disp`.
-               (fld v-val t0 ,heap-element-disp)
+               (fld v-val t1 ,heap-element-disp)
                ;; The return move. Lmach's `(ret v)` carries no class, so this
                ;; rule reads it from `current-vreg-classes`; a double goes to
                ;; fa0 via fsgnj.d, which is what `fmv.d` is. Without it the
