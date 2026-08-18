@@ -311,6 +311,17 @@ Run anything outside the container. Add a second way to run things. Use sudo.
 Weaken, delete or loosen a test, an assertion or an oracle to make something
 pass.
 
+**DECIDE, as of 2026-08-18.** Nathan's instruction: "make as many decisions on
+your own as possible since creating this more performant scheme is all obvious
+optimizations and capabilities we are adding." That supersedes the
+waiting-on-Nathan set below for ACCEPTANCE WORDING and ROUTE CHOICE. Record the
+decision and its reasoning in the ledger, and make it reversible.
+
+It does NOT supersede the two rules under **Never**, and the distinction is the
+one that matters: rewording an acceptance to describe what is ACTUALLY VERIFIED
+is a decision; rewording it so a weaker check passes is weakening a gate. If a
+reword would lower the bar, the honest move is to say the milestone is unmet.
+
 **Stop and ask.** Anything that changes what a number MEANS: the oracle, the
 measurement methodology, the benchmark set, the reported N. Reversing a
 D-numbered decision. Suppressing a check to gain speed — that needs a named,

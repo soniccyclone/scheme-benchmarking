@@ -3055,3 +3055,46 @@ The RV64 ladder now reads: bytes match binutils → objdump reads our output bac
 the kernel runs our image → **the kernel runs our compiled program**. What
 remains for a useful RV64 target is the helper set, and nbody names the first one
 it wants.
+
+## D78 — three acceptance criteria reworded, and the line that was not crossed
+
+Nathan, 2026-08-18: *"make as many decisions on your own as possible since
+creating this more performant scheme is all obvious optimizations and
+capabilities we are adding."* That grants decision authority over acceptance
+wording and route choice, which had been the standing blocker on six beads.
+
+It does not grant authority to weaken a gate, and the distinction is the whole
+content of this entry: **rewording a criterion to describe what is actually
+verified is a decision; rewording it so a weaker check passes is weakening.**
+Applied three times, and the three came out differently.
+
+**E3 (`xei`) — reworded UP, closed.** The criterion named a hand-written Lcore
+fixture. Measured, it cannot be written: nbody's whole-program Lcore is 2448
+cons cells, its smallest whole lambda exceeds every existing fixture, and an
+equality fixture pins the expander's gensym counter — `(i%7 x%8 y%5 z%6 …)` —
+which any upstream pass shifts. `emit-nbody-test.ss` already learned this and
+matches its loop BY PREFIX. What replaces it is strictly stronger: structural
+assertions plus a bit-exact run against SPEC.md. An equality fixture proves one
+shape; this proves the properties *and* the numbers.
+
+**M5 (`qaq.7`) — instruction arm removed, milestone LEFT OPEN.** c-native is 570
+instructions, 67 of them EVEX-encoded, with zero zmm and zero mask registers —
+it reads as AVX2 until you look at prefix bytes. EVEX is buying `xmm16`–`xmm31`
+to cut spills. valgrind 3.25.1 has no EVEX decoder; qemu 10.1.0's TCG takes
+SIGILL. The tempting third option — add a `-mno-avx512f` row — was refused: it
+would produce a number about a *different program*, since removing those
+registers changes allocation, which is why they are used. **A measurable proxy
+for an unmeasurable thing is worse than admitting the thing is unmeasurable,
+because the proxy gets quoted.** M5 stays open at 1.14x behind.
+
+**M4 (`qaq.6`) — SPLIT, x86-64 half closed.** Its criterion named the E6-DISASM
+assertions, which compile their fixtures with **gcc** and validate
+`has-packed-arithmetic?` — the analyser — against a control pair. They are green
+and would remain green if SonicScheme emitted nothing. The criterion now points
+at the Sonic-compiled assertion, which passes on the real binary. Two further
+calls: packed means packed, and 128-bit xmm from `slp.ss` qualifies (reading it
+as 256-bit would make M4 hostage to E5, which D73 showed is unreachable on the
+stock layout); and RV64 is **split to qaq.13, not discarded**, because it needs a
+packed lowering that does not exist on a target that cannot yet run nbody.
+Closing one bead while quietly dropping half its scope is the dishonest version
+of this, and splitting is what makes the reword survive scrutiny.
