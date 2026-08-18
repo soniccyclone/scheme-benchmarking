@@ -44,9 +44,23 @@ Two things fall out and they set the order of everything below. **Milestone 3 is
 MET AND CLOSED**, both arms: 5.95x on wall clock (CI [0.1630, 0.1829]) and 3.16x
 fewer instructions, the latter with both sides forced onto qemu so the comparison
 is single-instrument (D68). And sonic is at PARITY with
-scalar C while 1.14x behind vectorized C, both established at 40 reps, which
-means **the whole remaining gap to Milestone 5 is the vectorization gap** — E5,
-not scalar tuning. Do not spend iterations shaving scalar code to reach M5.
+scalar C while 1.14x behind `gcc -O3 -march=native`.
+
+**THE GAP TO M5 IS FMA, NOT VECTORIZATION — this section said the opposite for a
+long time and sent four routes' worth of work the wrong way (D79).** Counted from
+the emitted binaries:
+
+```
+sonic        scalar=161  packed=36  fma=0
+ref-native   scalar=175  packed=25  fma=81
+```
+
+We already emit MORE packed arithmetic than c-native does, and c-native uses no
+256-bit at all — 748 xmm, zero ymm, zero zmm; its EVEX encodings buy xmm16-31
+for spills, not width. What it has and stock sonic has none of is 81 fused
+multiply-adds. `contract.ss` can produce them and is wired in; `fp-contract` is
+a permission defaulting to OFF (D24) that the benchmark never granted, while
+gcc -O3 takes `-ffp-contract=fast` by default. See the `sonic-fma` configuration.
 
 That is not idle advice: raising the unroller's growth budget was tried and
 measured, unrolls hard (902 instructions to 1734, packed functions 5 to 17), and

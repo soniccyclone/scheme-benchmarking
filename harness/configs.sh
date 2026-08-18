@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/nbody"
 
-CONFIGS="sonic sonic-u4 sonic-pad4 c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2b racket-2b chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
+CONFIGS="sonic sonic-fma sonic-u4 sonic-pad4 c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2b racket-2b chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
 
 mkdir -p "$BUILD"
 
@@ -92,6 +92,48 @@ EOF
     chmod +x "$BUILD/sonic-u4"
 }
 cfg_run_sonic_u4() { echo "$BUILD/sonic-u4 $1"; }
+
+# --- the same compiler, allowed to fuse a multiply-add ----------------------
+#
+# THE ONE CAPABILITY c-native HAS AND WE DID NOT USE. Counted from the emitted
+# binaries, we already emit MORE packed arithmetic than `gcc -O3 -march=native`
+# does -- 36 against 25 -- and c-native uses no 256-bit at all: 748 xmm, zero
+# ymm, zero zmm. What it has and stock sonic has none of is 81 fused
+# multiply-adds.
+#
+# contract.ss can produce them, is wired into driver.ss, and has 15 passing
+# assertions. It emitted nothing because D24 makes `fp-contract` a named,
+# lexically-scoped permission defaulting to OFF, and config-sonic.sps never
+# granted it -- while gcc -O3 takes -ffp-contract=fast by default. Milestone 5
+# was comparing a non-contracted build against a contracted one.
+#
+# A SEPARATE CONFIGURATION rather than a change to config-sonic.sps, following
+# sonic-u4 and sonic-pad4: the standing number stays comparable and the two can
+# be measured against each other in one run.
+#
+# CORRECTNESS. SPEC.md asks for nine decimal places, not bit exactness, and this
+# build agrees there. It is NOT bit-identical to stock -- the second energy
+# differs by 2 ULP -- which is the same relationship c-native has to c-scalar,
+# both of which publish -0.169087605. A fused multiply-add rounds once where two
+# instructions round twice; that is the point of it.
+cfg_src_sonic_fma() { echo "config-sonic-fma.sps"; }
+cfg_compile_sonic_fma() {
+    local drv="$BUILD/sonic-fma-build.ss"
+    cat > "$drv" <<EOF
+(import (chezscheme) (sonic driver) (sonic pipeline))
+(compile-sonic-to-file "$BENCH/config-sonic-fma.sps" nbody-externs "$BUILD/sonic-fma")
+EOF
+    . "$ROOT/tools/container.sh"
+    if sonic_in_container; then
+        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
+    else
+        "$ROOT/tools/container.sh" bash -c \
+            "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-fma-build.ss" \
+            || return 1
+    fi
+    chmod +x "$BUILD/sonic-fma"
+}
+cfg_run_sonic_fma() { echo "$BUILD/sonic-fma $1"; }
 
 # --- four-lane packing, which needs a padded layout AND a written pad ---------
 #

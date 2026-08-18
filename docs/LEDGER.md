@@ -3098,3 +3098,72 @@ stock layout); and RV64 is **split to qaq.13, not discarded**, because it needs 
 packed lowering that does not exist on a target that cannot yet run nbody.
 Closing one bead while quietly dropping half its scope is the dishonest version
 of this, and splitting is what makes the reword survive scrutiny.
+
+## D79 — the gap to Milestone 5 is fused multiply-add, not vectorization
+
+LOOP.md has recorded, since D57, that "the whole remaining gap to Milestone 5 is
+the vectorization gap — E5, not scalar tuning. Do not spend iterations shaving
+scalar code to reach M5." That premise is measurably wrong, and it sent four
+routes' worth of work at four-lane packing.
+
+Counted from the emitted binaries:
+
+```
+sonic        scalar=161  packed=36  fma=0
+ref-native   scalar=175  packed=25  fma=81
+ref-scalar   scalar=62   packed=0   fma=0
+```
+
+**We already emit more packed arithmetic than `gcc -O3 -march=native` does** —
+36 against 25 — and c-native uses no 256-bit at all: 748 `xmm`, zero `ymm`, zero
+`zmm`. Its EVEX encodings buy `xmm16`–`xmm31` for spill relief, not width. So
+the thing 1mp.5 has been trying to build is not the thing that is missing.
+
+What c-native has and we had none of is **81 fused multiply-adds**.
+
+**And the capability was already here.** `contract.ss` is written, wired into
+`driver.ss` at `contract-program`, and carries 15 passing assertions. It emitted
+nothing because D24 makes `fp-contract` a named, lexically-scoped permission
+defaulting to OFF, and `bench/nbody/config-sonic.sps` never granted it — while
+`gcc -O3` takes `-ffp-contract=fast` by default. **Milestone 5 has been comparing
+a non-contracted build against a contracted one.**
+
+This is the same shape as 1mp.4 and D75: a pass that is green in tests and
+absent from the binary. The difference is that this one was absent by *policy*
+rather than by not being called, which is why no test caught it — every test of
+`contract.ss` grants the permission, because that is what the pass is for.
+
+`sonic-fma` adds the permission around `advance!`, the inner loop. Emitted:
+
+```
+sonic        scalar=161  packed=36  fma=0
+sonic-fma    scalar=134  packed=21  fma=42
+```
+
+**Correctness, and why this is allowed at all.** SPEC.md asks for energy to nine
+decimal places, not bit-exactness. `sonic-fma`'s first energy is bit-identical
+to stock and its second differs by 2 ULP — which is precisely the relationship
+`c-native` (81 fma) has to `c-scalar` (0 fma), both of which publish
+`-0.169087605`. A fused multiply-add rounds once where two instructions round
+twice; that is what it is for. Anything tighter than the published oracle would
+forbid the reference implementation from using its own default flags.
+
+Added as a configuration beside `config-sonic.sps` rather than replacing it —
+the sonic-u4 and sonic-pad4 precedent — so the standing number stays comparable
+and the two can be measured in one run.
+
+**MEASURED, 40 reps, slope N=1,000,000 to 2,000,000, baseline sonic:**
+
+```
+sonic               65.2011  (baseline)
+sonic-fma           60.1649  ratio 0.9228  95% CI [0.8708, 0.9901]  real
+c-native            57.1221  ratio 0.8761  95% CI [0.8302, 0.9249]  real
+```
+
+**7.7% faster, and the interval excludes 1.0.** Against `gcc -O3 -march=native`
+the gap goes from **1.141x to 1.053x** — one permission, granted in one
+procedure, closes more than half of it.
+
+That is the entire content of the correction: four routes of vectorization work
+were aimed at a gap that was never there, while the actual gap was a pass this
+compiler already had, already tested, and was never allowed to run.
