@@ -3356,3 +3356,20 @@ The named constant `heap-length-disp` exists for exactly this and is now used.
 Caught only because explicit `N=1000` disagreed with the default, which is also
 1000 — a comparison that costs nothing and should be the first check on any
 argument-parsing path.
+
+**With the target measurable, the FMA question could finally be asked of it:**
+
+```
+              instructions/step    with fp-contract
+  rv64             1386.00              1291.00      -6.9%
+  x86-64            664.00               596.00     -10.2%
+```
+
+Both targets gain, and x86-64 gains more. That asymmetry is not noise: on x86-64
+a fused multiply-add replaces two PACKED operations, each doing two lanes, while
+on RV64 it replaces two scalar ones — SLP is gated off there for want of a packed
+lowering (qaq.13). So the contraction win compounds with packing on one target
+and not the other, which is a concrete reason to want qaq.13 beyond milestone
+completeness.
+
+The ratio between targets is 2.09x uncontracted and 2.17x contracted.
