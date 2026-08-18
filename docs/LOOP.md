@@ -101,21 +101,33 @@ per-function breakdown refuted it in one command: the spills are all in
 ### `qaq.13` — Milestone 4 on RV64 (reparented under E5, where it belongs)
 
 RVV lowering. The encoder is ready and byte-verified (`vsetvli`, `vfadd.vv`,
-`vfmul.vv`, `vfmacc.vv`, `vle64.v`, `vse64.v`). What is missing:
+`vfmul.vv`, `vfmacc.vv`, `vle64.v`, `vse64.v`), and RV64 is now measurable (D83),
+so the acceptance's "not slower" clause is answerable by instruction count.
 
-- a VECTOR REGISTER CLASS in `regs.ss` — the allocator models value/raw/float
-  only, so v0-v31 cannot be assigned
-- `vsetvli` REGION management: it is stateful and must be re-executed if control
-  rewinds into a region (`vec-rv64.ss` carries this knowledge and 17 assertions)
+**The register class is the cheap half** — `pool-for` is a three-case dispatch and
+the arch record already carries a `mask` pool for AVX-512 k registers, so a
+`vector` pool is precedented. Perhaps an hour.
 
-Its acceptance was made HARDER on purpose: packed **and not slower**. A lowering
-emitting `vsetvli` per operation would satisfy "packed arithmetic appears in the
-disassembly" while being slower than the scalar code it replaced — the
-measurable-proxy trap refused for M5 in D78. Note wall clock cannot be taken on
-RV64 under qemu, which is an emulator.
+**The expensive half is a design tension in `slp.ss`, and it should be understood
+before starting.** slp's whole premise is that a packed value is an ORDINARY
+`raw-f64` vreg — its header: *"the register allocator, the static partition and
+the collector need no changes at all, because a pair lives exactly where a scalar
+double lives."* True on x86-64, where one `xmm` holds both lanes. **False on
+RV64**: `f` registers are 64 bits, so a 2-lane pack needs a `v` register, a
+different file. slp would have to emit a target-dependent storage class, which is
+the property its design exists to avoid.
 
-Not on the performance path: D79 established packing was never the gap, and D82
-gave both targets the capability that was.
+So this is not "extend slp" — it is a separate RVV path, which is what
+`vectorize.ss` and `vec-rv64.ss` were written for. They carry the RVV knowledge
+and 17 green assertions and emit LISTINGS rather than vregs (D67); the work is to
+produce vector-class vregs from that knowledge. `vsetvli` is also stateful: a
+region must be re-entered at its `vsetvli` if control rewinds into it, so it
+cannot be emitted per-operation for free and a peephole cannot safely move it.
+
+**Why it is still worth doing** (D83): contraction gains 10.2% on x86-64 and 6.9%
+on RV64, and the difference IS this bead — on x86 a fused multiply-add folds two
+PACKED operations, on RV64 two scalar ones. Packing does not merely add its own
+saving; it doubles what every subsequent fused multiply-add is worth.
 
 ## Definition of done, per kind of bead
 
