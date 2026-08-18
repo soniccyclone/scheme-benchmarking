@@ -275,7 +275,7 @@
 ;; comma list. Their ENCODED operand order is the same (rX rY imm); only the
 ;; printing differs, which is exactly the divergence the shared shape was
 ;; chosen to keep small.
-(define offset-form '(ld lw fld sd sw fsd jalr))
+(define offset-form '(ld lw lbu fld sd sw sb fsd jalr))
 
 (define (op->string x) (if (symbol? x) (symbol->string x) (number->string x)))
 
@@ -320,6 +320,8 @@
     (slli  a2 a3 3)    (slli  a2 a3 63)   (srli a2 a3 1)    (srai a2 a3 31)
     ;; loads and stores, positive and negative offsets, integer and float
     (ld    a0 sp 16)   (ld    t1 t2 -8)   (lw   a0 sp 4)
+    ;; byte access, both directions
+    (lbu   a0 t1 0)    (lbu   t2 s8 2047) (sb   a0 t1 0)    (sb   t3 s9 -2048)
     (sd    a0 sp 24)   (sd    t3 s0 -16)  (sw   a0 sp 8)
     (fld   ft0 a0 0)   (fld   fa3 t1 8)   (fld  fs11 a1 -2048)
     (fsd   fs2 sp 32)  (fsd   ft11 a1 -8) (fsd  fa0 s0 2047)

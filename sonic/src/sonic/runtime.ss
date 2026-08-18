@@ -897,11 +897,38 @@
       (addi t0 t0 ,(lo12 heap-base-address))
       (lui  t2 ,(hi20 heap-pointer-cell))
       (sd   t0 t2 ,(lo12 heap-pointer-cell))
-      ;; command-line-cell <- '(), so `command-line` answers rather than faults.
-      ;; The x86-64 listing walks argv here; nothing that needs the list can
-      ;; link on RV64 yet, so an empty list is the honest placeholder.
+      ;; THE ARGUMENT LIST, walked exactly as the x86-64 listing walks it.
+      ;;
+      ;; This was an empty list while the target could not run at all, which
+      ;; took nbody's default branch of N=1000. That stopped being acceptable
+      ;; the moment RV64 worked: with `command-line` always nil the program
+      ;; ignores its argument, so counts at two different N come back IDENTICAL
+      ;; and harness/count-slope.sh refuses a slope -- correctly. The target ran
+      ;; and could not be measured.
+      ;;
+      ;; The kernel leaves argc at [sp] and the argv pointers directly after it.
+      ;; Nothing has pushed yet, so sp still points at argc. Walked BACKWARD,
+      ;; from argc-1 down to 0, so consing produces the list in argv order.
+      ;;
+      ;; s2/s3/s4 rather than the scratch set: these calls clobber t0-t2, and
+      ;; the walk's own state has to survive them.
+      (addi s2 sp 0)                             ; s2 = &argc
+      (ld   s3 s2 0)                             ; s3 = argc
+      (addi s4 gp 0)                             ; s4 = the list, starting empty
+      %rv-cl-loop
+      (bge  zero s3 %rv-cl-done)
+      (addi s3 s3 -1)
+      (slli t0 s3 3)
+      (add  t0 s2 t0)
+      (ld   t3 t0 8)                             ; t3 = argv[s3]
+      (jal  ra %rv-cstr->string)                 ; -> a0, tagged
+      (addi a1 s4 0)                             ; cdr = the list so far
+      (jal  ra %rv-cons)                         ; -> a0
+      (addi s4 a0 0)
+      (jal  zero %rv-cl-loop)
+      %rv-cl-done
       (lui  t2 ,(hi20 command-line-cell))
-      (sd   gp t2 ,(lo12 command-line-cell))
+      (sd   s4 t2 ,(lo12 command-line-cell))
       ;; A BARE SYMBOL, not `(label ...)`. The two targets spell a label
       ;; reference differently and object.ss resolves them separately: x86-64
       ;; rewrites `(label L)` to `(rel n)`, while the RV64 arm looks for a
@@ -980,6 +1007,80 @@
       (addi a0 t1 ,(+ heap-header-bytes heap-tag))
       (jalr zero ra 0)
 
+      ;; ---- (cons car cdr) ----
+      ;;
+      ;; car in a0 and cdr in a1, both TAGGED, returning a tagged pointer in a0.
+      ;; Layout is every other heap object's: type, field count, payload. The
+      ;; count is 2 because the collector walks a header and a field count, and
+      ;; a pair's two fields are exactly what it must follow.
+      %rv-cons
+      (lui  t1 ,(hi20 heap-pointer-cell))
+      (ld   t0 t1 ,(lo12 heap-pointer-cell))
+      (lui  t2 ,(hi20 (- (+ heap-base-address heap-size) heap-header-bytes)))
+      (addi t2 t2 ,(lo12 (- (+ heap-base-address heap-size) heap-header-bytes)))
+      (blt  t2 t0 sonic-heap-error)
+      (addi t1 zero ,heap-type-pair)
+      (sd   t1 t0 0)
+      (addi t1 zero 2)
+      (sd   t1 t0 8)
+      (sd   a0 t0 ,heap-header-bytes)
+      (sd   a1 t0 ,(+ heap-header-bytes 8))
+      (addi t1 t0 ,(+ heap-header-bytes 16))
+      (lui  t2 ,(hi20 (+ heap-base-address heap-size)))
+      (addi t2 t2 ,(lo12 (+ heap-base-address heap-size)))
+      (blt  t2 t1 sonic-heap-error)
+      (lui  t2 ,(hi20 heap-pointer-cell))
+      (sd   t1 t2 ,(lo12 heap-pointer-cell))
+      (addi a0 t0 ,(+ heap-header-bytes heap-tag))
+      (jalr zero ra 0)
+
+      ;; ---- a C string to a Scheme string ----
+      ;;
+      ;; The NUL-terminated pointer arrives in t3 and a tagged string leaves in
+      ;; a0. Two passes, as on x86-64: measure the length, then allocate and
+      ;; copy, because the allocation size is not known until the NUL is found.
+      %rv-cstr->string
+      (addi t0 zero 0)                           ; t0 = length
+      %rv-c2s-len
+      (add  t1 t3 t0)
+      (lbu  t2 t1 0)
+      (beq  t2 zero %rv-c2s-alloc)
+      (addi t0 t0 1)
+      (jal  zero %rv-c2s-len)
+      %rv-c2s-alloc
+      (lui  t1 ,(hi20 heap-pointer-cell))
+      (ld   a0 t1 ,(lo12 heap-pointer-cell))
+      (lui  t2 ,(hi20 (- (+ heap-base-address heap-size) heap-header-bytes)))
+      (addi t2 t2 ,(lo12 (- (+ heap-base-address heap-size) heap-header-bytes)))
+      (blt  t2 a0 sonic-heap-error)
+      (addi t1 zero ,heap-type-string)
+      (sd   t1 a0 0)
+      (sd   t0 a0 8)                             ; byte count
+      (addi t1 zero 0)                           ; i = 0
+      %rv-c2s-copy
+      (bge  t1 t0 %rv-c2s-bump)
+      (add  t2 t3 t1)
+      (lbu  t2 t2 0)
+      (add  a1 a0 t1)
+      (sb   t2 a1 ,heap-header-bytes)
+      (addi t1 t1 1)
+      (jal  zero %rv-c2s-copy)
+      %rv-c2s-bump
+      ;; Round the byte count up to a whole word before bumping: the heap holds
+      ;; word-aligned objects and a string of 5 bytes still costs 8.
+      (addi t1 t0 7)
+      (srli t1 t1 3)
+      (slli t1 t1 3)
+      (addi t1 t1 ,heap-header-bytes)
+      (add  t1 t1 a0)
+      (lui  t2 ,(hi20 (+ heap-base-address heap-size)))
+      (addi t2 t2 ,(lo12 (+ heap-base-address heap-size)))
+      (blt  t2 t1 sonic-heap-error)
+      (lui  t2 ,(hi20 heap-pointer-cell))
+      (sd   t1 t2 ,(lo12 heap-pointer-cell))
+      (addi a0 a0 ,(+ heap-header-bytes heap-tag))
+      (jalr zero ra 0)
+
       ;; ---- (display x) ----
       ;;
       ;; Eight raw IEEE bytes to fd 1, exactly as the x86-64 routine does and
@@ -1036,18 +1137,57 @@
       %rv-len-done
       (jalr zero ra 0)
 
-      ;; ---- the dead branch ----
+      ;; ---- the branch that stopped being dead ----
       ;;
-      ;; nbody reads `(if (fx> (length args) 1) (string->number (cadr args)) ...)`
-      ;; and the argument list is empty, so neither of these runs. They still
-      ;; have to EXIST, because a label the code references must resolve -- and
-      ;; they TRAP rather than returning something, because a routine that is
-      ;; unreachable and a routine that quietly returns garbage look identical
-      ;; until the day the branch is taken. Same contract as the x86-64 side.
+      ;; nbody reads `(if (fx> (length args) 1) (string->number (cadr args)) ...)`.
+      ;; These TRAPPED while `command-line` was always empty, on the honest
+      ;; grounds that an unreachable routine and one that quietly returns
+      ;; garbage look identical until the branch is taken.
+      ;;
+      ;; Walking argv took the branch. With an argument the program reached
+      ;; `cadr` and exited 101 -- which is the trap working exactly as intended,
+      ;; and the reason it was written as a trap rather than a stub.
+      ;;
+      ;; A pair's car sits at -1 from the tagged pointer and its cdr at +7:
+      ;; the tag is 1 and the header is two words, so tagged = raw+17, car =
+      ;; raw+16, cdr = raw+24.
       cadr
-      (jal  zero sonic-type-error)
+      (ld   a0 a0 ,(- heap-header-bytes heap-tag 8))   ; cdr
+      (ld   a0 a0 ,(- heap-header-bytes heap-tag 16))  ; its car
+      (jalr zero ra 0)
+
+      ;; ---- (string->number s) ----
+      ;;
+      ;; Decimal digits only, which is what a benchmark argument is. The result
+      ;; is a RAW WORD -- repr.ss names string->number in extern-result-classes
+      ;; -- so it leaves in t3 and not a0, the same split that made
+      ;; %make-flvector return in the wrong register before D81.
+      ;;
+      ;; No validation: a non-digit yields nonsense rather than an error. That
+      ;; matches the x86-64 routine, and the argument comes from the harness.
       string->number
-      (jal  zero sonic-type-error)
+      ;; -9, NOT +7. A tagged pointer is raw+17, so the length word at raw+8 is
+      ;; nine BELOW it; +7 is the CDR offset, which is what I first wrote here by
+      ;; reusing the expression from `cadr` above. The two differ by sixteen and
+      ;; the program still ran -- it simply parsed a different number, so nbody
+      ;; silently simulated the wrong step count. `heap-length-disp` is the name
+      ;; for this and using it removes the chance to get it wrong twice.
+      (ld   t0 a0 ,heap-length-disp)                   ; byte count
+      (addi t1 zero 0)                                 ; i
+      (addi t3 zero 0)                                 ; accumulator
+      %rv-s2n-loop
+      (bge  t1 t0 %rv-s2n-done)
+      (add  t2 a0 t1)
+      (lbu  t2 t2 ,(- 0 heap-tag))                     ; byte i
+      (addi t2 t2 -48)                                 ; less '0'
+      (slli a1 t3 3)
+      (slli a2 t3 1)
+      (add  t3 a1 a2)                                  ; acc * 10
+      (add  t3 t3 t2)
+      (addi t1 t1 1)
+      (jal  zero %rv-s2n-loop)
+      %rv-s2n-done
+      (jalr zero ra 0)
 
       ;; The traps. A distinct exit code each, so a failure names itself in $?,
       ;; which is the contract the x86-64 traps keep.

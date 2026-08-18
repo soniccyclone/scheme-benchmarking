@@ -221,10 +221,17 @@
       ;; loads: (op rd rs1 imm)
       (ld    load ,op-load #b011)
       (lw    load ,op-load #b010)
+      ;; BYTE ACCESS, unsigned. A C string is a byte array terminated by NUL,
+      ;; so walking argv needs both of these and RV64 had neither -- the same
+      ;; gap shape as the missing `ecall` and the fused multiply-adds: an
+      ;; instruction the compiler needed and the encoder had never been asked
+      ;; for. `lbu` rather than `lb` because a character is not sign-extended.
+      (lbu   load ,op-load #b100)
       (fld   load-fp ,op-load-fp #b011)
       ;; stores: (op rs2 rs1 imm)
       (sd    store ,op-store #b011)
       (sw    store ,op-store #b010)
+      (sb    store ,op-store #b000)
       (fsd   store-fp ,op-store-fp #b011)
       ;; branches: (op rs1 rs2 target)
       (beq   b ,op-branch #b000)

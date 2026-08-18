@@ -3308,3 +3308,51 @@ the sign convention above.
 So both targets now reach the capability D79 identified as the whole remaining
 gap to `gcc -O3 -march=native`, and on RISC-V it arrived by adding one
 instruction format the encoder was missing rather than by writing a pass.
+
+## D83 — RISC-V becomes measurable: argv, and the first cross-ISA figure
+
+```
+nbody-rv64   1386.00 instructions/step   qemu
+sonic         664.00                     callgrind
+sonic-fma     596.00                     callgrind
+```
+
+**RV64 needs 2.09x the instructions of x86-64** for the same program, computing
+bit-identical answers at every N. That is the expected shape for a load/store ISA
+whose addressing costs three instructions where x86 needs zero, with SLP gated
+off because its packed operations have no RV64 lowering.
+
+Getting there took two things, and the second was found by a guard.
+
+**The instrument had to learn RISC-V.** `qemu-count.sh` picks emulator and
+disassembler from the binary's own `e_machine` byte now, and handles two log
+formats detected PER BLOCK — Ubuntu's qemu has a RISC-V disassembler linked and
+not an x86 one, so the same flag yields one line per instruction on one target
+and raw `OBJD-T:` hex on the other. The RV64 form needs no objdump at all.
+
+**Then the two-N protocol refused the result**, and was right: identical counts at
+N=200 and N=400, because the RV64 runtime never walked argv. `command-line`
+returned nil, so nbody took its default N=1000 whatever it was passed. The count
+was a real count of a real run — always the same run. Exactly the failure D63
+built the check for, catching a program that ran correctly and was unmeasurable.
+
+Walking argv needed `%rv-cons` and `%rv-cstr->string`, and those needed `lbu` and
+`sb`, which the encoder did not have — the third instance this session of a
+missing RV64 instruction (after `ecall` and the fused multiply-adds), and the
+coverage guard again refused to let them go unverified. All 77 instructions
+encode byte-identically to binutils.
+
+It also brought a branch back to life. `cadr` and `string->number` TRAPPED, on the
+honest grounds that an unreachable routine and one quietly returning garbage look
+identical until the branch is taken. Walking argv took the branch, and the
+program exited 101 — the trap doing precisely its job, which is why it was
+written as a trap and not a stub.
+
+**One bug in my own work, worth recording for its shape.** `string->number` read
+its byte count at `+7`, the CDR offset, where a string's length sits at `-9`.
+Both are valid displacements from a tagged pointer, so nothing faulted: the
+program parsed a different number and silently simulated the wrong step count.
+The named constant `heap-length-disp` exists for exactly this and is now used.
+Caught only because explicit `N=1000` disagreed with the default, which is also
+1000 — a comparison that costs nothing and should be the first check on any
+argument-parsing path.
