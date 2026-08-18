@@ -593,6 +593,35 @@
              (system (string-append x8 " 1000 > " x8 ".out"))
              (zero? (system (string-append "cmp -s " rv ".out " x8 ".out")))))))
 
+;;; --- INCOMING STACK ARGUMENTS, finally reached ---------------------------
+;;;
+;;; RV64 passes four raw-word arguments in t3-t6, so a fifth arrives on the
+;;; stack. x86-64 has six such registers and never spills at five, and that
+;;; asymmetry is why frame-incoming-offset's return-address word went unnoticed
+;;; as an x86-only quantity: `call` pushes one and `jal` does not, so RV64 read
+;;; every incoming stack argument eight bytes too high.
+;;;
+;;; Two earlier attempts at this test exercised NOTHING. A six-argument function
+;;; called with literals is constant-folded before selection, and the
+;;; nested-loop reproduction uses three arguments. This one is recursive, so
+;;; inlining and folding cannot remove the call, and NOT in tail position at the
+;;; top level -- a tail call from main is refused, correctly, because main
+;;; receives no incoming area to write over.
+;;;
+;;; The value is what matters: both targets must agree, and 8.0 is only produced
+;;; if the fifth argument survives the trip.
+(if (not qemu-available?)
+    (display "  SKIP qemu-riscv64 absent; stack arguments are not exercised\n")
+    (let ((rv "/tmp/sonic-sa-rv64") (x8 "/tmp/sonic-sa-x86"))
+      (ck! "a fifth raw-word argument travels via the stack on rv64, and agrees with x86-64"
+           (guard (e (#t #f))
+             (compile-sonic-to-file "test/rv64-stackargs.sps" '(display newline) rv 'rv64)
+             (compile-sonic-to-file "test/rv64-stackargs.sps" '(display newline) x8 'x86-64)
+             (system (string-append "chmod +x " rv " " x8))
+             (system (string-append "qemu-riscv64 " rv " > " rv ".out"))
+             (system (string-append x8 " > " x8 ".out"))
+             (zero? (system (string-append "cmp -s " rv ".out " x8 ".out")))))))
+
 ;;; --- the reserved scratch registers are shared, and nothing arbitrated ----
 ;;;
 ;;; regs.ss reserves t0/t1/t2 so passes can use a register the allocator will
