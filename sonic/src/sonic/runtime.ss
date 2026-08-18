@@ -1058,6 +1058,30 @@
       sonic-heap-error
       (addi a0 zero ,exit-heap-error)
       (addi a7 zero ,rv64-sys-exit)
+      (ecall)
+
+      ;; ---- the check traps ----
+      ;;
+      ;; target-rv64.ss emits branches to these by NAME -- rv64-trap-label makes
+      ;; `trap-<check>` from the check's own name -- so a program with any live
+      ;; check references a label that must resolve. nbody does not reach them
+      ;; because its checks are discharged by proof or by policy, which is
+      ;; exactly why they were missing and nothing noticed: the first program
+      ;; with a surviving fx+ overflow check failed to LINK.
+      ;;
+      ;; One exit code each, so a failure names itself in $?, which is the
+      ;; contract the x86-64 traps keep.
+      trap-overflow-check
+      (addi a0 zero ,exit-overflow-error)
+      (addi a7 zero ,rv64-sys-exit)
+      (ecall)
+      trap-bounds-check
+      (addi a0 zero ,exit-bounds-error)
+      (addi a7 zero ,rv64-sys-exit)
+      (ecall)
+      trap-type-check
+      (addi a0 zero ,exit-type-error)
+      (addi a7 zero ,rv64-sys-exit)
       (ecall)))
 
   (define (runtime-listing target entry . opt)
