@@ -774,11 +774,38 @@
       ;;
       ;; A memory source cannot be clobbered by a register write, so folding it
       ;; in makes the move safe to reorder and keeps the scratch free.
+      ;; BOTH SPELLINGS OF A REGISTER MOVE. x86-64 writes `(mov d s)`; RV64 is
+      ;; load/store and has no move instruction, so it spells one `(addi d s 0)`
+      ;; and a float one `(fsgnj.d d s s)`. Returns (dst . src), or #f.
+      (define (move-pair i)
+        (and (pair? i)
+             (case (car i)
+               ((mov movsd) (and (= (length i) 3) (cons (cadr i) (caddr i))))
+               ((addi) (and (= (length i) 4) (eqv? (cadddr i) 0)
+                            (cons (cadr i) (caddr i))))
+               ((fsgnj.d) (and (= (length i) 4) (eq? (caddr i) (cadddr i))
+                               (cons (cadr i) (caddr i))))
+               (else #f))))
+
+      ;; THE MEMORY FOLD NEEDS A MEMORY OPERAND; REBUILDING A CONSTANT DOES NOT,
+      ;; and conflating the two made this whole procedure x86-only. It required
+      ;; `(memq (car i) '(mov movsd))` -- not RV64's move spelling -- AND
+      ;; `spiller-mem-operand`, which is #f on RV64 because no instruction there
+      ;; reads memory. So on RV64 it never fired, and every rematerialisable
+      ;; argument went through the generic path instead: rebuilt into a SCRATCH
+      ;; and then moved out of it.
+      ;;
+      ;; That move is spill code by resolve-argcopy's definition -- `mov-of`
+      ;; refuses a move whose source is a scratch, precisely so reloads can be
+      ;; lifted over a copy -- so argument setup ended up with spill code on the
+      ;; copy's own registers. Before the scratch sets were separated it was
+      ;; worse than an error: the staged value was simply clobbered, and a
+      ;; nested loop on RV64 read a corrupted bound and never terminated.
+      ;;
+      ;; See beads 1mp.9 and 1mp.10.
       (define (fold-reload i)
-        (and (memq (car i) '(mov movsd))
-             (= (length i) 3)
-             (spiller-mem-operand sp)
-             (let ((dst (cadr i)) (src (caddr i)))
+        (and (move-pair i)
+             (let ((dst (car (move-pair i))) (src (cdr (move-pair i))))
                ;; The destination may ALREADY be physical -- argument setup
                ;; moves into a convention register, and those are exactly the
                ;; ones that were clobbering each other, so missing this case
@@ -794,12 +821,15 @@
                         ;; the fold it replaces -- no memory reference at all --
                         ;; and REQUIRED, because src's slot is never written.
                         (list '() (car (remat-into dst-phys src)) '())
-                        (list '()
+                        (and
+                         ;; ONLY the memory fold needs an operand form.
+                         (spiller-mem-operand sp)
+                         (list '()
                               (list (car i)
                                     dst-phys
                                     ((spiller-mem-operand sp)
                                      (frame-slot-offset frame src) (class-of src)))
-                              '())))))))
+                              '()))))))))
 
       (define (do-instr i)
         (let ((vs (distinct (apply append (map spilled-in (cdr i))))))
