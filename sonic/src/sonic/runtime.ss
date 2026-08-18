@@ -967,7 +967,17 @@
       (addi t2 t2 1)
       (jal  zero %mkfl-loop)
       %mkfl-done
-      (addi t3 t1 ,(+ heap-header-bytes heap-tag))
+      ;; RETURNS IN a0, NOT t3. The COUNT arrives in t3 because it is a raw
+      ;; word, but the RESULT is a tagged heap pointer, and callconv-rv64
+      ;; returns those in a0 -- a different register, where x86-64 happens to
+      ;; use rax for both and hides the distinction.
+      ;;
+      ;; Getting it wrong was silent: the caller dutifully stored a0, which held
+      ;; whatever it held, into the global for the flvector. Every later element
+      ;; store then addressed off null and the program died thousands of bytes
+      ;; away with an address that looked like a bad index rather than a bad
+      ;; return register.
+      (addi a0 t1 ,(+ heap-header-bytes heap-tag))
       (jalr zero ra 0)
 
       ;; ---- (display x) ----
