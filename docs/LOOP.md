@@ -75,58 +75,47 @@ opposite of nbody's diagnosis (D37).
 
 ## The queue, in dependency order
 
-107 of 115 closed. **Everything that remains needs a decision from Nathan.**
-E1, E2, E4, E6-M3 and E7 are closed; every pass in the tree has a test; the
-audit below has been run to exhaustion.
+**117 of 121 closed.** Two substantive items remain, one under each epic, and
+NEITHER is a decision — both are work that needs something this session could not
+supply.
 
-All six decision beads carry the `human` label, so `bd human list` shows them
-directly rather than requiring a dig through notes. Each one is posed with its
-evidence gathered and its cost sized — none is waiting on more measurement.
+### `qaq.7` — Milestone 5, at 1.053x
 
-### Waiting on Nathan — do not decide these autonomously
+Measured symmetrically (contracted against contracted, D80): sonic-fma 60.16
+ns/step against c-native 57.12, 40 reps, CI excluding 1.0.
 
-**`1mp.5` / `1mp.4` — CLOSED. Four-lane packing was not the path.** D79 measured
-the premise wrong: we already emit MORE packed arithmetic than `gcc -O3
--march=native` (36 against 25), and c-native uses no 256-bit at all. Four routes
-were explored against a gap that did not exist in the direction assumed. The
-mechanism is recorded on the bead if 256-bit is ever wanted for its own sake —
-the packs die on `(sub sub sub add)` and one sign-mask xor makes them uniform,
-since `a + b` is exactly `a - (-b)` in IEEE-754.
+**Blocked on a MEASUREMENT gap, not a missing optimisation.** sonic-fma issues
+30% FEWER float operations than c-native — 197 against 281 — and is still
+slower, with zero spill slots in the hot pair-force loops. So it is an IPC or
+dependency-chain difference, and this project cannot attribute it:
 
-**`xei` (E3) — the acceptance names an artifact that does not exist**, a
-hand-written core fixture. parse-test.ss does something stronger and passes.
-Reword or add the fixture.
+- c-native is uncountable by both instruments (EVEX; valgrind has no decoder,
+  qemu's TCG no AVX-512), so there is no per-function comparison against it
+- `perf` is denied rootless on this host (D58/D60)
+- callgrind models no pipeline, so it cannot answer "why is this slower"
 
-**`qaq.6` (M4) / `qaq.7` (M5) — the gates.** M4 must NOT close on
-vectorize-test.ss passing: that assertion runs on a kernel that never ships. M5's
-instruction comparison needs a reword regardless, because c-native emits AVX-512
-and NEITHER instrument can count it — callgrind cannot decode it and QEMU's TCG
-does not implement it.
+Do not fill this with a theory. I tried one — register pressure — and the
+per-function breakdown refuted it in one command: the spills are all in
+`join.10`, which carries no float arithmetic at all.
 
-### Actionable without a decision
+### `qaq.13` — Milestone 4 on RV64 (reparented under E5, where it belongs)
 
-**Nothing.** This was worked to exhaustion over eight loop iterations. What that
-consumed, so it is not re-run:
+RVV lowering. The encoder is ready and byte-verified (`vsetvli`, `vfadd.vv`,
+`vfmul.vv`, `vfmacc.vv`, `vle64.v`, `vse64.v`). What is missing:
 
-- every open bead audited individually (that is what found `qaq.6`'s criterion
-  testing gcc rather than us, and `1mp.6` as an untracked gap)
-- the instrument disagreement chased to root cause (D68→D72)
-- both baseline bugs found and fixed (D69, D70)
-- the four-lane route table completed by measurement (D73)
-- a sweep for EXPIRED PREMISES — claims true when written and falsified by an
-  unrelated change. Three found and fixed: D74, D76, and `analyze.ss`'s "there
-  is no reader". Everything else checked out.
-- a sweep of every doc for stale standing numbers after D69/D70 changed them.
-  Clean — no user-facing doc carried a wrong claim.
+- a VECTOR REGISTER CLASS in `regs.ss` — the allocator models value/raw/float
+  only, so v0-v31 cannot be assigned
+- `vsetvli` REGION management: it is stateful and must be re-executed if control
+  rewinds into a region (`vec-rv64.ss` carries this knowledge and 17 assertions)
 
-**`1mp.6` — the RV64 driver gap** (filed this session) is the one bead that is
-*work* rather than a wording call, and it is still not the loop's to take:
-writing an entry sequence and ELF writer for a second architecture is a feature,
-and which target this project spends time on is a priorities question. It is
-well-posed now — see D76: the hard parts (selection, allocation, encoding,
-object emission) all exist, only the runtime listing, an `EM_RISCV` image, and a
-driver target argument are missing, and the container's qemu-riscv64 means the
-result can be validated by running it.
+Its acceptance was made HARDER on purpose: packed **and not slower**. A lowering
+emitting `vsetvli` per operation would satisfy "packed arithmetic appears in the
+disassembly" while being slower than the scalar code it replaced — the
+measurable-proxy trap refused for M5 in D78. Note wall clock cannot be taken on
+RV64 under qemu, which is an emulator.
+
+Not on the performance path: D79 established packing was never the gap, and D82
+gave both targets the capability that was.
 
 ## Definition of done, per kind of bead
 
