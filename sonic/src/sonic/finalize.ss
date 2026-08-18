@@ -1269,12 +1269,23 @@
       (define loop-label
         (string->symbol (string-append (symbol->string name) ".loop")))
 
+      ;; THE TARGET IS A LABEL, NOT THE FIRST SYMBOL OPERAND. Same defect as
+      ;; own-label? had: on x86-64 `(jmp (label L))` has one operand and the
+      ;; first symbol IS the target, but RV64 spells a jump `(jal zero L)` and
+      ;; the first symbol is the DESTINATION REGISTER. So this returned `zero`
+      ;; for every RV64 jump, self-jump? was never true, and the
+      ;; past-the-prologue rewrite below never fired on that target -- every
+      ;; loop iteration released and re-reserved a frame whose size cannot
+      ;; change.
+      ;;
+      ;; A register is never a label, so preferring a name that IS one is
+      ;; correct for both spellings.
       (define (jump-target i)
-        (let loop ((xs (cdr i)))
-          (cond ((null? xs) #f)
+        (let loop ((xs (cdr i)) (fallback #f))
+          (cond ((null? xs) fallback)
                 ((and (pair? (car xs)) (eq? (car (car xs)) 'label)) (cadr (car xs)))
-                ((symbol? (car xs)) (car xs))
-                (else (loop (cdr xs))))))
+                ((and (symbol? (car xs)) (not (reg-class arch (car xs)))) (car xs))
+                (else (loop (cdr xs) fallback)))))
 
       (define (self-jump? i)
         (and ((spiller-tail-jump? sp) i) (eq? (jump-target i) name)))
