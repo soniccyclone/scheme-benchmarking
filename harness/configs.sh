@@ -135,6 +135,75 @@ EOF
 }
 cfg_run_sonic_fma() { echo "$BUILD/sonic-fma $1"; }
 
+# --- the same compiler, targeting RISC-V --------------------------------------
+#
+# NOT IN $CONFIGS, and opt-in by name: `harness/measure.sh sonic-rv64`. These run
+# under qemu-riscv64, so they are INSTRUCTION-COUNTABLE AND NOT TIMEABLE -- an
+# emulator's wall clock measures the emulator. $EMULATED below is what makes that
+# refusal automatic rather than remembered.
+#
+# Worth having because RV64 was unmeasurable until D83: the runtime did not walk
+# argv, so nbody ignored its argument, and count-slope.sh correctly refused a
+# slope for a program whose count never changed. With argv walking, both
+# instruments answer:
+#
+#     sonic-rv64        1386.00 instructions/step
+#     sonic-rv64-fma    1291.00
+#     sonic              664.00
+#     sonic-fma          596.00
+#
+# 2.09x, which is the shape a load/store ISA should have -- three instructions to
+# address where x86-64 needs zero -- with SLP gated off for want of an RV64
+# packed lowering (qaq.13).
+cfg_src_sonic_rv64() { echo "config-sonic.sps"; }
+cfg_compile_sonic_rv64() {
+    local drv="$BUILD/sonic-rv64-build.ss"
+    cat > "$drv" <<EOF
+(import (chezscheme) (sonic driver) (sonic pipeline))
+(compile-sonic-to-file "$BENCH/config-sonic.sps" nbody-externs "$BUILD/sonic-rv64" 'rv64)
+EOF
+    . "$ROOT/tools/container.sh"
+    if sonic_in_container; then
+        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
+    else
+        "$ROOT/tools/container.sh" bash -c \
+            "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-rv64-build.ss" \
+            || return 1
+    fi
+    chmod +x "$BUILD/sonic-rv64"
+}
+# NO `qemu-riscv64` PREFIX. The instruments pick the emulator themselves, from
+# the binary's own e_machine byte (D83) -- naming it here instead made callgrind
+# count QEMU rather than the guest, and it did not fail: it reported -0.00
+# instructions per step, a plausible-looking number about the wrong program.
+# That is the exact hazard count-slope.sh's two-N check exists for, arriving by a
+# route the check cannot see, because both counts were of a real process.
+cfg_run_sonic_rv64() { echo "$BUILD/sonic-rv64 $1"; }
+
+cfg_src_sonic_rv64_fma() { echo "config-sonic-fma.sps"; }
+cfg_compile_sonic_rv64_fma() {
+    local drv="$BUILD/sonic-rv64-fma-build.ss"
+    cat > "$drv" <<EOF
+(import (chezscheme) (sonic driver) (sonic pipeline))
+(compile-sonic-to-file "$BENCH/config-sonic-fma.sps" nbody-externs "$BUILD/sonic-rv64-fma" 'rv64)
+EOF
+    . "$ROOT/tools/container.sh"
+    if sonic_in_container; then
+        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
+    else
+        "$ROOT/tools/container.sh" bash -c \
+            "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-rv64-fma-build.ss" \
+            || return 1
+    fi
+    chmod +x "$BUILD/sonic-rv64-fma"
+}
+cfg_run_sonic_rv64_fma() { echo "$BUILD/sonic-rv64-fma $1"; }
+
+# Configurations that run under an emulator. Their instruction counts are real --
+# qemu counts guest instructions exactly -- and their WALL CLOCK is not, because
+# it is the emulator's. bench.sh refuses these by name so nobody has to remember.
+EMULATED="sonic-rv64 sonic-rv64-fma"
+
 # --- four-lane packing, which needs a padded layout AND a written pad ---------
 #
 # The first configuration in this table to emit 256-bit packed arithmetic.

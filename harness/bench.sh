@@ -129,6 +129,21 @@ for c in ${*:-$CONFIGS}; do
     # those are invoked through $( ... ) and an exit status or a variable set in
     # a subshell cannot reach this loop. Two earlier attempts put it in each of
     # them and both still reported a number for a missing binary.
+    # AN EMULATED CONFIGURATION HAS NO WALL CLOCK WORTH REPORTING. qemu counts
+    # guest instructions exactly and takes however long it takes to do so, so a
+    # time from one measures the emulator. Refused by name rather than left to
+    # whoever reads the table to notice.
+    case " ${EMULATED:-} " in
+      *" $c "*)
+        # INTO THE ROWS FILE, not straight to stdout. The table is printed after
+        # every configuration has been measured, so a direct printf here lands
+        # ABOVE the header -- which is how the first version of this made a
+        # refused row look like it had simply been dropped.
+        printf '%s%s%s%s%s%s%s\n' "$c" "$US" "" "$US" "0" "$US" \
+            "refused: runs under an emulator; time it on hardware, or count it with measure.sh" \
+            >> "$work/rows"
+        continue ;;
+    esac
     if ! eval "$(cfg_run "$c" "$N1")" >/dev/null 2>&1; then
         printf '%s%s%s%s%s%s%s\n' "$c" "$US" "" "$US" "0" "$US" "refused: the command does not run" >> "$work/rows"
         continue
