@@ -527,13 +527,39 @@
   ;; page was hit.
   ;;
   ;; So `own-labels` excludes the entry.
+  ;; ANY OPERAND THAT NAMES AN OWN LABEL, not the first symbol found.
+  ;;
+  ;; This used to stop at the first symbol-shaped operand, which is the target
+  ;; on x86-64 -- `(jmp (label L))` has exactly one -- and is the DESTINATION
+  ;; REGISTER on RV64: `(jal zero L)` writes the return address to `zero` and
+  ;; jumps to L. So every RV64 branch reported its target as `zero`, which is in
+  ;; no function's label list, so every intra-function edge was classified as a
+  ;; TAIL CALL and got an epilogue.
+  ;;
+  ;; The exit blocks emit their own epilogue, so the frame was released twice on
+  ;; the way out:
+  ;;
+  ;;     (addi sp sp 16)        <- spurious, from the misclassified edge
+  ;;     (jal zero L.else6)
+  ;;     L.else6: ... (addi sp sp 16) (jalr zero ra 0)
+  ;;
+  ;; leaving sp a frame too high. A later return then read its spilled result
+  ;; from `[sp+8]`, got a stack address, and handed it back as the value -- which
+  ;; became a loop bound three frames away, so a nested loop compared its index
+  ;; against a pointer and never terminated. See bead 1mp.10.
+  ;;
+  ;; Scanning every operand is correct for both targets and needs no target
+  ;; argument: a register name is never an own label, and object.ss's `rv-branchy`
+  ;; handling already assumes the RV64 target is simply the operand that is a
+  ;; label.
   (define (own-label? i own-labels)
-    (let ((t (let loop ((xs (cdr i)))
-               (cond ((null? xs) #f)
-                     ((and (pair? (car xs)) (eq? (car (car xs)) 'label)) (cadr (car xs)))
-                     ((symbol? (car xs)) (car xs))
-                     (else (loop (cdr xs)))))))
-      (and t (memq t own-labels) #t)))
+    (let loop ((xs (cdr i)))
+      (cond ((null? xs) #f)
+            ((and (pair? (car xs)) (eq? (car (car xs)) 'label)
+                  (memq (cadr (car xs)) own-labels))
+             #t)
+            ((and (symbol? (car xs)) (memq (car xs) own-labels)) #t)
+            (else (loop (cdr xs))))))
 
   ;; --- the pass -------------------------------------------------------------
 
