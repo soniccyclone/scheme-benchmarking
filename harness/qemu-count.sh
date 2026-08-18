@@ -59,6 +59,25 @@ shift
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
+# WHICH MACHINE, READ OUT OF THE FILE rather than passed in. e_machine sits at
+# byte 18 of every ELF header, little-endian: 62 is EM_X86_64 and 243 is
+# EM_RISCV. Taking it from the binary means a caller cannot get it wrong, and
+# there is exactly one thing to get right when a third target appears.
+#
+# This exists because SonicScheme gained a working RV64 target (D81) and had no
+# way to measure it: every instrument here was x86-only, so the second target
+# arrived with no instruction counts at all.
+EM=$(od -An -tu2 -j18 -N2 "$BIN" | tr -d ' ')
+case "$EM" in
+  62)  QEMU=qemu-x86_64      ; OBJARCH=i386:x86-64 ; OBJDUMP=objdump ;;
+  243) QEMU=qemu-riscv64     ; OBJARCH=riscv:rv64  ; OBJDUMP=riscv64-linux-gnu-objdump ;;
+  *)   echo "REFUSED: unknown e_machine $EM in $BIN; no emulator for it." >&2
+       echo "62 is EM_X86_64 and 243 is EM_RISCV; anything else needs adding." >&2
+       exit 2 ;;
+esac
+command -v "$QEMU" >/dev/null 2>&1 || {
+    echo "REFUSED: $QEMU is not installed, so this binary cannot be counted." >&2; exit 2; }
+
 # `nochain` IS LOAD-BEARING AND ITS ABSENCE IS SILENT. QEMU links translated
 # blocks together and then jumps between them directly, without logging -- so
 # `-d exec` alone counts only the executions that happen to cross an unlinked
@@ -66,7 +85,7 @@ trap 'rm -rf "$WORK"' EXIT
 # 243,031, an eight-fold undercount that looks like a plausible number.
 # qemu's own help for the flag says it plainly: "do not chain compiled TBs so
 # that exec and cpu show".
-qemu-x86_64 -d in_asm,exec,nochain -D "$WORK/q.log" "$BIN" "$@" \
+$QEMU -d in_asm,exec,nochain -D "$WORK/q.log" "$BIN" "$@" \
     >/dev/null 2>"$WORK/q.err"
 rc=$?
 
@@ -96,88 +115,65 @@ if [ "$rc" -ne 0 ]; then
     exit 1
 fi
 
-python3 - "$WORK/q.log" "$WORK" <<'PY'
+python3 - "$WORK/q.log" "$WORK" "$OBJARCH" "$OBJDUMP" <<'PY'
 import sys, re, subprocess, collections, os
 
-log, work = sys.argv[1], sys.argv[2]
+log, work, objarch, objdump = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 # in_asm: a block is "IN:" then "0x<addr>:" then one or more "OBJD-T: <hex>".
 # exec:   "Trace 0: 0x<host> [.../<guest-pc>/...]" -- the guest pc is field 1
 #         inside the brackets.
-blocks = {}          # guest addr -> hex bytes
+# TWO LOG FORMATS, because whether qemu can disassemble the guest depends on
+# which disassembler was linked into THIS build. Ubuntu's has RISC-V and not
+# x86-64, so the same flag produces two different things:
+#
+#   x86-64   0x401000:                       <- address alone
+#            OBJD-T: 49c7c71700000048...     <- raw bytes, to be decoded here
+#
+#   rv64     0x401000:  01700193  addi gp,zero,23   <- one line per instruction
+#
+# The RV64 form is simply easier: qemu has already counted the instructions for
+# us, so there is nothing to decode and objdump is not needed at all. Detected
+# per block rather than per target, so a qemu built with both disassemblers --
+# or neither -- lands on the right path without being told.
+blocks = {}          # guest addr -> hex bytes, when we must decode
+counts = {}          # guest addr -> instruction count, when qemu disassembled
 execs  = collections.Counter()
 
-# ONE BUFFER PER TRANSLATION RECORD, ASSIGNED RATHER THAN ACCUMULATED. QEMU
-# retranslates the same guest address -- on a TB flush, or when cpu flags
-# differ -- and emits a fresh IN: record each time. The first version of this
-# parser did `blocks[addr] = blocks.get(addr, "") + bytes`, which concatenated
-# every retranslation of an address onto the previous one, so a block
-# translated twice was credited with twice its instructions on every execution.
-#
-# THIS IS HYGIENE, NOT A FIX FOR THE DISAGREEMENT BELOW. I changed it while
-# chasing that, and re-measuring afterwards produced byte-identical totals, so
-# retranslation-accumulation was either not happening on these binaries or not
-# material.
-#
-# THE REAL BUG WAS IN count_insns, AND IT WAS THIS SCRIPT'S FAULT. Against
-# callgrind on identical binaries this counter read 6.17% high on our output and
-# exactly right on gcc's:
-#
-#     ref-scalar   callgrind 653.90/step   qemu 653.90   +0.0000%
-#     sonic        callgrind 664.00/step   qemu 705.00   +6.1747%
-#
-# Localised per address by harness/count-diff.sh: 954 addresses agreed, 114 were
-# counted by qemu and given ZERO by callgrind, and NOTHING went the other way.
-# callgrind's address set was a strict subset of ours, which is the signature of
-# over-decoding rather than of a disagreement about execution.
-#
-# The cause: OBJDUMP WRAPS AN INSTRUCTION LONGER THAN 7 BYTES ONTO A
-# CONTINUATION LINE, and that line carries an ADDRESS but no mnemonic:
-#
-#     401a61:  48 8b 1c 25 68 00 60    mov    0x600068,%rbx
-#     401a68:  00
-#
-# One instruction, two lines that both match `^\s+[0-9a-f]+:\t`. Every
-# instruction of 8 bytes or more was therefore counted TWICE, on every execution
-# of its block. We emit absolute-addressed forms like the one above; gcc -O2 has
-# none in its hot blocks, which is exactly why it agreed to +0.0000% and we did
-# not -- the bug was invisible precisely where it was being validated.
-#
-# Requiring a MNEMONIC FIELD -- a second tab followed by non-space -- fixes it.
-# After: 954 addresses agree, 3 disagree, +0.0022% total, and the slopes match
-# callgrind's to the hundredth on both binaries.
-#
-# The lesson worth keeping: cross-validating two instruments on a binary that
-# does not exercise the difference proves nothing. The validation ran on gcc's
-# output for months and the counter was wrong the whole time on ours.
+INSN = re.compile(r"^0x([0-9a-f]+):\s+[0-9a-f]{4,}\s+\S")
+
 addr = None
 cur  = []
+n_insn = 0
+def flush():
+    global addr, cur, n_insn
+    if addr is not None:
+        if cur:      blocks[addr] = "".join(cur)
+        elif n_insn: counts[addr] = n_insn
+    addr, cur, n_insn = None, [], 0
+
 for line in open(log, errors="replace"):
     if line.startswith("OBJD-T:"):
         if addr is not None:
             cur.append(line.split(":", 1)[1].strip())
-    elif line.startswith("0x") and line.rstrip().endswith(":"):
-        if addr is not None and cur:
-            blocks[addr] = "".join(cur)
-        addr = int(line.split(":")[0], 16)
-        cur = []
     elif line.startswith("Trace "):
         m = re.search(r"\[[0-9a-f]+/([0-9a-f]+)/", line)
         if m:
             execs[int(m.group(1), 16)] += 1
     elif line.startswith("IN:"):
-        if addr is not None and cur:
-            blocks[addr] = "".join(cur)
-        addr = None
-        cur  = []
-if addr is not None and cur:
-    blocks[addr] = "".join(cur)
+        flush()
+    else:
+        m = INSN.match(line)
+        if m:
+            # A disassembled instruction line. The FIRST one names the block.
+            if addr is None:
+                addr = int(m.group(1), 16)
+            n_insn += 1
+        elif line.startswith("0x") and line.rstrip().endswith(":"):
+            flush()
+            addr = int(line.split(":")[0], 16)
+flush()
 
-if not blocks or not execs:
-    sys.exit("parsed no blocks (%d) or no executions (%d) -- qemu log format changed?"
-             % (len(blocks), len(execs)))
-
-# Instructions per block, by decoding the bytes objdump was given.
 def count_insns(hexbytes):
     raw = bytes.fromhex(hexbytes)
     p = os.path.join(work, "blk.bin")
@@ -189,11 +185,11 @@ def count_insns(hexbytes):
 
 sizes, total, unknown = {}, 0, 0
 for a, n in execs.items():
-    if a not in blocks:
+    if a not in blocks and a not in counts:
         unknown += n
         continue
     if a not in sizes:
-        sizes[a] = count_insns(blocks[a])
+        sizes[a] = counts[a] if a in counts else count_insns(blocks[a])
     total += n * sizes[a]
 
 print("%d\tinstructions" % total)
