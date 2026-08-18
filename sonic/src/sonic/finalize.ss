@@ -158,9 +158,13 @@
   ;; instead of its accumulator, and returned it. The garbage became the outer
   ;; loop's bound, so `j < n` compared against a pointer and the program never
   ;; terminated. The cause was three frames away from the symptom.
-  (define (frame-incoming-offset target f i)
+  (define (frame-incoming-offset target f i . opt)
     (+ (frame-layout-bytes f)
        (if (eq? target 'rv64) 0 slot-bytes)
+       ;; The ra area, when the function saves ra: it sits between this frame
+       ;; and the caller's outgoing area, so a callee reading its own incoming
+       ;; arguments must step over it.
+       (if (pair? opt) (car opt) 0)
        (* slot-bytes i)))
 
   ;; Substitute the symbolic `(incoming i)` displacements the tail-call emitters
@@ -1269,6 +1273,45 @@
       (define loop-label
         (string->symbol (string-append (symbol->string name) ".loop")))
 
+      ;; --- RV64 must SAVE `ra` in a non-leaf function ------------------------
+      ;;
+      ;; x86-64's `call` PUSHES the return address, so a callee cannot destroy
+      ;; its caller's. RV64's `jal ra` writes it to a REGISTER, so any function
+      ;; that itself calls something overwrites its own return address -- and
+      ;; then `jalr zero ra 0` returns into its own body just past the call.
+      ;;
+      ;; Measured before this: outer%2.2 ran its prologue ONCE and its epilogue
+      ;; TWICE, climbing a frame per pass, until [sp+0] no longer named the slot
+      ;; holding the loop bound. A nested loop never terminated. See 1mp.10.
+      ;;
+      ;; Only a NON-LEAF pays. A leaf keeps ra untouched, and spending two
+      ;; instructions and a word on every leaf would be a real cost on a target
+      ;; whose whole calling convention is register-based.
+      (define non-leaf?
+        (and (eq? target 'rv64)
+             (let scan ((bs blocks))
+               (cond ((null? bs) #f)
+                     ((let inner ((is (cadr (car bs))))
+                        (cond ((null? is) #f)
+                              ((and (pair? (car is)) (eq? (car (car is)) 'jal)
+                                    (pair? (cdr (car is))) (eq? (cadr (car is)) 'ra))
+                               #t)
+                              (else (inner (cdr is)))))
+                      #t)
+                     (else (scan (cdr bs)))))))
+
+      ;; SIXTEEN, not eight, so the stack stays 16-byte aligned at a call
+      ;; boundary -- the same reason frame-layout-bytes rounds up.
+      (define ra-bytes (if non-leaf? 16 0))
+
+      ;; Wrapped OUTSIDE the spill frame, so every existing sp displacement into
+      ;; that frame is unchanged. Only what a CALLEE sees above it moves, which
+      ;; is why incoming-offset adds ra-bytes too.
+      (define (ra-save)
+        (if non-leaf? `((addi sp sp -16) (sd ra sp 8)) '()))
+      (define (ra-restore)
+        (if non-leaf? `((ld ra sp 8) (addi sp sp 16)) '()))
+
       ;; THE TARGET IS A LABEL, NOT THE FIRST SYMBOL OPERAND. Same defect as
       ;; own-label? had: on x86-64 `(jmp (label L))` has one operand and the
       ;; first symbol IS the target, but RV64 spells a jump `(jal zero L)` and
@@ -1326,7 +1369,9 @@
                                                                       (not (own-label? ins own-labels))
                                                                       ;; the back edge keeps the frame
                                                                       (not (self-jump? ins)))))
-                                                        ((spiller-epilogue sp) bytes)
+                                                        (append
+                                                         ((spiller-epilogue sp) bytes)
+                                                         (ra-restore))
                                                         '())
                                                     (if ins
                                                         (list (if (self-jump? ins)
@@ -1510,7 +1555,8 @@
                                                      arrival-pairs)
                                                 mov-of emit-mov)))
                           out)))
-               (head (append ((spiller-prologue sp) bytes)
+               (head (append (ra-save)
+                             ((spiller-prologue sp) bytes)
                              (list loop-label)
                              arrival-instrs stack-arrivals)))
           ;; The prologue goes AFTER the function's entry label, not before it.

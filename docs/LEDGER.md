@@ -3209,3 +3209,63 @@ scoped permission, default off. It is not a global flag and it is not on for the
 reference build. Vectorization-driven reassociation, the other half of the smoke
 gate's note, remains off and is a separate question: reassociation changes
 results by a route no permission currently covers.
+
+## D81 — nbody runs on RISC-V, bit-identical to x86-64
+
+```
+RISC-V energies:  -0.169075164  -0.169087605
+SPEC.md:          -0.169075164  -0.169087605
+```
+
+and the raw output bytes are **bit-identical** to the x86-64 build's — the same
+oracle the x86-64 target is held to, on the same 19-way cross-agreement standard.
+
+D75 recorded that "tested on both targets" meant the back-end machinery, because
+no Scheme program had ever been lowered to RV64. Closing that gap turned up
+**ten** defects, each hidden behind the last, and nine of the ten share one root:
+**an x86-64 assumption that does not survive a load/store target.**
+
+| | |
+|---|---|
+| `ecall` absent from the encoder | no syscall, so no runtime at all |
+| `build-executable` refused non-x86-64 | and hardcoded `e_machine` |
+| driver had no target argument | RV64 could not be *requested* |
+| `slp.ss` packed unconditionally | emitting ops only x86-64 can lower |
+| `address-into` shifted a `#f` index | `#f` is how this tree spells "no index" |
+| `r:const` waited for a linker | the static image applies no relocations |
+| `frame-incoming-offset` | added a return-address word RV64 never pushes |
+| `own-label?` | read `jal`'s destination register as its target |
+| `jump-target` | same defect, one procedure away |
+| `fold-reload` | matched only `mov`/`movsd`, so remat went via a scratch |
+
+**The tenth is the ABI, and it is why the other nine could all be fixed and the
+program still not run.** x86-64's `call` PUSHES the return address, so a callee
+cannot destroy its caller's. RV64's `jal ra` writes a REGISTER — so any non-leaf
+function overwrites its own return address, and `jalr zero ra 0` returns into its
+own body just past the call. Measured: `outer%2.2` ran its prologue ONCE and its
+epilogue TWICE, climbing a frame per pass until `[sp+0]` no longer named the slot
+holding the loop bound.
+
+Every earlier diagnosis chased that displaced load as "corruption". It was a
+*correct* load from a stack pointer that had walked away.
+
+Non-leaf RV64 functions now save `ra`, wrapped OUTSIDE the spill frame so no
+existing displacement into it moves; only what a callee sees above it does, which
+is why `frame-incoming-offset` accounts for the same word. Leaves pay nothing —
+spending two instructions on every leaf would be a real cost on a target whose
+convention is register-based.
+
+**Three method notes, because they cost more than the bugs did.**
+
+Three diagnoses on the last defect were wrong, and every one came from reading a
+**filtered or partial artifact** — addresses without the listing, a `grep` of the
+listing without its neighbouring lines, a PC histogram truncated by `head`. The
+complete artifact was one command away each time and said something different.
+
+The **guard** in `resolve-argcopy` refused three attempted fixes, each for a
+different and correct reason, then validated the right one. It was the most
+useful component in the subsystem, and reading what it *required* — one command —
+pointed somewhere none of my guesses had.
+
+And the arithmetic found what the reading could not: totalling every `sp`
+adjustment over one run gave `-64 ×1, +64 ×2`, which names the bug outright.
