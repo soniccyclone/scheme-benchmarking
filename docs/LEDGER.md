@@ -5092,3 +5092,46 @@ That makes `qaq.7`'s framing worth revisiting for fannkuch the way D80 revisited
 it for nbody: comparing a 64-bit-word Scheme against a 32-bit-int C on an
 array-shuffling benchmark measures the word size as much as the compiler. It is
 not a reason to stop, and it IS a reason not to read 2.4x as a compiler deficit.
+
+## D114 — word size is not the explanation; measured at 6%, not the gap
+
+D113 read both inner loops, found ours carries no interpretive cost, and offered
+two differences to account for the 2.4x: `ref.c` uses 32-bit `int` elements where
+our vectors hold 8-byte words, and gcc uses callee-saved registers where we emit
+none. The first is testable in one compile.
+
+`ref.c` with `static int` changed to `static long`, same `-O3 -march=native`,
+same n=11:
+
+```
+                 instructions      cycles        branch misses
+gcc, int       11,144,630,228   8,466,183,422    169,248,120
+gcc, long      11,833,618,817   8,402,466,365    175,707,646
+sonic          26,172,768,077   9,925,579,252    148,202,349
+```
+
+**Doubling the element width costs gcc 6.2% of its instructions and none of its
+cycles.** So word size accounts for about a sixteenth of the gap, and against a C
+that carries the same 64-bit elements we are still at **2.21x** the instructions.
+
+D113's explanation is therefore wrong in its emphasis. It remains true that our
+flip loop has no tagging, no check and no boxing in it -- that was read directly
+off the listing and is not in doubt. What does not follow, and what D113 implied,
+is that the difference lies in how values are represented.
+
+**Which sharpens the question rather than answering it.** If the inner loops are
+near-parity and word size is 6%, the 2.2x is in the code around them: `next`,
+`step`, `copy-perm`, `join`, `main`. The sampled profile puts `count-flips.loop`
+at 18.22% and the two reversal halves at 11.40% and 9.66%, so roughly 60% of the
+time is somewhere this session has never disassembled.
+
+That is the next thing to read, and it is a different question from the one the
+last four entries have been circling. `qaq.7`'s fannkuch arm should not be closed
+or reframed on a word-size argument that measurement does not support.
+
+**Method note.** D113 offered two explanations and this tested one of them the
+same day. The other -- callee-saved registers -- is `qaq.23`, which D102
+downgraded to P3 on nbody evidence; D114 gives no reason to raise it, since
+nothing here isolates it either. Two plausible causes, one measured and refuted,
+one still unmeasured, and the ledger should not let the unmeasured one inherit
+the credibility of having been listed beside it.
