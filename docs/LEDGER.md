@@ -4811,3 +4811,54 @@ implemented the hint and measured zero, D108 read the mechanism and found it
 inapplicable. Each cost under an hour and removed a plausible-looking plan from
 the board. The alternative -- implementing range-based pre-colouring on the guess
 that the copies matter -- is the expensive mistake this sequence avoided.
+
+## D109 — D101's explanation of the dead store was wrong, and there are three of them
+
+D101 saw `mov $0x0,%rcx` in `count-flips.loop`, observed that the convention
+returns values in `(rax rcx rdx)`, and concluded `rcx` must be live at every
+`ret` so no liveness pass could remove it. That is refuted by four lines:
+
+```scheme
+(define (transfer-uses t)
+  (case (car t)
+    ((ret) (if (and (pair? (cdr t)) (symbol? (cadr t))) (list (cadr t)) '()))
+    ...))
+```
+
+A `ret` marks exactly the ONE vreg it returns. Liveness there is already precise,
+the convention's three-register ceiling never enters it, and `qaq.26` as filed
+asked the wrong question.
+
+**Reading the whole block instead of the part I quoted finds three, not one:**
+
+```
+mov  %rcx,%r13         reads the incoming counter
+mov  $0x0,%rcx         overwritten on one path, unread on the other
+...
+mov  $0x1,%r14         overwritten by `mov %rdx,%r14` below
+...
+mov  $0x1,%r14         and again
+```
+
+Three of the block's twenty-four instructions, in the hottest block in fannkuch
+(18.22% of the sampled profile), and every one is a constant written to a register
+that is overwritten before any read.
+
+**Two things ruled out while looking.** The loop's back edge is `jmp 0x4017ab`,
+which is `count-flips.loop`'s first instruction and NOT the `sub $0x20,%rsp` at
+`0x4017a7` -- so D97's self-jump retargeting is working and no prologue runs per
+iteration. And `dce-program` runs at `driver.ss:155` on Lmach, before selection,
+where it removes exactly `const` definitions nothing reads.
+
+**Which leaves the real question, and it is not the one D101 asked.** DCE runs on
+VREGS and these survived it, so each constant must have a use at that level --
+but the emitted listing shows physical registers, where two vregs sharing `rcx`
+are indistinguishable from one. The candidate is a loop-carried phi: a value that
+is 0 on the entry edge and the counter on the back edge would make `const 0` a
+genuine use at Lmach and a redundant store after the parallel copy is resolved.
+That is a guess, and the last three guesses in this ledger were wrong, so it is
+written on `qaq.26` as the thing to check rather than as the answer.
+
+The way to check it is to print the Lmach definition and uses of the vreg that
+receives `rcx`, not to read more assembly -- the information that would settle it
+has been erased by the time the listing exists.
