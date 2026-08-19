@@ -5658,3 +5658,54 @@ question is worth answering and the three prescriptions written for it are all
 withdrawn. `qaq.30` now says only what is known, what is not, and that the
 instrument has to be validated against a configuration with a KNOWN nonzero
 answer before its zeros are believed.
+
+## D127 — the standing moved without the code moving, and that qualifies M5
+
+Re-measuring both benchmarks after D121, to bring D86's standing current. The
+numbers moved and almost none of it is ours.
+
+**nbody, 40 reps, bootstrap CI, baseline `c-native`:**
+
+```
+c-native     55.9039 ns/step   (baseline)
+sonic-fma    60.4373           1.0811  CI [1.0119, 1.1628]  real
+c-scalar     61.9168           1.1076  real
+sonic        65.6456           1.1743  real
+```
+
+D86 recorded `sonic-fma` at **1.0414 with the CI spanning 1.0** -- a statistical
+tie -- and today the interval excludes it. But our own figure barely moved,
+60.1649 to 60.4373, +0.45%. **`c-native` went 57.6626 to 55.9039, 3.05% faster**,
+and that is the whole of the change. The reference improved; we did not regress.
+
+**fannkuch, and here the control is exact:**
+
+```
+                D98         now      instructions
+sonic       3340.933 ms  3391.057    27,016,993,251
+c-native    2744.306     2734.346    10,992,263,036
+ratio          1.2174       1.2402
+```
+
+The instruction count is **seven apart out of twenty-seven billion** -- the same
+program, executing the same work, since D106 and D121 changed the code without
+changing what runs. The wall clock moved 1.50%.
+
+**So cross-session wall-clock comparison on this host carries roughly 1.5-3%
+drift with the work held identical**, which is larger than most effects measured
+in this session. D94 established a 1.96% run-to-run cycle noise floor and D105 a
+4.97% code-alignment band; this is a third source, and it is the one that
+invalidates comparing a number in the ledger against a number measured weeks
+later.
+
+**What it qualifies.** M5's headline -- "statistically tied with `gcc -O3
+-march=native`" (D86, D91) -- is not reproducible today, and today's "measurably
+behind" will not be reproducible either. Both are true measurements of the same
+compiler against the same reference on the same machine. The honest statement is
+that **sonic-fma and c-native are within a few percent of each other and which
+side of the line the interval falls on depends on the day**, which is a weaker
+claim than D86 made and the one the data supports.
+
+The instruction counts are what survive: 2.46x on fannkuch, and nbody's
+`sonic-fma` at 2,981.7M against `ref-native`'s 1,667.5M. Those are reproducible
+to 0.002% and have not moved.
