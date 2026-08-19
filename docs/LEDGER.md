@@ -5530,3 +5530,42 @@ Recorded rather than attempted because the answer decides whether `qaq.30` is a
 trade at all, and getting it wrong by inference has cost this session three
 entries already. If the missing fact turns out to be cheap to supply directly,
 the trade dissolves and 4.7% of fannkuch comes back with nbody's checks intact.
+
+## D124 — the mechanism is documented in the source, and the measurement needs a different stage
+
+D123 asked why elision needs unrolling and prescribed a measurement. Doing it
+found the explanation was written down all along, in `elide.ss`'s own record
+definition:
+
+> A loop variable's range is derived HERE, by the sigma refinement on the loop
+> guard -- and it **dies here too, because the loop body is a separate procedure
+> after lifting and its parameters arrive with no facts.** Reporting the
+> intervals the caller already knew lets the driver feed them back in as
+> premises and run the whole thing again.
+
+So the fact does not flow into the loop body directly. It is derived at the call
+site, reported through `argivs`, fed back by the driver as a premise, and the
+analysis re-run. Unrolling puts two iterations in ONE procedure, where the
+guard's refinement and the second indexed access sit together and the round-trip
+is not needed at all. That is a coherent account of D118's fourteen-versus-zero,
+and it was three comments away from the first guess.
+
+**The prescribed measurement is inconclusive, for a reason worth recording.**
+Dumping every bounds site `elide-to-fixpoint` did NOT prove, with unrolling on:
+twenty-plus `flvector-ref` and `flvector-set!` sites still kept. Yet that same
+configuration emits zero bounds branches in the finished binary. So `elide` is
+not what discharges them -- `abcd.ss` is, Bodik-Gupta-Sarkar's demand-driven
+inequality graph over e-SSA, running at stage 07 after it.
+
+The comparison therefore has to be taken at ABCD, not at elide, and D123's
+instruction to compare elide's reports would have produced a confident answer
+about the wrong pass. Recorded because the instruction is already on `qaq.30` and
+would otherwise be followed.
+
+**What this changes about the open question.** It is now: does ABCD's inequality
+graph lose the induction relation when the loop body is a separate procedure,
+and does unrolling restore it by putting both accesses in one graph? That is a
+sharper question than D123's, answerable by the same method one stage later, and
+it still decides whether `qaq.30` is a trade or a gap.
+
+Diagnostic reverted; suite green.
