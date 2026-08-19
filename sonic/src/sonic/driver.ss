@@ -90,6 +90,7 @@
            (p0 (unroll-program
                 (unroll-fully
                 (fold-program
+                (staged 'lanf
                 (inline-program
                 (assign-convert-program
                  (anf-program
@@ -102,7 +103,7 @@
                    ;; the loop that matters. See D87 and gconst.ss.
                    (propagate-top-constants
                     (parse-program (expand-program (read-all-from-file path))
-                                   externs)))))))))))
+                                   externs))))))))))))
       ;; SHAPES BEFORE ELISION. The interval domain can discharge nbody's inner
       ;; loop arithmetically and never had the premises: a vector's length was
       ;; never connected to the `make-flvector` that produced it, and a
@@ -141,6 +142,7 @@
                ;; to name the earlier one, which leaves the redundant
                ;; definition with no readers for DCE to collect.
                ((gprog) (globalize prog0 cells classes))
+               ((hook-pre-cse) ((compile-stage-hook) 'lmach/pre-cse gprog))
                ((cprog cse-st) (cse-program gprog))
                ;; ADDRESS FOLDING BEFORE DCE, and before the allocator sees
                ;; anything. The `add` it replaces becomes dead, and DCE is what
@@ -323,6 +325,10 @@
   ;; Default is a procedure that ignores both arguments, so compilation is
   ;; unchanged when nobody is looking.
   (define compile-stage-hook (make-parameter (lambda (stage prog) (void))))
+
+  ;; Calls the hook and returns the program, so a stage can be marked in the
+  ;; middle of a nested call chain without restructuring it.
+  (define (staged name p) ((compile-stage-hook) name p) p)
 
   (define unroll-fully-rounds (make-parameter 24))
 

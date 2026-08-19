@@ -6105,3 +6105,38 @@ on something the other six were not; building that thing took three lines and
 unblocked all five. Each step was available at the start. The only thing that
 made the last one visible was refusing to write the assertion the easy way when
 the easy way would have been false.
+
+## D138 — two of the four done, and `fold` folds nothing where it first runs
+
+D137 left `cse`, `peephole`, `fold` and `specialize` as four eight-line tasks.
+Two went in; the other two are not eight-line tasks, and finding that out is the
+result.
+
+**`cse` and `dce` now assert non-inertness where they run**, through the stage
+hook. `cse` folds a nonzero number of expressions in nbody; `dce` removes a
+nonzero number of definitions. Both validated by breaking the pass -- `dce` by
+forcing `removable?` to `#f`, which fails with `removed=0`.
+
+**`peephole` cannot take the obvious form.** It runs on finalized listings, so
+no hook is needed -- but a listing contains label symbols, and `peephole` expects
+a straight-line run, which is why `finalize.ss` calls it through `peephole-runs`
+and flushes at every label. Feeding it a whole listing raises `car:
+main.entry1.loop is not a pair`. The assertion I wrote instead -- that it runs
+and returns stats -- is one no change could ever fail, so it is out. A real one
+needs a hook inside `finalize.ss` capturing the listing before `peephole-runs`.
+
+**And `fold` reports `folded=0` on the program it is first handed.** That is not
+a broken test. The driver runs it twice: once on the initial Lanf, and again
+inside `unroll-fully` after each specialisation round. The first call finds
+nothing, because what it folds are the guards specialisation turns into literals
+-- which is exactly the interaction the driver's own comment describes ("
+substituting a loop body at a call with literal arguments makes the guard
+foldable"). Asserting at the first call would pin a zero and pass forever.
+
+So the honest state is two passes asserted, two needing a capture point chosen
+with care, and one -- `specialize` -- still without a test file at all. What made
+both of the remaining ones visible was writing the assertion and watching it fail
+against working code, which is the same check D133 insisted on, applied in the
+other direction.
+
+Suite 8606 checks, 0 failures, 60 suites.

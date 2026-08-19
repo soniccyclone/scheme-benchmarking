@@ -23,7 +23,7 @@
 ;;;
 ;;; Input is an Lmach datum: (program ([lbl (block (i ...) transfer)] ...) entry).
 
-(import (chezscheme) (sonic cse))
+(import (chezscheme) (sonic cse) (sonic driver) (sonic pipeline))
 
 (define checks 0)
 (define failures 0)
@@ -149,6 +149,25 @@
                                      (add use raw-f64 a b))))))
   (ck! "a gset does NOT invalidate a heap read"
        (equal? (last-operands out 'entry) '(a a))))
+
+;; --- THE PASS IS NOT INERT ON A REAL PROGRAM --------------------------------
+;;
+;; A fixture cannot catch inertness: it tests the shape it was written for, which
+;; the pass by construction handles. cse's effect is also not readable from the
+;; emitted code -- selection and the allocator rewrite what it leaves -- so it is
+;; asserted where it runs, via the driver's stage hook (D136, D137).
+(define captured #f)
+(parameterize ((compile-stage-hook
+                (lambda (stage prog)
+                  (when (eq? stage 'lmach/pre-cse) (set! captured prog)))))
+  (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs))
+
+(ck! "the stage hook delivered nbody's pre-cse program" (and captured #t))
+(let-values (((out st) (cse-program captured)))
+  (ck! "cse folds something in nbody: the pass is not inert"
+       (> (cse-stats-folded st) 0))
+  (unless (> (cse-stats-folded st) 0)
+    (display "       folded=") (display (cse-stats-folded st)) (newline)))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)

@@ -78,7 +78,7 @@
 ;;; never does.
 
 (library (sonic fold)
-  (export fold-program fold-stats fold-stats? fold-stats-folded fold-stats-branches)
+  (export fold-program fold-program/report fold-stats fold-stats? fold-stats-folded fold-stats-branches)
   (import (chezscheme) (nanopass) (sonic lang))
 
   (define-record-type (fold-stats make-fold-stats fold-stats?)
