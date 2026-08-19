@@ -7813,3 +7813,50 @@ work end to end, and the work that remains is a decision plus the routing that
 follows from it. Suite 8644 / 0 / 63.
 
 Filed for Nathan as qaq.13.4 with the three options and what each costs.
+
+## D177 — the queue is two decisions, and qaq.23 is probably asking for the wrong thing
+
+**The shape of the remaining work changed and the record should say so.** Eleven
+beads are open. Two are decisions for Nathan -- `qaq.7`, which D127 showed cannot
+be settled by measuring harder, and `qaq.13.4`, which D176 turned up. Four more
+are blocked behind those two. The rest are P4s.
+
+**Those P4s share one property, and it is measured rather than assumed.** D120
+audited them against D89, D111 and D112 and found every payoff denominated in
+instructions, on benchmarks where instructions do not buy time. D167 then tested
+the best counter-argument available -- that a register copy is not a branch, so
+removing copies should relieve the front-end stall D112 measured -- by removing
+9.9% of fannkuch's instructions and 2.9% of nbody's. Neither clock moved.
+
+So `qaq.33` would be a dataflow analysis over the finished listing, with the
+wrong-code risk that carries (liveness wrong in the optimistic direction deletes a
+live definition), written to unblock three beads whose combined measured value is
+zero seconds. Recommended for closing rather than building. That is a scope
+decision and therefore Nathan's.
+
+**And `qaq.23` is probably asking for the wrong thing.** It wants callee-saved
+registers so that values survive calls into the functions D162 found unresolved.
+But D162 also found WHY they are unresolved, and the reason suggests a smaller
+fix than a convention change.
+
+`callee-first` orders functions so a caller is allocated knowing what its callees
+write. A call-graph CYCLE has no such order, so every member is emitted with no
+clobber information at all -- "assume everything" -- and that, not the absence of a
+convention, is what spills 21 values in `next.loop` and `step.loop`.
+
+The obvious repair is a fixpoint: allocate the cycle optimistically, read what its
+members actually write, allocate again with that. **It is not obvious that this
+terminates soundly, and the reason is worth writing down before anyone tries it.**
+A clobber set is a set of PHYSICAL registers, so it exists only after allocation --
+but allocation consumes clobber sets. Re-allocating a cycle member with better
+information changes what it writes, which invalidates the information the other
+members were just allocated against. A fixpoint over that has to be shown to be
+monotone, or bounded with a verified fallback to the pessimistic answer; assuming
+convergence is exactly how a "one more round" optimisation produces a caller that
+kept a value in a register its callee now writes.
+
+Recorded rather than attempted. It is a better shape than the bead's premise and
+it is not a small change, and D167's lesson applies to it before anything else:
+the payoff is 10.47% of the profile by D163's measurement, and this project has
+now three times measured instruction-level wins on that benchmark converting to
+nothing.
