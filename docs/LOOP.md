@@ -108,9 +108,37 @@ opposite of nbody's diagnosis (D37).
 
 ## The queue, in dependency order
 
-**117 of 121 closed.** Two substantive items remain, one under each epic, and
-NEITHER is a decision — both are work that needs something this session could not
-supply.
+**11 of 132 open, and TWO OF THEM ARE DECISIONS FOR NATHAN.** The shape of the
+queue changed: it is no longer a list of work waiting for effort.
+
+| what | state |
+| --- | --- |
+| `qaq.7` | Nathan's call. D127 showed it cannot be settled by measuring harder |
+| `qaq.13.4` | Nathan's call. Does RV64 output require V? (D176) |
+| `qaq.13`, `qaq.13.2` | blocked on `qaq.13.4` |
+| `qaq.15`, `qaq.18`, `qaq.26` | blocked on `qaq.33` |
+| `qaq.23`, `qaq.33` | P4, and see below |
+| the two epics | close when their children do |
+
+**The four remaining P4s share one property and it should be said plainly: their
+payoff has been MEASURED, and it is zero wall clock.** D120 audited all of them
+against D89, D111 and D112. D167 then tested the strongest counter-argument
+anyone had — that removing register copies relieves the front-end stall D112
+measured — by removing 9.9% of fannkuch's instructions and 2.9% of nbody's. The
+clock did not move on either.
+
+So `qaq.33` (cross-block liveness) would be a dataflow analysis over the finished
+listing, written to unblock three beads whose combined measured value is zero
+seconds. It is real work with real wrong-code risk — liveness that is wrong in the
+optimistic direction deletes a live definition. **The recommendation is not to
+build it**, and to close `qaq.15`, `qaq.18`, `qaq.26` and `qaq.33` together with
+D161's diagnosis as the record of why. That is a scope decision, so it is Nathan's
+rather than an agent's to take unilaterally.
+
+`qaq.23` is the same shape with its own ceiling now measured: D162 found the
+spill traffic real and confined to two call-graph-cycle members, and D163 measured
+those at 10.47% of the profile with none of the four hottest blocks spilling at
+all.
 
 ### `qaq.7` — Milestone 5: within a few percent, and which side depends on the day
 
