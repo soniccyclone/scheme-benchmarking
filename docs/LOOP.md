@@ -190,7 +190,55 @@ matching quote` — a syntax error in a file that was syntactically fine both
 before and after. Queue the edit, or let the run finish.
 
 
-Three instruments, and which one you may use is not a free choice.
+**A FOURTH INSTRUMENT EXISTS NOW: hardware counters.** `harness/vm-perf.sh
+<command>` runs the workload under a KVM guest where we are root and
+`perf_event_paranoid` is ours to set, so `perf` works with no change to the host
+(D85). `MODE=record` gives a sampled by-function profile; `EVENTS=...` picks
+counters. perf against the HOST kernel is still impossible and no flag fixes it.
+
+**The three rules that make its numbers mean anything.** Every one of them was
+learned by getting it wrong in this ledger, and the entries are cited so the
+evidence is checkable rather than taken on faith.
+
+1. **Instruction counts are sound; cycle counts are not.** Five runs of one
+   fannkuch binary vary 0.002% in instructions and 1.96% in cycles (D94). A
+   single-run cycle comparison at the one-to-two percent level says nothing. Use
+   instruction counts for A/B work.
+
+2. **fannkuch's cycles move 4.97% on CODE ALIGNMENT ALONE.** Appending
+   unreachable instructions -- no semantic change whatever -- swings it from
+   9,430.7M to 9,900.1M cycles with instruction counts constant to 0.003%
+   (D105). `(layout-pad n)` in `runtime.ss` is the control: to compare two
+   fannkuch builds, sweep BOTH across several pad values and compare
+   distributions. Comparing one build of each measures alignment luck, which is
+   how D104 rejected a correct change. **nbody moves 0.26% over the same sweep**
+   and needs no such care.
+
+3. **REBUILD BEFORE YOU MEASURE.** `disasm-sonic.sh` compiles rather than
+   accepting a binary, and its header explains why; `vm-perf.sh` takes a command
+   line and cannot, so the trap is open there. D94 compared a binary built before
+   `gconst` against a listing compiled after it and read the difference as an
+   effect of the change under test.
+
+**THE TWO BENCHMARKS HAVE OPPOSITE COST STRUCTURES. Nothing learned on one
+transfers to the other**, and assuming otherwise has cost this project several
+sessions:
+
+- **nbody is dependency-bound.** llvm-mca puts it at 85.65% register
+  dependencies (D90). Removing instructions makes it SLOWER -- measured, 465M
+  fewer instructions and 120M fewer branches for 18M more cycles (D89). Its IPC
+  is already 3.5 against gcc's 2.0; the surplus work is nearly free.
+- **fannkuch is dispatch-limited.** Its hot blocks issue at ~6 instructions per
+  cycle, the dispatch width, and llvm-mca reports no bottleneck at all (D101).
+  Instruction count IS the lever here. It also spends 18-29% of its cycles on
+  branch mispredicts -- and gcc spends MORE, so that is not where we lose.
+
+`llvm-mca -mcpu=znver5 -bottleneck-analysis` on an extracted block is how both of
+those were established, and it needs no privileges at all.
+
+---
+
+Three instruments below, and which one you may use is not a free choice.
 
 **Wall clock** — `harness/bench.sh`. Slope between two N, bootstrap CI. USE 40
 REPS, not 15: the c-native comparison at 15 gives an interval containing 1.0 and
