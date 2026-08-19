@@ -299,6 +299,39 @@ make containment          # the limits still hold
 All three, every time a bead closes. The image and the harness both changed
 underneath this project twice this month; the gates are what noticed.
 
+**AND IF YOU TOUCHED A PASS: does its test still prove the pass DOES something?**
+Every optimisation pass here now carries an assertion that it fires on nbody, and
+every one was validated by deliberately breaking its pass and watching the
+assertion fail. That convention exists because `merge-identical-functions`
+shipped and did nothing at all on RV64 for two ledger entries -- no test failed,
+no measurement looked wrong, and the x86-64 numbers were real, because every
+check in this tree asked whether the OUTPUT was correct and none asked whether
+the pass had run (D132-D140).
+
+Two traps, both hit while writing those assertions:
+
+- **An assertion that cannot fail.** The first `peephole` one checked that the
+  pass returned without error. No change could ever have broken it.
+- **An assertion at the wrong stage.** `fold` reports zero on the program it is
+  first handed -- what it folds are guards that specialisation turns into
+  literals -- so asserting there would have pinned a zero and passed forever.
+
+Both looked like coverage. The rule that catches them: **write the assertion,
+then break the pass and watch it fail.** If you cannot make it fail, it is not an
+assertion.
+
+`compile-stage-hook` is how a pass whose effect is consumed downstream gets
+asserted at all. It is a parameter in `finalize.ss`, re-exported by `driver.ss`,
+called with a stage name and the program at each point the driver binds one:
+
+```
+lanf   lanf/pre-specialize   lanf/specialized   lmach   lmach/pre-cse
+lmach/addrfold   lmach/dce   listing/pre-peephole
+```
+
+Default ignores both arguments, so compilation is unchanged when nobody is
+looking. `dce-test.ss` is the shortest example.
+
 ---
 
 ## Filing new beads
