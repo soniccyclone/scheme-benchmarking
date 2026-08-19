@@ -4920,3 +4920,65 @@ finalized listing with liveness across blocks, which is the same machinery
 Worth 3 of 24 instructions in a block that is 18.22% of fannkuch's profile, on a
 benchmark measured dispatch-limited (D101). Recorded on `qaq.26` with both
 mechanisms named, so whoever takes it chooses between them knowingly.
+
+## D111 — removing 863M instructions from the dispatch-limited benchmark made it slower
+
+Selection emits a two-way branch as "jump to the taken side, then jump to the
+other", and when the taken side is the very next block the first jump goes five
+bytes forward:
+
+```
+je   L.then          ->    jne  L.else
+jmp  L.else                L.then:
+L.then:
+```
+
+27 such sites in fannkuch, two apiece in the three hottest blocks. Inverting the
+test deletes the unconditional and turns the common path from a taken branch into
+a fallthrough. Pure control flow -- no liveness, none of the hazards that
+produced D99 and D100 -- and it must be a whole-listing pass, because the label
+that decides it is exactly what `peephole-runs` flushes on.
+
+**It worked, on every count that is not time:**
+
+```
+                       before           after
+fannkuch listing        1,092            1,066
+unconditional jmp          64               38
+fannkuch instructions  27,036,0xx,xxx   26,172,700,864   -3.2%
+fannkuch branches       5,704,1xx,xxx    4,842,760,211  -15.1%
+nbody instructions      3,256,77x,xxx    3,221,789,171   -1.07%
+nbody branches            300,3xx,xxx      255,302,691  -15.0%
+```
+
+Answers verified against the oracle (556355 / 51, agreeing with gcc), suite green
+at 8589/0/59, callgrind independently confirming 26,155,573,605.
+
+**And fannkuch got slower.** Cycles swept across four pad values as D105
+requires: mean 9,961M against 9,711M before, +2.6%. Wall clock, min of three:
+3459.1 ms against 3340.9 ms, +3.5%. nbody's cycles did not move at all, which is
+D89 exactly -- its instructions were already free.
+
+**Mispredicts explain about a quarter of it.** Misses went 143.7M to 147.9M, and
+4.2M extra at sixteen cycles is 67M against a 250M regression. The rate rose from
+2.52% to 3.05% because the denominator lost 861M well-predicted branches while
+the numerator grew. The other three quarters are unexplained.
+
+**This contradicts D101 and the contradiction is the result.** That entry measured
+fannkuch's hot blocks at ~6 instructions per cycle -- the dispatch width, with
+llvm-mca reporting no bottleneck -- and concluded instruction count is the lever
+for this benchmark. Here is 3.2% of the instructions and 15% of the branches
+removed, for 3.5% more wall clock. A static model that sees a block issuing at
+width does not see what the front end does with 27 fewer branch targets, and
+whatever that is, it costs more than the instructions were worth.
+
+So the honest state of fannkuch is that **neither instruction count nor the
+pipeline model predicts its time.** D89 established that for nbody by a different
+route; this establishes it for fannkuch, which was supposed to be the benchmark
+where instructions convert. Reverted.
+
+**What I would tell the next attempt.** Do not open by removing instructions from
+fannkuch and expecting time. Measure the front end first -- taken-branch density,
+mispredict rate, and how they move -- because three separate optimisations in this
+session (D97's frame reuse, D106's clobber sets, this) all removed real work and
+none of them bought time on it.
