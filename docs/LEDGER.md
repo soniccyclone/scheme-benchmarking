@@ -6220,3 +6220,47 @@ exposed: `peephole`'s first version could not fail, and `fold`'s asserted at a
 stage where a working pass reports zero. Both would have looked like coverage.
 The rule that caught them is the one D133 arrived at and D126 asked for -- an
 assertion is not finished until you have watched it fail.
+
+## D141 — closing state: all three gates, and what this session leaves
+
+```
+make -C sonic test    61 suites, 8613 checks, 0 failures
+make smoke            RV64 emitted, binutils reads it back, nothing above rv64gc
+make containment      memory.max 8g, pids.max 512, runaway contained, wall clock fires
+```
+
+**Shipped and measured:** hardware counters through a KVM guest with nothing on
+the host changed (D85); `gconst.ss` (D88); tail-call frame reuse (D97, D98);
+`merge-identical-functions` with a fixpoint, sound on both targets (D121, D130,
+D131, D132); two latent wrong-code bugs fixed in `fold-immediates` (D99, D100);
+runtime clobber sets (D106); the `layout-pad` control (D105); a stage hook and
+not-inert assertions for all eleven passes (D132-D140).
+
+**Measured and declined, which is most of it:** strength reduction (unsound),
+packed divides (gcc does not), hoisted globals (one cycle in 3847), the copy fold
+(0.001%), argument-register hints (never fire), branch inversion (3.2% fewer
+instructions, 3.5% slower).
+
+**Waiting on Nathan:** M5's accuracy trade (`qaq.7`), and the unrolling decision
+(`qaq.30`) -- 0.17% of nbody's time against 4.7% of fannkuch's.
+
+**The three things a later session should take from this run**, none of them
+about the compiler:
+
+1. **Instruction counts reproduce; wall clock and cycles do not.** Three separate
+   noise sources were measured -- 1.96% run-to-run (D94), 4.97% from code
+   alignment on fannkuch (D105), and 1.5-3% across sessions with the work
+   provably identical (D127). Most effects chased this session were smaller than
+   the largest of those.
+2. **Both benchmarks are near the limit of what this compiler reaches**, and
+   they disagree about why: nbody is 85.65% dependency-bound where removing
+   instructions makes it slower, fannkuch is 25.2% front-end stalled where
+   removing branches makes it slower. Four optimisations removed real work from
+   fannkuch and none bought time.
+3. **A check that cannot fail is not a check.** Two assertions written this
+   session could never have failed, and a pass ran inert on half the targets for
+   two entries without anything noticing. The convention that came out of it --
+   break the pass, watch the assertion fail -- is in LOOP.md.
+
+Forty-five entries larger than it started, and the largest single result is a
+measurement methodology rather than a speedup.
