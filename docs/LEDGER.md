@@ -6564,3 +6564,55 @@ entries rest on it.
 That is one command and it is the right next step. It is also exactly the kind of
 step I have skipped four times tonight, which is why it is written here as the
 instruction rather than attempted at the end of a long session.
+
+## D150 — two counters that cannot both be right, and where the discrepancy must live
+
+D149 said validate the binary counter next. Doing it produced a flat
+contradiction, which is more useful than either number alone.
+
+**The lowering is unambiguous.** `target-x86-64.ss`:
+
+```scheme
+((bounds-check)
+ `((cmp ,(car srcs) ,(cadr srcs)) (jge (label sonic-bounds-error))))
+```
+
+Every `chk bounds-check checked` that reaches selection becomes one `jge` to that
+label. So the two counts must agree:
+
+```
+Lmach, checks still `checked`   161 (unrolling on)    91 (off)
+finalized, jge sonic-bounds-error  0                  14
+```
+
+**They do not, and both counters have been inspected rather than assumed.** The
+Lmach shape was printed -- `(chk overflow-check checked 0 i%42 t.1076 bi%46)` --
+so `cadr` is the check name and `caddr` the control, which is what the filter
+uses. D118's counter reads `(cadr (cadr i))` against `(jge (label
+sonic-bounds-error))`, which matches, and it reports nonzero on fannkuch (3 and
+6), so it is not stuck at zero.
+
+**The leading candidate is that the 161 are in code that never reaches the
+image.** `partition-into-functions` drops blocks no entry reaches -- the suite
+asserts it: "a procedure nothing calls is dropped, with its inner loop". A check
+inside a dropped function is counted at Lmach and emitted nowhere. That would
+make both counters correct and the comparison meaningless, which is the outcome
+most consistent with the evidence.
+
+**What this means for `qaq.30`.** The question option (d) rests on -- can the
+analysis discharge nbody's checks on the rolled loop -- has been measured three
+ways tonight and each measurement was against a different denominator. The
+comparison that matters is checks in the EMITTED code, which is D118's, and that
+one says fourteen versus zero and has not been contradicted by anything except a
+count taken over a superset of the program.
+
+Recorded as the state rather than resolved. The next step is one line: count the
+Lmach checks after `partition-into-functions` instead of before it, and see
+whether 161 becomes 0 and 91 becomes 14. If it does, the contradiction dissolves
+and D118 stands unqualified.
+
+**Five instrument errors and near-errors in one investigation.** Every one was
+the same species: a number taken from a stage or a shape that was not the one the
+question was about. The habit that would prevent all five is not more care with
+counters -- it is asking, before counting, which program the number is supposed
+to describe.
