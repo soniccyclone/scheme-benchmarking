@@ -2008,6 +2008,11 @@
                    (filter (lambda (fn) (not (eq? (car fn) '<unreachable>)))
                            (partition-into-functions blocks entry))
                    entry))
+             ;; The blocks that actually reach the image, after the
+             ;; unreachable bucket and `reachable-functions` have both had
+             ;; their say. D150 needs the count HERE rather than at `lmach`,
+             ;; where it includes code no entry reaches.
+             (hook-reachable ((compile-stage-hook) 'lmach/reachable fns))
              (out (make-eq-hashtable)))
 
         (define (finalize-one fn)

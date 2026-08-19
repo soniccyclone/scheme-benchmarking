@@ -6616,3 +6616,41 @@ the same species: a number taken from a stage or a shape that was not the one th
 question was about. The habit that would prevent all five is not more care with
 counters -- it is asking, before counting, which program the number is supposed
 to describe.
+
+## D151 — resolved: the contradiction was unreachable code, and D118 stands
+
+D150 named a candidate and a one-line test. The test agrees with the candidate:
+
+```
+                 at lmach   reachable only
+unroll ON           161            0
+unroll OFF           91           14
+```
+
+The reachable-only column is D118's emitted-code count exactly. So the 161 and
+91 were in blocks no entry reaches -- `partition-into-functions` buckets them and
+`reachable-functions` drops them, both before anything is selected. Both counters
+were right; they were counting different programs, and only one of them was the
+program.
+
+**D118 stands unqualified**, and with it the fact `qaq.30` rests on: unrolling is
+what discharges nbody's bounds checks, fourteen against zero, measured on code
+that actually ships.
+
+**The instrument now exists and is validated.** A `lmach/reachable` marker sits
+after the unreachable bucket, so a check count can be taken against the program
+that reaches the image rather than a superset of it. That is what four earlier
+attempts lacked -- D124's accumulator, D126's record walk, D148's wrong node
+type, and D149's stage were each a number about the wrong thing.
+
+**What `qaq.30`'s option (d) now needs.** Fourteen checks survive on the rolled
+loop and none on the unrolled one. Those fourteen are nameable: the same
+technique, printing rather than counting, gives which primcalls and which
+indices. If they share a shape -- and nbody's indices are all `3i+k` against a
+length proved at allocation -- then whether the analysis can reach them without
+the duplicated induction step is a specific question about `elide.ss`, not a
+general one about unrolling.
+
+That is the first time in this investigation that the next step is about the
+compiler rather than about the measuring. Five entries to get there, and the
+whole distance was instrument error.
