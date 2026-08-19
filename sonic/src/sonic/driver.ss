@@ -112,6 +112,10 @@
       ;; nice -- the kernels take their vectors as PARAMETERS, so a fact that
       ;; stops at the allocation never reaches the loop that needs it.
       (let*-values (((ssa) (essa-program p0))
+                    ;; elide's INPUT, for qaq.30 option (d): whether the
+                    ;; analysis can discharge nbody's bounds checks on the
+                    ;; ROLLED loop, which would dissolve the unrolling trade.
+                    ((hook-ssa) ((compile-stage-hook) 'lssa/pre-elide ssa))
                     ((p1 elide-st) (elide-to-fixpoint ssa))
                     ((p2 rp) (select-representations-program p1))
                     ((lifted lrep) (lift-program (unparse-Lrepr p2)))

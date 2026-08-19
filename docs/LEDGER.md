@@ -6485,3 +6485,46 @@ Sixty-four entries, D84 to D147. The compiler is faster by one measured change
 (D121's merge, ~1.3% on fannkuch) and better understood by about twenty; the
 larger result is that this project can now tell the difference between those two
 things, which at D84 it could not.
+
+## D148 — the instrument error that blocked D126, found: checks are not `chk` nodes
+
+D126 stopped a four-entry thread after three instrument errors, all of which
+reported zero. The last one unparsed the program first and still counted zero for
+both `checked` and `unchecked`, which I recorded as "the traversal finds no `chk`
+nodes at all". That was correct and I did not follow it.
+
+**There are no `chk` nodes in Lssa. A check is a control on a `primcall`:**
+
+```
+(primcall make-flvector ((type-check checked)) t.1046 t.1047)
+```
+
+That is D5's representation -- one control per applicable check, which is the
+granularity the whole project rests on -- and it is documented in `lang.ss`'s
+grammar. Three walks looked for the wrong node type. Printing one node, which
+takes a minute, would have shown it at any point.
+
+**With the walk corrected, and the instrument validated by producing nonzero
+differentiated counts in both configurations:**
+
+```
+unroll ON    382 bounds checks before elide -> 161 after   (58% discharged)
+unroll OFF   175 before ->  91 after                       (48% discharged)
+```
+
+So unrolling roughly doubles the sites and improves the discharge rate by ten
+points. That is a real answer to the shape of `qaq.30`'s option (d), and it is not
+the whole answer.
+
+**What it does not explain, and this is now localised rather than open.** The
+finished binary carries ZERO bounds branches with unrolling on and fourteen
+without (D118, counted on the emitted code). Elide leaves 161 and 91. So a stage
+after elide discharges 161 of them in one configuration and 77 of 91 in the
+other, and nothing in this session has identified which. `qaq.30` gets that as its
+next step, with the working measurement attached.
+
+**The lesson is not that I guessed wrong.** It is that D126 wrote down the exact
+observation that would have solved this -- "the traversal finds no `chk` nodes at
+all" -- and then stopped at the conclusion "so the zero is the instrument" without
+asking what the nodes actually are. A correct observation and an unasked question
+in the same sentence.
