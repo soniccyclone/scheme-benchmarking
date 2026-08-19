@@ -125,6 +125,12 @@
 (ck! "a packed pair may NOT go to a float register: an f register is 64 bits
        and would hold half of it"
      (not (assignment-ok? arch-rv64 'raw-f64x2 'ft0)))
+(ck! "on x86-64 the SAME storage class reaches the float file instead, because
+       there an xmm already holds a pair -- so slp.ss can emit one class for
+       both targets"
+     (and (eq? (packed-class arch-x86-64) 'float)
+          (eq? (packed-class arch-rv64) 'vector)
+          (assignment-ok? arch-x86-64 'raw-f64x2 'xmm3)))
 (ck! "and a scalar double may not go to a vector register either"
      (not (assignment-ok? arch-rv64 'raw-f64 'v1)))
 (ck! "v0 is NOT allocatable: RVV names it as the mask in the encoding itself,

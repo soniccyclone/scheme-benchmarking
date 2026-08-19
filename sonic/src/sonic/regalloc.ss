@@ -371,7 +371,11 @@
       ((tagged)   (arch-value arch))
       ((raw-word) (arch-raw arch))
       ((raw-f64)  (arch-float arch))
-      ((raw-f64x2) (arch-vector arch))
+      ;; the vector file where there is one, the float file where the float file
+      ;; already is one -- see `packed-class`
+      ((raw-f64x2) (if (eq? (packed-class arch) 'vector)
+                       (arch-vector arch)
+                       (arch-float arch)))
       (else (error 'pool-for "unknown storage class" sc))))
 
   ;; A PHYSICAL register name in an operand slot is not a vreg, and the

@@ -13,7 +13,7 @@
 (library (sonic regs)
   (export make-arch arch? arch-name arch-value arch-raw arch-float arch-structural
           arch-mask mask-count
-          arch-vector vector-count arch-vector-scratch
+          arch-vector vector-count arch-vector-scratch packed-class
           arch-register-for arch-float-scratch arch-int-scratch float-register?
           arch-scratch
           arch-x86-64 arch-rv64 arch-by-name
@@ -310,6 +310,14 @@
       ((rv64)   (memq r '(ft9 ft10 ft11)))
       (else #f)))
 
+  ;; WHICH REGISTER CLASS HOLDS A PACKED PAIR ON THIS TARGET.
+  ;;
+  ;; The vector file when there is one, and the float file when the float file
+  ;; already is one. Read off the arch so that adding a vector file to a target
+  ;; is a change in one place.
+  (define (packed-class a)
+    (if (null? (arch-vector a)) 'float 'vector))
+
   ;; Which class does this physical register belong to?
   (define (reg-class a r)
     (cond ((memq r (arch-scratch a)) 'scratch)
@@ -339,10 +347,21 @@
         ((tagged)   (eq? cls 'value))
         ((raw-word) (eq? cls 'raw))
         ((raw-f64)  (eq? cls 'float))
-        ;; A packed pair reaches the vector file and nothing else. Not `float`:
-        ;; on RV64 an f register is 64 bits and holds one double, so a pair
-        ;; placed there would be half a value with no diagnostic.
-        ((raw-f64x2) (eq? cls 'vector))
+        ;; A packed pair goes wherever THIS TARGET keeps packed pairs, which is
+        ;; not the same file on both and is the asymmetry D169 is about.
+        ;;
+        ;; On x86-64 the float file IS the packed file -- one xmm holds a double
+        ;; or two and the width rides on the mnemonic -- so a pair belongs in
+        ;; `float` there and `arch-vector` is deliberately empty. On RV64 an f
+        ;; register is 64 bits and holds exactly one double, so a pair placed
+        ;; there would be half a value with no diagnostic; it belongs in the
+        ;; vector file.
+        ;;
+        ;; Asking the ARCH rather than switching on its name: a target that grows
+        ;; a vector file answers differently without this function being edited,
+        ;; and the storage class stays target-independent, which is what lets
+        ;; slp.ss emit one class for both.
+        ((raw-f64x2) (eq? cls (packed-class a)))
         (else #f))))
 
   (define (check-assignment! a sc r)

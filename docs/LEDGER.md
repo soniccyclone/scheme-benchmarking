@@ -7717,3 +7717,48 @@ these rules emit. Suite 8643 / 0 / 63, RISC-V gate green.
 gated off for rv64 in driver.ss, and the differential oracle against x86-64 is
 what would actually prove the vtype right -- a wrong `vl` produces a wrong answer
 rather than a crash, so nothing here is evidence until that runs.
+
+## D175 — one storage class for a packed pair, two register files behind it
+
+Reading driver.ss's gate to remove it turned up the thing that would have made
+removing it a wrong-code bug:
+
+> SLP IS x86-64 ONLY... Its packed values are `raw-f64` vregs holding a 128-bit
+> pair, and the only lowering for `p2add`/... is in target-x86-64.ss.
+
+`raw-f64` vregs holding a pair. That is exactly right on x86-64, where one xmm
+holds a double or two and `arch-vector` is empty on purpose. On RV64 it is the
+width bug D170 exists to catch: an f register is 64 bits, so the second lane is
+simply not there, and nothing downstream would say so.
+
+So ungating slp for rv64 is not a one-line change to a conditional. The pass has
+to say "packed pair" rather than "double", and the compiler has to know that a
+packed pair lives in a different register file on each target.
+
+**Resolved by making the CLASS target-independent and the FILE a target
+property.** `packed-class` reads it off the arch -- the vector file when there is
+one, the float file when the float file already is one:
+
+```
+packed-class arch-x86-64  ->  float     (an xmm is the pair)
+packed-class arch-rv64    ->  vector    (an f register is half of one)
+```
+
+`assignment-ok?` and `pool-for` both ask it rather than switching on a target
+name, so a target that grows a vector file answers differently without either
+being edited. That is what lets slp.ss emit ONE class for both targets, which is
+the property that makes ungating possible at all.
+
+x86-64 is unchanged and measurably so: nothing emits `raw-f64x2` yet, and its
+whole suite is green either way. This is the mapping put in place BEFORE the pass
+that needs it, deliberately -- the alternative is changing slp.ss and the mapping
+together and having no green state in between to attribute a failure to.
+
+Suite 8644 / 0 / 63.
+
+**Remaining for qaq.13.2, and it is now genuinely the last of it:** slp.ss must
+classify its packed temporaries as `raw-f64x2`, the gate in driver.ss comes out,
+and the differential oracle against x86-64 runs. That oracle is the whole
+argument -- a wrong `vl` or a reversed `vfsub` produces a wrong NUMBER, not a
+crash, so until nbody on RV64 agrees with x86-64 bit-for-bit as it does today
+(D81), none of D172, D174 or this entry is evidence of anything but shape.
