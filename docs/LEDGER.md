@@ -6411,3 +6411,40 @@ anyone raises `--memory` for a larger workload.
 Nothing failed and nothing was going to fail today. The 31 GB incident that
 motivates the whole containment story also began with something that had not
 failed yet.
+
+## D146 — the containment gate now covers the VM, and two versions of it could not fail
+
+`qaq.32`, filed an hour earlier by D145, is done: `make containment` has a sixth
+assertion, that a memory runaway INSIDE the guest is contained.
+
+```
+2b. a runaway INSIDE THE GUEST VM dies at the guest's limit
+    [PASS] guest runaway died inside the guest (GUEST-BOMB-EXIT=137)
+```
+
+**Two versions of it passed while doing nothing, and both are the trap this
+session keeps finding.**
+
+The first nested the payload four levels deep -- container `bash -c`, `vng --`,
+guest `bash -c`, `python3 -c` -- and it never ran. The guest sat for the full
+300 seconds, `timeout` returned 124, and the check reported PASS with the message
+"the backstop held". `vm-perf.sh`'s own header warns about exactly this: "three
+levels of shell quoting is how a benchmark ends up measuring `bash` instead of
+the program." The bomb goes through a file now, as that harness already does.
+
+The second ran the bomb correctly and then misread it. An OOM-killed process
+prints nothing and the shell runs the next line regardless, so `GUEST-SURVIVED`
+was echoed for a bomb that HAD been killed -- and the check read a working limit
+as a broken one. Reaching the next line is not evidence the previous one
+succeeded; the exit status is.
+
+**And the validation found a limit of the assertion, which is worth stating.**
+Raising the guest to `--memory 16G` -- more than the container's 8g cgroup has --
+still produces a guest-side kill at 137. So this proves a guest runaway is
+contained and dies inside the guest; it does NOT prove that the `1G` pin is what
+contains it. The pin remains worth having for D145's reason (a stated limit
+rather than an inherited default), but the gate does not check the number.
+
+Six assertions, all passing. That is three times in this session that writing an
+assertion produced one that could not fail, and three times that trying to break
+it was what noticed.

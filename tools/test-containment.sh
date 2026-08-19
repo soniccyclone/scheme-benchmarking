@@ -79,6 +79,69 @@ swapped=$(( (before - after) / 1024 ))
     || bad "host swapped ${swapped} MiB -- the runaway reached the host's swap"
 
 # ---------------------------------------------------------------------------
+echo "2b. a runaway INSIDE THE GUEST VM dies at the guest's limit"
+# ---------------------------------------------------------------------------
+# ADDED WHEN THE VM WAS (D145). `harness/vm-perf.sh` boots a KVM guest inside the
+# container to reach the hardware counters, and every assertion above predates
+# it. A guest is the one thing here that can ask for memory the container would
+# then have to find.
+#
+# It was contained before this ran, by virtme-ng's default of about 960 MiB --
+# which is exactly the arrangement the header above objects to. `vm-perf.sh` now
+# passes `--memory 1G` explicitly, and this checks that the number takes effect
+# rather than merely being written down, the same relationship this whole file
+# has to docker-compose.yml.
+#
+# TWO OUTCOMES ARE CONTAINED AND ONLY ONE IS GOOD. If the guest's own OOM killer
+# takes the process, the failure is fast and says which limit stopped it. If
+# qemu instead grows until the CONTAINER's cgroup kills it, the workload is
+# still contained -- the backstop held -- but the report is a dead container
+# rather than a dead program. Both pass; they are distinguished in the message.
+# THE BOMB GOES THROUGH A FILE, not nested quoting. `vm-perf.sh`'s own header
+# explains why -- "three levels of shell quoting is how a benchmark ends up
+# measuring `bash` instead of the program" -- and the first version of this
+# assertion proved the point: four levels deep, the payload never ran, the guest
+# sat for the full 300s, and the check reported PASS. An assertion that cannot
+# fail is worse than none (D138, D140).
+# SURVIVAL IS REPORTED ONLY ON A ZERO EXIT, and the first version got this
+# wrong too: an OOM-killed python prints nothing and the shell runs the next
+# line regardless, so `GUEST-SURVIVED` was echoed for a bomb that HAD been
+# killed. The check then read a working limit as a broken one. `|| exit` is the
+# whole fix; the lesson is that reaching the next line is not evidence the
+# previous one succeeded.
+cat > "$here/build/guest-bomb.sh" <<'BOMB'
+python3 -c '
+buf = []
+while True:
+    chunk = bytearray(32 * 1024 * 1024)
+    for i in range(0, len(chunk), 4096): chunk[i] = 1
+    buf.append(chunk)
+' 2>&1 | tail -2
+rc=${PIPESTATUS[0]}
+echo "GUEST-BOMB-EXIT=$rc"
+[ "$rc" -eq 0 ] && echo "GUEST-SURVIVED"
+BOMB
+guest_out=$("$here/tools/container.sh" bash -c '
+  cd /work
+  timeout 240 vng --memory 1G --force-9p --cpus 1 \
+      -r "$(ls -1 /boot/vmlinuz-* | sort -V | tail -1)" -- \
+      bash /work/build/guest-bomb.sh 2>&1 | tail -5' 2>&1)
+guest_rc=$?
+rm -f "$here/build/guest-bomb.sh"
+
+if echo "$guest_out" | grep -qiE "MemoryError|Killed|Out of memory|oom-kill"; then
+    ok "guest runaway died inside the guest, at its own 1G limit"
+elif echo "$guest_out" | grep -q "GUEST-SURVIVED"; then
+    bad "guest runaway COMPLETED -- the guest has no effective memory limit"
+elif echo "$guest_out" | grep -q "GUEST-BOMB-EXIT="; then
+    ok "guest runaway died inside the guest ($(echo "$guest_out" | grep -o 'GUEST-BOMB-EXIT=[0-9]*'))"
+elif [ "$guest_rc" -ne 0 ]; then
+    ok "guest runaway was contained, exit $guest_rc (no guest-side report)"
+else
+    bad "guest runaway result unreadable -- the assertion did not run"
+fi
+
+# ---------------------------------------------------------------------------
 echo "3. a fork bomb hits the pid limit"
 # ---------------------------------------------------------------------------
 "$here/tools/container.sh" bash -c '
