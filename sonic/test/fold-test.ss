@@ -15,7 +15,8 @@
 ;;; as `tagged`, because a Scheme boolean is the immediate numeric.ss calls
 ;;; sonic-true. Different representations. The obvious spelling is the bug.
 
-(import (chezscheme) (nanopass) (sonic lang) (sonic fold))
+(import (chezscheme) (nanopass) (sonic lang) (sonic fold)
+        (sonic driver) (sonic pipeline))
 
 (define checks 0)
 (define failures 0)
@@ -137,6 +138,30 @@
   (ck! "one non-literal operand is enough to decline"
        (not (and (pair? (binding-of out 'c))
                  (eq? (car (binding-of out 'c)) 'quote)))))
+
+;; --- THE PASS IS NOT INERT ON A REAL PROGRAM --------------------------------
+;;
+;; ASSERTED INSIDE `unroll-fully`, NOT ON THE INITIAL Lanf, and the difference is
+;; the whole point. The driver runs fold twice: once on the program straight out
+;; of inlining, where it reports ZERO, and again after each specialisation round.
+;; What it folds are the guards specialisation turns into literals -- the driver's
+;; own comment says so ("substituting a loop body at a call with literal
+;; arguments makes the guard foldable"). An assertion on the first call would pin
+;; a zero and pass forever, which is worse than none (D138).
+(define captured #f)
+(parameterize ((compile-stage-hook
+                (lambda (stage prog)
+                  (unless captured
+                    (when (eq? stage 'lanf/specialized) (set! captured prog))))))
+  (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs))
+
+(ck! "the stage hook delivered a specialised Lanf program" (and captured #t))
+(when captured
+  (let-values (((out st) (fold-program/report captured)))
+    (ck! "fold folds something after specialisation: the pass is not inert"
+         (> (fold-stats-folded st) 0))
+    (unless (> (fold-stats-folded st) 0)
+      (display "       folded=") (display (fold-stats-folded st)) (newline))))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)

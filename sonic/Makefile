@@ -61,6 +61,8 @@ test-suite:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/merge-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/specialize-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/preempt-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/select-test.ss

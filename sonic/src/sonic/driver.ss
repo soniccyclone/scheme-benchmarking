@@ -354,10 +354,16 @@
          ((> round (unroll-fully-rounds)) p)
          ((> (program-size p) cap) p)
          (else
-          (let-values (((p1 st) (specialize-program/report p)))
+          ;; TWO STAGE MARKERS, and they are where these passes actually do
+          ;; their work. `fold` on the initial Lanf reports zero (D138): what it
+          ;; folds are the guards specialisation turns into literals, so both it
+          ;; and `specialize` can only be asserted from inside this loop.
+          (let-values (((p1 st) (specialize-program/report
+                                 (staged 'lanf/pre-specialize p))))
             (if (zero? (specialize-stats-specialized st))
                 p
-                (loop (fold-program p1) (+ round 1)))))))))
+                (loop (fold-program (staged 'lanf/specialized p1))
+                      (+ round 1)))))))))
 
   ;; One boolean per FRAME SLOT: is the value living there a tagged pointer?
   ;;

@@ -6140,3 +6140,41 @@ against working code, which is the same check D133 insisted on, applied in the
 other direction.
 
 Suite 8606 checks, 0 failures, 60 suites.
+
+## D139 — four of five asserted; `peephole` is the one left and it needs a different hook
+
+D138 left `fold`, `specialize` and `peephole`. Two are done.
+
+**`fold` is asserted inside `unroll-fully`, not on the initial Lanf.** Two stage
+markers were added there, at the points these passes actually work:
+`lanf/pre-specialize` and `lanf/specialized`. Fold reports a nonzero count on the
+second; on the first it reports zero, and D138 explains why -- what it folds are
+the guards specialisation turns into literals.
+
+**`specialize` had no test file at all and now has one**, three checks: the hook
+delivers the program, specialisation fires on nbody, and it names what it
+specialised. Validated by disabling the pass, which fails the test.
+
+The validation failed at the CAPTURE rather than at the count -- with
+specialisation off, `unroll-fully` short-circuits before the marker is reached,
+so `captured` stays false and the first check fails. That is a weaker
+demonstration than `dce`'s, where the count went to zero with the program still
+in hand, and it is worth saying so: the test proves the pass is reachable and
+firing, and would also fail if the pipeline stopped calling it, which is a
+different fault with the same symptom.
+
+**`peephole` remains, and its assertion is not the same shape.** It runs on
+finalized listings through `peephole-runs`, which flushes at every label, so the
+pass cannot be handed a whole listing -- D138 got `car: main.entry1.loop is not a
+pair` for trying. A real assertion needs a hook inside `finalize.ss` capturing a
+run before it is peepholed. That is one more hook, in a file this session has
+already changed four times, and it is the last item on `qaq.31`.
+
+```
+elide addrfold slp contract merge gconst dce cse fold specialize   asserted
+peephole                                                           not yet
+```
+
+Suite 8611 checks, 0 failures, 61 suites -- up from 8589 and 59 when this thread
+started, all of it assertions that a pass does something rather than that its
+output is correct.
