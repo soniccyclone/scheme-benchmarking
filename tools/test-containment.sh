@@ -38,8 +38,25 @@ skip() { echo "  [SKIP] $1"; skipped=$((skipped + 1)); }
 # ---------------------------------------------------------------------------
 echo "1. the limits are present in the cgroup"
 # ---------------------------------------------------------------------------
-read -r mem pids < <("$here/tools/container.sh" bash -c \
-    'echo "$(cat /sys/fs/cgroup/memory.max) $(cat /sys/fs/cgroup/pids.max)"' 2>/dev/null | tail -1)
+# BOTH CGROUP LAYOUTS, because this readback had only one and container.sh has
+# had both all along. `sonic_assert_limits` tries v2 (`/sys/fs/cgroup/memory.max`)
+# and falls back to v1 (`/sys/fs/cgroup/memory/memory.limit_in_bytes`); this
+# check read only the v2 path, so on a cgroup v1 engine it reported the limit as
+# '' -- absent -- while the container it was inspecting had verified the very
+# same limit through v1 and started normally. That is what CI has been showing
+# since 2026-08-14 (D191, D192).
+#
+# The numbers agree across layouts: 8g is 8589934592 in both, and pids is 512 in
+# both, so this widens where the value is read from and changes nothing about
+# what counts as correct. A limit that is genuinely absent still fails.
+read -r mem pids < <("$here/tools/container.sh" bash -c '
+    for f in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes; do
+        [ -r "$f" ] && { m=$(cat "$f"); break; }
+    done
+    for f in /sys/fs/cgroup/pids.max /sys/fs/cgroup/pids/pids.max; do
+        [ -r "$f" ] && { p=$(cat "$f"); break; }
+    done
+    echo "${m:-} ${p:-}"' 2>/dev/null | tail -1)
 
 [ "$mem" = "$((8 * 1024 * 1024 * 1024))" ] \
     && ok "memory.max is 8g ($mem)" \

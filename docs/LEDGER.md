@@ -8491,3 +8491,54 @@ starts passing without being true.
 **The standing lesson is about the loop, not the gate.** An autonomous loop that
 reads `bd ready` and never reads CI is measuring its own opinion. `gh run list` is
 one command.
+
+## D192 — the containment gate read one cgroup layout; the thing it was checking reads two
+
+D191 left two CI failures filed and unfixed on the grounds that they could not be
+reproduced here. One of them can be diagnosed without reproducing it, by reading
+the two pieces of code that disagree.
+
+`tools/container.sh` verifies the limits at every container start, and it handles
+both layouts:
+
+```
+if   [ -r /sys/fs/cgroup/memory.max ];                    then  # cgroup v2
+elif [ -r /sys/fs/cgroup/memory/memory.limit_in_bytes ];  then  # cgroup v1
+else REFUSED
+```
+
+`tools/test-containment.sh` reads the limits too -- and reads only the v2 path.
+So on a cgroup v1 engine the gate reports
+
+```
+[FAIL] memory.max is '', expected 8589934592
+```
+
+about a container that had just verified *that same limit* through the v1 file and
+started normally. The limit was there the whole time. The gate was looking in one
+of the two places it can be.
+
+**An empty string rather than a wrong number was the tell, and it was in the
+output for five days.** A limit that is absent reads `max`; a limit that is wrong
+reads a number. `''` means the FILE was not there, which is a statement about the
+reader, not about the limit -- the same distinction D160 turned on when an RV64
+trap count came back zero because the walk was looking for the wrong symbol.
+
+Fixed by trying both layouts, in the order container.sh tries them. The numbers
+agree across layouts -- 8g is 8589934592 either way, pids is 512 either way -- so
+this widens where the value is read from and changes nothing about what counts as
+correct. **A limit that is genuinely absent still fails**, which is the property
+that makes this a fix rather than the blind patching qaq.35 warns against.
+
+**The deeper fault is the duplication.** CLAUDE.md's hard rule says not to add a
+second way to run things, because "two mechanisms for one guarantee is how a later
+agent picks the one without the guard". Here the second mechanism was not a second
+way to RUN, it was a second way to CHECK, and it drifted in exactly the way that
+rule predicts: the copy learned less than the original. The right shape is for the
+gate to call `sonic_assert_limits` rather than re-implement it, and that is left
+on qaq.35 -- doing it needs the CI environment to confirm, and this entry claims a
+diagnosis, not a verified repair.
+
+Locally: 7 passed, 0 failed, 0 skipped, unchanged. Whether CI agrees is the next
+push's business, and assertion 4 -- the ENTRYPOINT timeout returning 1 after 0s --
+is still open and still unexplained.
