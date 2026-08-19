@@ -146,20 +146,27 @@ Measured symmetrically (contracted against contracted, D80), 40 reps, baseline
 c-native. TWO sessions of the same compiler, because the difference between them
 is the point:
 
-| config | D86 ns/step | D86 ratio | D127 ns/step | D127 ratio |
-| --- | --- | --- | --- | --- |
-| c-native (`gcc -O3 -march=native`) | 57.66 | (baseline) | 55.90 | (baseline) |
-| sonic-fma | 60.05 | 1.0414, CI **spans 1.0** | 60.44 | 1.0811, CI **excludes it** |
-| c-scalar (`gcc -O3`) | 62.70 | 1.0874 | 61.92 | 1.1076 |
-| sonic | 63.25 | 1.0969 | 65.65 | 1.1743 |
+| config | D86 ratio | D127 ratio | D180 ratio (**build verified**) |
+| --- | --- | --- | --- |
+| c-native (`gcc -O3 -march=native`) | (baseline) | (baseline) | (baseline) |
+| sonic-fma | 1.0414, CI **spans 1.0** | 1.0811, CI **excludes it** | 1.0345, CI **spans 1.0** |
+| c-scalar (`gcc -O3`) | 1.0874 | 1.1076 | not run |
+| sonic | 1.0969 | 1.1743 | 1.1216 |
 
-**Our own figure moved +0.45% between those and the reference moved -3.05%**, so
-the verdict flipped from "no detected difference" to "real" without the compiler
-changing. fannkuch gives the exact control: its instruction count is seven apart
-out of twenty-seven billion across the same interval -- provably identical work --
-and its wall clock moved 1.50% (D127).
+D180 is the first of these taken with the harness verified to have REBUILT.
+`bench.sh` never compiled, and `compile.sh` was broken from the host from
+2026-08-10 until D166 — which covers both earlier columns. Two of the three
+sessions now say "no detected difference" for sonic-fma, and D127 is the odd one
+out.
 
-So do not quote either row as the standing. The supportable claim is that
+Between D86 and D127 **our own figure moved +0.45% (60.05 to 60.44 ns/step) and
+the reference moved -3.05% (57.66 to 55.90)**, so the verdict flipped from "no
+detected difference" to "real" without the compiler changing. fannkuch gives the
+exact control: its instruction count was seven apart out of twenty-seven billion
+across that interval -- provably identical work -- and its wall clock moved 1.50%
+(D127). D180's reference came in at 56.88, between the two.
+
+So do not quote any single row as the standing. The supportable claim is that
 **sonic-fma and c-native are within a few percent of each other, and which side
 of the line the interval falls on depends on the day.** What reproduces is the
 instruction counts, which are stable to 0.002%:
