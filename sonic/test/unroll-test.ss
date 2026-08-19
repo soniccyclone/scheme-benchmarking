@@ -37,9 +37,16 @@
       (let ((d (read p)))
         (if (eof-object? d) (reverse acc) (loop (cons d acc)))))))
 
-(define (unroll-names src)
-  (let-values (((out st) (unroll-program/report (front src))))
-    (unroll-stats-names st)))
+;; THE BUDGET IS SET EXPLICITLY, and it has to be. `unroll-size-budget` ships at
+;; 0: D153 showed the pass is a net loss once `ascent-rounds` is raised, because
+;; check elision no longer needs the duplicated induction step and the
+;; duplication costs fannkuch 4.7%. That is a policy about WHEN to run the pass;
+;; these tests are about what it DOES when it runs, and would otherwise all pass
+;; vacuously by observing a pass that never fired.
+(define (unroll-names src . opt)
+  (parameterize ((unroll-size-budget (if (pair? opt) (car opt) 1000)))
+    (let-values (((out st) (unroll-program/report (front src))))
+      (unroll-stats-names st))))
 
 ;; --- what it unrolls --------------------------------------------------------
 
@@ -85,11 +92,11 @@
               (f 5)")))
 
 (ck! "the size budget refuses a body larger than it"
-     (null? (parameterize ((unroll-size-budget 3))
-              (unroll-names
-               "(define (go i acc)
-                  (if (fx< i 10) (go (fx+ i 1) (fx+ acc i)) acc))
-                (go 0 0)"))))
+     (null? (unroll-names
+             "(define (go i acc)
+                (if (fx< i 10) (go (fx+ i 1) (fx+ acc i)) acc))
+              (go 0 0)"
+             3)))
 
 ;; --- exactly once -----------------------------------------------------------
 ;;
@@ -143,13 +150,15 @@
 
 (define nb "../bench/nbody/config-sonic.sps")
 
-(let-values (((out st) (unroll-program/report
-                        (assign-convert-program
-                         (anf-program
-                          (resolve-policy-program
-                           (parse-program
-                            (expand-program (read-all-from-file nb))
-                            nbody-externs)))))))
+;; Budget set explicitly, for the reason on `unroll-names`.
+(let-values (((out st) (parameterize ((unroll-size-budget 1000))
+                         (unroll-program/report
+                          (assign-convert-program
+                           (anf-program
+                            (resolve-policy-program
+                             (parse-program
+                              (expand-program (read-all-from-file nb))
+                              nbody-externs))))))))
   (ck! "nbody's loops are reached at all: the pass is not inert"
        (> (unroll-stats-unrolled st) 0))
   ;; The two that matter. `inner%24` is the pairwise force loop and `outer%22`
@@ -164,7 +173,10 @@
 ;; doubled body spills one value where the rolled one spilled none. It is
 ;; asserted so that a later change making it much worse is visible, and because
 ;; the honest reading of this pass is that it trades pressure for loop control.
-(let* ((c (compile-sonic nb nbody-externs))
+;; Budget set explicitly, same reason: this assertion is about what the pass's
+;; output does to code generation, which requires the output to exist.
+(let* ((c (parameterize ((unroll-size-budget 1000))
+            (compile-sonic nb nbody-externs)))
        (inners (let collect ((fs (compiled-functions c)) (acc '()))
                  (cond ((null? fs) (reverse acc))
                        ((let ((s (symbol->string (finalized-name (car fs)))))

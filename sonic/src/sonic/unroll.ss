@@ -85,7 +85,7 @@
   ;; code would cost more in instruction cache than the loop control it saves.
   ;; Every loop in these benchmarks is admitted, and raising it further changes
   ;; nothing: measured, 1000 and 5000 produce identical programs.
-  (define unroll-size-budget (make-parameter 1000))
+  (define unroll-size-budget (make-parameter 0))
 
   ;; Does `body` tail-call `f`? Tail positions only -- see the header.
   (define (self-tail-recursive? f body)

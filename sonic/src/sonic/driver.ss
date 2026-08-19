@@ -418,7 +418,7 @@
       ;; destroyed facts that were ascending correctly and left every loop
       ;; unbounded. Dropping is sound and useless; widening is the operator that
       ;; is both.
-      (define ascent-rounds 4)
+      (define ascent-rounds 12)
       (define (combine* tag op prev cand)
         (map (lambda (f)
                (let ((old (assq (car f) prev)))

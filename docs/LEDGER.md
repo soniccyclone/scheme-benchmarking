@@ -6702,3 +6702,57 @@ Recorded on the bead, which now states the trade in those terms. This is the
 fourth reframing of the same decision -- D116 called it safety against speed,
 D117 corrected the direction, D118 counted, and this locates the counts -- and
 each one made the question smaller.
+
+## D153 — the trade dissolved: raise `ascent-rounds`, drop unrolling, keep both properties
+
+`qaq.30` asked Nathan to choose between nbody's zero bounds checks and 4.7% of
+fannkuch. Option (d) was "dissolve it -- if the analysis could discharge the
+checks on the ROLLED loop there is nothing to trade", and D123 through D152 were
+five entries of instrument error getting to the point where that could be tested.
+
+**It is one constant.** `elide-to-fixpoint` carries `(define ascent-rounds 4)`.
+Raising it to 12:
+
+```
+                          rounds 4   rounds 12
+unroll OFF, reachable        14           0
+unroll ON,  reachable         0           0
+```
+
+The rolled loop discharges every check the unrolled one does. The duplicated
+induction step was never necessary -- the fixpoint was stopping four rounds
+short of the answer, and the comment beside the constant says why it looked
+sufficient: "`i < n-bodies` gives [0,5] in three rounds". That is true of the
+parameter it names and not of the fourteen in `subtract-pairs`, `loop%12.57` and
+`energy-from`.
+
+**So both properties, no trade:**
+
+```
+                        before        after
+fannkuch cycles       9,779.3M      9,318.5M     -4.71%, ranges non-overlapping
+nbody cycles            943.5M        945.5M     +0.2%, inside noise
+nbody instructions    3,256.8M      3,481.8M     +6.9%, and free (D89)
+nbody bounds checks          0             0
+fannkuch bounds checks       0             0
+```
+
+Four layout-pad values per arm per D105. Suite 8613 checks across 61 suites,
+smoke gate passing, containment at seven assertions.
+
+**What shipped:** `ascent-rounds` 4 to 12; `unroll-size-budget` defaults to 0;
+`unroll-test.ss` parameterises the budget explicitly, since its assertions are
+about what the pass does when it runs and would otherwise pass vacuously by
+observing a pass that never fired.
+
+**`unroll-program` is kept, not deleted.** It is correct, its instruction-count
+argument is real, and a target whose front end is not the bottleneck would want
+it. What changed is that its cost is now paid for nothing: elision no longer
+needs it, and D112 measured what a doubled hot loop costs a machine that is 25%
+front-end stalled.
+
+**The whole distance from D116 to here was measurement.** D116 read a test
+failure as a cost, D117 corrected the direction, D118 counted, D152 located the
+counts in cold code, and this found the constant. Every step was available at the
+start; what made each visible was measuring one stage further rather than
+reasoning harder about the previous answer.
