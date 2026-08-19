@@ -8877,3 +8877,47 @@ claim of finished work that was not, and two bug reports naming registers that h
 moved. None of the underlying claims was wrong. All six were unreadable in the way
 that matters -- a reader following them to the code would have found something
 else there and drawn the wrong conclusion first.
+
+## D201 — count-flips keeps three copies: one is forced, two are one copy too many
+
+D200 said live-range precoloring cannot help a loop that carries its parameter,
+and left it there. Reading the call in the middle of the block finishes the
+account, and the three copies turn out to have two different causes.
+
+```
+401677  mov  %rcx,%r10      the loop variable leaves rcx
+...
+4016a4  mov  %rdx,%r11      compute the argument
+4016a7  mov  %r11,%rcx      place the argument
+4016aa  call 0x4015f9       -> loop%2.14@8.225
+...
+4016c3  mov  %rdx,%rcx      the loop variable returns to rcx
+```
+
+**The first and last are forced, and not by the allocator.** `rcx` is the raw-word
+parameter register, so count-flips' own loop variable arrives there -- and it is
+also the first ARGUMENT register, so the call in the middle of the loop needs it.
+Two values want one register in the same live range, and one of them has to move.
+No allocation is going to fix that; it is the convention saying `rcx` means two
+things.
+
+**The middle pair is one copy too many, and it is D107's case exactly:** "two
+copies for one value because nothing asked the allocator for rcx." The value is
+computed into a vreg at 4016a4, then placed at 4016a7. If the allocator had known
+the vreg's destination was `rcx`, it would have written `mov %rdx,%rcx` once. It
+does not know, because a call's argument registers are filled by the call sequence
+and nothing hints the vreg toward them.
+
+That is now more tractable than when D107 wrote it down. D167 made precoloring
+live-range-scoped, so a register can be held for exactly an interval and released;
+a caller-side argument hint is the same machinery pointed at the other end of a
+call. `move-hints` already prefers a register and takes it only when free, which
+is the right shape -- it just has no entry for "this vreg is about to become
+argument 0".
+
+**Expected payoff, stated before anyone builds it: approximately none.** One
+instruction per call in a block that is 15.61% of the profile, on a benchmark
+where D89, D111 and D167 have each measured instruction removal buying no time --
+D167 removed 9.9% of fannkuch's instructions and the clock did not move. Recorded
+because it completes the count-flips account and because "why does this loop copy
+three times" now has an answer, not because it should be scheduled.
