@@ -6797,3 +6797,35 @@ the case that motivated it and never re-derived for any other. It survived
 because nothing measured what it cost: the checks it failed to discharge were
 attributed to the analysis being unable to reach them, in D118 by me, and the
 constant was never a suspect.
+
+## D155 — the constant was costing overflow checks too: nbody goes from 29 traps to one
+
+D153 and D154 counted only bounds checks, because that is what `qaq.30` was
+about. Counting every trap the emitted code branches to:
+
+```
+                       ascent-rounds 4              ascent-rounds 12
+nbody        14 bounds + 15 overflow = 29     0 bounds + 1 overflow = 1
+fannkuch      3 bounds +  5 overflow =  8     0 bounds + 4 overflow = 4
+```
+
+**nbody emits one check in the entire program**, down from twenty-nine. Fourteen
+of the fifteen overflow checks were four rounds short as well, and nothing had
+ever counted them -- D118, D152, D153 and D154 all filtered on `bounds-check`
+because that was the question in front of them.
+
+That is the same failure the constant itself had: right for the case that
+motivated it, never re-derived for another. I audited `ascent-rounds` against
+bounds checks because bounds checks were what `qaq.30` traded, and found the
+overflow ones only by asking what else was in the emitted code.
+
+**What this is worth.** D5 and D24 make check elision the project's contribution,
+and the standing claim in the tests is "nbody emits NO bounds check at all". It
+now emits no bounds check and one overflow check, and fannkuch -- which has never
+emitted zero bounds checks in this ledger -- emits none either. The instruction
+counts move accordingly and the cycle effect is inside noise on nbody (D153),
+which is D89 again: nbody's spare instructions are free, so removing
+twenty-eight traps from it buys correctness evidence rather than time.
+
+The fannkuch gain is the 4.71% D153 measured, and that came from dropping
+unrolling rather than from the checks.
