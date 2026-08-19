@@ -9039,3 +9039,50 @@ the fix for D193.
 
 Verified with nothing pinned: 8 containment passes, 8653 checks, 0 failures, on a
 runner that now chooses docker by itself for the right reason.
+
+## D205 — the last skip that was safe only because of where it sat
+
+Closing something I flagged rather than fixed. The guest-VM assertion decides
+between "vng is absent, so this cannot be tested here" and "vng is present and the
+guest still said nothing", and it asked the question like this:
+
+```
+elif ! "$here/tools/container.sh" bash -c 'command -v vng >/dev/null 2>&1'; then
+    skip "no vng in the image, ..."
+```
+
+A container that does not start also fails to find `vng`. So a third case --
+nothing ran at all -- reported SKIP, which is the same family as the three false
+PASSes this file has already produced, one register lower: not "it was prevented"
+but "it was not applicable".
+
+Step 0 (D193) catches that case first, so the branch was safe. **Safe by ordering
+is not safe by construction**, and ordering is exactly what a later edit does not
+preserve -- this file has three false passes in its history and every one of them
+was written by someone who had the ordering in their head at the time.
+
+The probe now answers in words, and anything that is not one of the two expected
+words is a failure rather than a skip:
+
+```
+VNG-ABSENT   -> skip
+VNG-PRESENT  -> bad, the guest was testable and said nothing
+anything else -> bad, no container is answering
+```
+
+Watched failing, which required breaking the guest payload while leaving `vng` in
+place -- the case the old test could not see, because the container exits 0 and
+only the bomb is missing:
+
+```
+[FAIL] guest runaway produced no report from inside the guest (exit 0) though
+vng is present; the guest did not run, which is not evidence that its limit works
+```
+
+Restored, and back to 8 passed / 0 failed / 0 skipped.
+
+**Four false results in one file, all one shape.** Three said PASS and this one
+said SKIP, and the difference does not matter: both mean "no finding here" when
+the truth was "no test here". The rule the file now follows throughout is to ask
+what DID happen and name it, because every way of asking whether something went
+wrong is satisfied by the run never happening.

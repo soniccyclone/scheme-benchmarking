@@ -202,11 +202,35 @@ elif echo "$guest_out" | grep -q "GUEST-SURVIVED"; then
     bad "guest runaway COMPLETED -- the guest has no effective memory limit"
 elif echo "$guest_out" | grep -q "GUEST-BOMB-EXIT="; then
     ok "guest runaway died inside the guest ($(echo "$guest_out" | grep -o 'GUEST-BOMB-EXIT=[0-9]*'))"
-elif ! "$here/tools/container.sh" bash -c 'command -v vng >/dev/null 2>&1' 2>/dev/null; then
-    skip "no vng in the image, so the guest limit cannot be tested here"
 else
-    bad "guest runaway produced no report from inside the guest (exit $guest_rc); \
-the guest did not run, which is not evidence that its limit works"
+    # WHY THE PROBE ANSWERS IN WORDS RATHER THAN IN AN EXIT STATUS.
+    #
+    # This branch decides between "vng is absent, so the guest limit is untestable
+    # here" and "vng is present and the guest still said nothing, which is a
+    # failure". Asked as `! container.sh bash -c 'command -v vng'`, BOTH of those
+    # look identical to a third case -- no container started at all -- because a
+    # container that does not start also fails to find vng. Step 0 above catches
+    # that case first, so the ordering makes this safe; ordering is not a
+    # property anyone preserves while editing.
+    #
+    # So the probe reports which of the two it is, and anything else is neither.
+    # That is the same rule the rest of this file arrived at the hard way: ask
+    # whether the right thing happened, because "something failed" is the easiest
+    # answer in the world to get.
+    vng_probe=$("$here/tools/container.sh" bash -c \
+        'command -v vng >/dev/null 2>&1 && echo VNG-PRESENT || echo VNG-ABSENT' \
+        2>/dev/null | tail -1)
+    case "$vng_probe" in
+        VNG-ABSENT)
+            skip "no vng in the image, so the guest limit cannot be tested here" ;;
+        VNG-PRESENT)
+            bad "guest runaway produced no report from inside the guest (exit \
+$guest_rc) though vng is present; the guest did not run, which is not evidence \
+that its limit works" ;;
+        *)
+            bad "could not even ask whether vng exists (probe said '$vng_probe'); \
+no container is answering, so nothing here was tested" ;;
+    esac
 fi
 
 # ---------------------------------------------------------------------------
