@@ -57,6 +57,12 @@
           frame-layout-bytes frame-layout-outgoing
           frame-slot-offset frame-incoming-offset frame-borrow-offset
           make-spiller spiller? spiller-target
+          ;; the two halves of a spill, exported so a test can ask them
+          ;; directly what they do with a storage class. D170 added a refusal
+          ;; here that nothing could reach through the compiler -- packed
+          ;; lowering for rv64 is behind an ISA-floor decision (D176) -- and a
+          ;; guard nobody has watched fail is not yet a guard (D133, D146).
+          spiller-reload spiller-store
           spiller-x86-64 spiller-rv64 spiller-for
           finalized? finalized-name finalized-listing
           ;; `make-finalized` is exported for merge-identical-functions' test,

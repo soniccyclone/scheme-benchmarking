@@ -12,7 +12,7 @@
         (sonic lang) (sonic fixtures) (sonic select)
         (sonic regs) (sonic target-rv64) (sonic encode-rv64) (sonic litpool)
         (sonic numeric) (sonic elfexec) (sonic driver) (sonic pipeline)
-        (sonic twoaddr))
+        (sonic twoaddr) (sonic finalize))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -655,6 +655,45 @@
 (ck! "the overflow scratch pair still overlaps the others (unresolved, bead 1mp.9)"
      (let ((ov (rv64-overflow-scratch)))
        (and (memq (rv64-addr-scratch) ov) #t)))
+
+;;; --- the spill that is refused rather than miscompiled (D170) --------------
+;;;
+;;; The rv64 spiller dispatches `raw-f64` to fld/fsd and everything else to
+;;; ld/sd, so before D170 a `raw-f64x2` took the integer path and emitted
+;;; `sd v3, sp, off` -- a 64-bit integer store naming a vector register, which
+;;; assembles into something that is not the value.
+;;;
+;;; D170 recorded that its refusal had never been watched failing, because
+;;; nothing can reach it through the compiler: packed lowering for rv64 is
+;;; behind the ISA-floor decision D176 turned up. A guard nobody has seen fail
+;;; is not yet a guard (D133, D146), so this asks the two halves directly.
+
+(define (raises-spill? thunk)
+  (call/cc (lambda (k)
+             (with-exception-handler
+              (lambda (e) (k #t))
+              (lambda () (thunk) #f)))))
+
+(display "\n-- the packed spill refusal --\n")
+
+(ck! "storing a packed pair is REFUSED, not silently sent down the integer path"
+     (raises-spill? (lambda () ((spiller-store spiller-rv64) 16 'v3 'raw-f64x2))))
+(ck! "and reloading one is refused too -- both halves, or the value comes back
+       from a slot nothing ever wrote"
+     (raises-spill? (lambda () ((spiller-reload spiller-rv64) 'v3 16 'raw-f64x2))))
+
+;; The refusal has to be narrow or it is just a broken spiller. These are the
+;; classes that must keep working, and they are what a wrong `memq` would break.
+(ck! "a scalar double still spills through fsd/fld"
+     (and (equal? ((spiller-store spiller-rv64) 16 'ft0 'raw-f64) '((fsd ft0 sp 16)))
+          (equal? ((spiller-reload spiller-rv64) 'ft0 16 'raw-f64) '((fld ft0 sp 16)))))
+(ck! "and a raw word still spills through sd/ld"
+     (and (equal? ((spiller-store spiller-rv64) 16 't3 'raw-word) '((sd t3 sp 16)))
+          (equal? ((spiller-reload spiller-rv64) 't3 16 'raw-word) '((ld t3 sp 16)))))
+(ck! "x86-64 is not affected: it has no vector file, so a pair there is an xmm
+       and spills like any other float"
+     (not (raises-spill?
+           (lambda () ((spiller-store spiller-x86-64) 16 'xmm3 'raw-f64x2)))))
 
 ;;; --- packed pairs on RV64 (D174) ------------------------------------------
 ;;;

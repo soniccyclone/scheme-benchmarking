@@ -7988,3 +7988,43 @@ Nathan's. It changes the evidence the decision rests on -- from two sessions
 disagreeing, one of which had a harness that may have measured a stale binary, to
 three sessions of which two agree and the newest is the only one whose build is
 verified.
+
+## D181 — the packed spill refusal, watched failing at last
+
+D170 added a refusal to the rv64 spiller and recorded, in the same entry, that it
+had never been watched failing -- nothing could reach it through the compiler,
+because packed lowering for rv64 sits behind the ISA-floor decision D176 turned
+up. D133 and D146 are unambiguous that this leaves a guard believed to work rather
+than known to, so the debt was carried on qaq.13.2 and is now paid.
+
+Paid by asking the spiller directly rather than by building a program that reaches
+it. `spiller-reload` and `spiller-store` are the two lambdas that do the work, and
+exporting them lets a test hand them a storage class and read what comes back --
+no 31-live-values fixture, no dependence on a decision nobody has taken yet.
+
+```
+(spiller-store  spiller-rv64) 16 'v3  'raw-f64x2   ->  refused
+(spiller-reload spiller-rv64) 'v3 16  'raw-f64x2   ->  refused
+(spiller-store  spiller-rv64) 16 'ft0 'raw-f64     ->  ((fsd ft0 sp 16))
+(spiller-store  spiller-rv64) 16 't3  'raw-word    ->  ((sd t3 sp 16))
+(spiller-store  spiller-x86-64) 16 'xmm3 'raw-f64x2 -> allowed
+```
+
+**Both halves, and that is not symmetry for its own sake.** Refusing only the
+store leaves a reload that reads a slot nothing ever wrote -- a value arriving
+from uninitialised stack, which is worse than the miscompile being prevented
+because it is not even deterministic.
+
+**And the refusal has to be narrow or it is just a broken spiller**, so the two
+classes that must keep working are asserted beside it. A wrong `memq` here would
+turn every RV64 spill into an error, which the suite would catch loudly -- but the
+test says which behaviour is intended rather than leaving that to inference.
+
+The x86-64 row is the interesting one: a packed pair there is NOT refused, because
+`packed-class` (D175) puts it in the float file, where an xmm holds a pair and
+spills like any other float. Same storage class, same spiller interface, opposite
+answer, and both correct. That is the asymmetry D169 identified showing up in a
+fifth place.
+
+Validated by disabling the refusal: two checks fail, the three that assert what
+must keep working do not. Suite 8649 / 0 / 63.
