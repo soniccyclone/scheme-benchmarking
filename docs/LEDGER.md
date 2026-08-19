@@ -8716,3 +8716,50 @@ Five days of red taught that a passing tick can mean nothing executed. A version
 bump to the step that fetches the source is exactly where that failure would
 recur -- an empty checkout runs no tests and fails nothing -- so the check is that
 the same 8653 arrived, not that the box was green.
+
+## D197 — qaq.7 was posing its decision on numbers that had moved
+
+The M5 bead has sat waiting on Nathan while the evidence under it changed twice.
+Re-reading it to see whether any of it was answerable found that the decision is
+being posed on figures that no longer hold -- which is D164's failure, in the one
+place where it matters most, because a decision is exactly what gets made once and
+built on.
+
+**Two of its four options rest on stale numbers.**
+
+The standing it quotes is "two sessions of the SAME compiler", D86 and D127, with
+the verdict flipping between them. D180 added a third, and it is the only one whose
+build was verified -- `bench.sh` never compiled and `compile.sh` was broken from
+the host from 2026-08-10 until D166, which covers both of the sessions the bead
+argues from. Two of the three now say "no detected difference", and the odd one
+out is D127, the session the bead's framing is built around.
+
+Option (d) -- "reword the milestone in the units that reproduce, instruction
+counts" -- quotes 2,981.7M against ref-native's 1,667.5M. Ours moved in D167:
+
+```
+nbody, per step     sonic 676.00     sonic-fma 641.00
+```
+
+**And option (d) has a problem the bead does not mention, which is worse than
+staleness.** The unit it proposes cannot currently measure the reference:
+
+```
+c-native      no instrument could count this program.
+```
+
+callgrind will not count `gcc -O3 -march=native` output on this host. So a
+milestone reworded into instruction counts would be a milestone stated in a unit
+that has a number for us and no number for the thing we are measuring against.
+That does not kill the option -- a countable reference build is a small change --
+but it is a cost the option is currently presented as not having.
+
+Nothing here decides M5. Option (b) is the only one that trades anything real --
+the bit-exact oracle D24 calls this project's strongest correctness evidence, for
+0.752 cycles per pair-interaction -- and that is Nathan's to weigh, not an
+agent's. What was in an agent's remit is making sure the four options are
+described in terms that are still true, and two of them were not.
+
+Bead updated. The recommendation stands at (a) or (d), and (a) is stronger than it
+was: three sessions, two of them finding no detected difference, the newest the
+only one whose binary was provably fresh.
