@@ -619,14 +619,41 @@
             returns?      ; instr -> #t if control leaves here
             tail-jump?))  ; instr -> #t if it is a jump out of the function
 
+  ;; A PACKED PAIR CANNOT SPILL ON x86-64 EITHER, AND FOR A SHARPER REASON.
+  ;;
+  ;; The dispatch below is `raw-f64` or everything else. A `raw-f64x2` reaching it
+  ;; would take the integer path and emit `mov [rsp+off], xmm3`, which is
+  ;; malformed -- but the older shape was worse. Before D182 a packed pair
+  ;; carried the class `raw-f64`, so it would have spilled through `movsd`, and
+  ;; `movsd` to memory stores the LOW 64 BITS. Half the value, no diagnostic,
+  ;; and a frame slot is 8 bytes so there was nowhere for the other half to go.
+  ;;
+  ;; Nothing has ever hit it: with the class corrected, the x86-64 nbody image is
+  ;; byte-identical, so no packed value spills in anything we compile. That is
+  ;; luck about register pressure, not a property anyone arranged, and the way it
+  ;; would have announced itself is a wrong number in a benchmark.
+  ;;
+  ;; Refusing matches what D170 did for rv64, and the missing piece is the same
+  ;; one on both targets: a 16-byte frame slot. `movupd` is the instruction; the
+  ;; frame is what does not exist yet.
+  (define (x86-64-no-packed-spill! sc)
+    (when (eq? sc 'raw-f64x2)
+      (error 'spiller-x86-64
+             "a packed pair cannot spill on x86-64 yet: movsd would store the low
+lane only, and a frame slot is 8 bytes. Needs movupd and a 16-byte slot.
+See LEDGER.md D184."
+             sc)))
+
   (define spiller-x86-64
     (make-spiller
      'x86-64
      (lambda (reg off sc)
+       (x86-64-no-packed-spill! sc)
        (if (eq? sc 'raw-f64)
            `((movsd ,reg (mem rsp #f 1 ,off)))
            `((mov ,reg (mem rsp #f 1 ,off)))))
      (lambda (off reg sc)
+       (x86-64-no-packed-spill! sc)
        (if (eq? sc 'raw-f64)
            `((movsd (mem rsp #f 1 ,off) ,reg))
            `((mov (mem rsp #f 1 ,off) ,reg))))

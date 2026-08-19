@@ -8140,3 +8140,50 @@ down now is the reason the milestone is not a matter of finishing the lowering.
 Filed on qaq.13.2. The honest scope for RV64 packing is: teach slp to price the
 packed/scalar boundary per target, or accept that this pass is x86-64's and RV64
 wants a different one -- and both of those are decisions above a lowering bead.
+
+## D184 — the same hole on x86-64, and it was there before the vector work
+
+D182 was a bug I introduced. Auditing for others of its shape -- code that
+dispatches on STORAGE CLASS where the thing that matters is the register FILE --
+turned up one in `spiller-x86-64` that predates every entry in this stretch.
+
+```
+(lambda (off reg sc)
+  (if (eq? sc 'raw-f64)
+      `((movsd (mem rsp #f 1 ,off) ,reg))
+      `((mov (mem rsp #f 1 ,off) ,reg))))
+```
+
+Two failures in one dispatch, and the older one is worse.
+
+**The new one:** after D182 a packed pair carries `raw-f64x2`, which is not
+`raw-f64`, so it would take the integer path and emit `mov [rsp+off], xmm3` --
+malformed.
+
+**The one that was already there:** before D182 a packed pair carried `raw-f64`,
+so it would have spilled through `movsd`. `movsd` to memory stores the LOW 64
+BITS. A 128-bit pair goes into the frame as its low lane, the high lane is
+dropped, nothing complains, and the frame slot is 8 bytes so there was nowhere to
+put it anyway. That is a wrong answer available to any x86-64 program since slp
+shipped.
+
+**Nothing has ever hit it, and that is luck rather than design.** With the class
+corrected the x86-64 nbody image is byte-identical -- `c56783f9…` before and after
+-- so no packed value spills in anything we compile. Register pressure happened
+not to reach it. The way it would have announced itself is a benchmark returning
+a slightly wrong number, which is the failure mode D24 refuses a tolerance-based
+oracle over precisely because an unsound abstraction hides there.
+
+Both targets now refuse. The reasons differ in the instruction -- `movsd` truncates
+where `sd` names the wrong file -- and agree in the frame: a slot is 8 bytes and a
+pair needs 16. `movupd` and `vs1r.v` are the instructions; the frame is what does
+not exist on either.
+
+**The test that caught it was one of mine, asserting the opposite.** D181 checked
+that x86-64 permits a packed spill, "so a pair there is an xmm and spills like any
+other float". The first clause is true and the second does not follow, and the
+check pinned that reasoning where I could later run into it. It failed, which is
+what a pinned assumption is for -- the value of writing the belief down was
+getting told the day it stopped being true, three entries later.
+
+Suite 8652 / 0 / 63, x86-64 image unchanged.

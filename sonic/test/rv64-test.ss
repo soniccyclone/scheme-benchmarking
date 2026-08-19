@@ -690,10 +690,21 @@
 (ck! "and a raw word still spills through sd/ld"
      (and (equal? ((spiller-store spiller-rv64) 16 't3 'raw-word) '((sd t3 sp 16)))
           (equal? ((spiller-reload spiller-rv64) 't3 16 'raw-word) '((ld t3 sp 16)))))
-(ck! "x86-64 is not affected: it has no vector file, so a pair there is an xmm
-       and spills like any other float"
-     (not (raises-spill?
-           (lambda () ((spiller-store spiller-x86-64) 16 'xmm3 'raw-f64x2)))))
+;; D184 changed this. It used to assert that x86-64 PERMITS a packed spill, on
+;; the reasoning that a pair there is an xmm and spills like any other float. The
+;; second half is what was wrong: `movsd` to memory stores the LOW 64 BITS, so a
+;; pair spilled that way loses its high lane silently, and a frame slot is 8
+;; bytes so there is nowhere to put it. Both targets refuse now, for reasons that
+;; differ in the instruction and agree in the frame.
+(ck! "x86-64 refuses a packed spill too -- movsd would store the low lane only"
+     (and (raises-spill?
+           (lambda () ((spiller-store spiller-x86-64) 16 'xmm3 'raw-f64x2)))
+          (raises-spill?
+           (lambda () ((spiller-reload spiller-x86-64) 'xmm3 16 'raw-f64x2)))))
+(ck! "and a scalar double on x86-64 still spills through movsd, so the refusal
+       is narrow"
+     (equal? ((spiller-store spiller-x86-64) 16 'xmm3 'raw-f64)
+             '((movsd (mem rsp #f 1 16) xmm3))))
 
 ;;; --- packed pairs on RV64 (D174) ------------------------------------------
 ;;;
