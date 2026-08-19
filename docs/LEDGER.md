@@ -8283,3 +8283,49 @@ naming worth anything.
 
 Behaviour-preserving, checked as such -- x86-64 nbody image `c56783f9…` before and
 after, identical through all four fixes. Suite 8653 / 0 / 63.
+
+## D187 — the audit's conclusion: four bugs in one domain, none in the other
+
+Having found four negation-defined partitions over STORAGE CLASSES, the obvious
+next question is whether the same shape exists over TARGETS. This compiler has
+exactly two of those too, and the dispatches look identical:
+
+```
+(if (eq? target 'rv64) rv64-selector x86-64-selector)
+(if (eq? target 'rv64) arch-rv64 arch-x86-64)
+```
+
+A third target would silently take the x86-64 branch. **And yet there are no bugs
+here, and the reason is worth having written down.**
+
+Compiling for an unknown target is refused, at the boundary:
+
+```
+(define (compile-sonic/target path externs target)
+  (unless (memq target '(x86-64 rv64))
+    (error 'compile-sonic "unknown target" target))
+```
+
+and refused again at encoding, by `check-target` in object.ss. The domain is
+CLOSED and the closure is ENFORCED in two places, so the two-way dispatches
+downstream can never see a third value. The negation is safe because something
+upstream guarantees the domain has two members.
+
+Storage classes had no such guarantee. Nothing anywhere enumerated the valid
+classes and refused the rest, so adding `raw-f64x2` in D170 propagated silently
+into four different two-way dispatches, each of which answered confidently for a
+case that had not existed when it was written. That is the entire difference
+between the two domains, and it is not that one is harder than the other.
+
+**So the lesson from D173/D184/D185/D186 sharpens.** "Name each member of a
+partition" is the fix at each site, but it is the second-best fix. The first is to
+close the domain once, at the boundary, the way targets are closed -- then every
+downstream dispatch is protected by construction rather than one at a time. What
+this session did is both: the sites are positive now, and the domain has
+chokepoints it did not have -- `reg-file-for` and `pool-for` both error on a class
+they do not know, and `spill-kind` returns #f with the callers asserting coverage.
+
+Nothing to fix here, which is the finding. Recorded because "we looked and it was
+fine" is worth as much as a bug when it explains why the other place was not, and
+because the next person to add a storage class should know the enforcement now
+exists and where it lives.
