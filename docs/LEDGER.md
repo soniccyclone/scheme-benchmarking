@@ -5495,3 +5495,38 @@ nothing in the tree can do it today.
 
 `qaq.29` closes: the four functions were mergeable, they are merged, and the
 measurement of what that bought is here rather than assumed.
+
+## D123 — why elision needs unrolling is unexplained, and it is the question that matters
+
+`qaq.30` asks Nathan to choose between nbody's check elision and 4.7% of
+fannkuch. That choice exists only because unrolling is the thing that makes the
+elision work (D118: fourteen bounds branches without it, zero with). If the
+analysis could discharge those checks on the rolled loop, there would be nothing
+to decide -- unrolling could be switched off and both properties kept.
+
+So the useful question is not which side to take. It is why a duplicated body
+tells the analysis something the rolled one does not. Two structural
+explanations were checked and both are wrong:
+
+- **The interval domain cannot do loops.** It can: `iv-widen` is there, which is
+  the standard widening operator for exactly this fixpoint.
+- **The analysis is intraprocedural, and the loop is split across functions, so
+  the guard and the indexed access sit in different procedures.** It is not.
+  `elide.ss` describes "what makes an interprocedural fixpoint possible" and
+  "every interprocedural fact: the driver derives a parameter's range by...".
+
+That leaves the mechanism unexplained. It is the third structural guess in this
+session to be refuted by looking -- D94's recursive-cycle theory, D101's
+return-register theory, and this -- and the pattern is consistent enough that the
+next one should be a measurement rather than a reading.
+
+**How to answer it, when someone does.** Compile nbody with `unroll-size-budget`
+at 0 and ask `elide.ss` which sites it FAILED to prove and what interval it had
+for the index at each; then the same with unrolling on. The difference between
+those two reports is the fact unrolling supplies, and it is a report the pass
+already produces internally rather than something that needs building.
+
+Recorded rather than attempted because the answer decides whether `qaq.30` is a
+trade at all, and getting it wrong by inference has cost this session three
+entries already. If the missing fact turns out to be cheap to supply directly,
+the trade dissolves and 4.7% of fannkuch comes back with nbody's checks intact.
