@@ -84,23 +84,35 @@ opposite of nbody's diagnosis (D37).
 NEITHER is a decision — both are work that needs something this session could not
 supply.
 
-### `qaq.7` — Milestone 5, at 1.041x and NOT separated from C
+### `qaq.7` — Milestone 5: within a few percent, and which side depends on the day
 
 Measured symmetrically (contracted against contracted, D80), 40 reps, baseline
-c-native:
+c-native. TWO sessions of the same compiler, because the difference between them
+is the point:
 
-| config | ns/step | ratio vs c-native | verdict |
-| --- | --- | --- | --- |
-| c-native (`gcc -O3 -march=native`) | 57.66 | (baseline) | |
-| sonic-fma | 60.05 | 1.0414, CI [0.9645, 1.1062] | **no detected difference** |
-| c-scalar (`gcc -O3`) | 62.70 | 1.0874, CI [0.9953, 1.1649] | no detected difference |
-| sonic | 63.25 | 1.0969, CI [1.0217, 1.1721] | **real** |
+| config | D86 ns/step | D86 ratio | D127 ns/step | D127 ratio |
+| --- | --- | --- | --- | --- |
+| c-native (`gcc -O3 -march=native`) | 57.66 | (baseline) | 55.90 | (baseline) |
+| sonic-fma | 60.05 | 1.0414, CI **spans 1.0** | 60.44 | 1.0811, CI **excludes it** |
+| c-scalar (`gcc -O3`) | 62.70 | 1.0874 | 61.92 | 1.1076 |
+| sonic | 63.25 | 1.0969 | 65.65 | 1.1743 |
 
-Read the intervals, not the point estimates. Plain `sonic` is genuinely behind C.
-`sonic-fma` is NOT — its interval spans 1.0, so against `gcc -O3 -march=native`
+**Our own figure moved +0.45% between those and the reference moved -3.05%**, so
+the verdict flipped from "no detected difference" to "real" without the compiler
+changing. fannkuch gives the exact control: its instruction count is seven apart
+out of twenty-seven billion across the same interval -- provably identical work --
+and its wall clock moved 1.50% (D127).
+
+So do not quote either row as the standing. The supportable claim is that
+**sonic-fma and c-native are within a few percent of each other, and which side
+of the line the interval falls on depends on the day.** What reproduces is the
+instruction counts: nbody 2,981.7M against ref-native's 1,667.5M, fannkuch 2.46x,
+both stable to 0.002%.
+
+Read the intervals, not the point estimates. Plain `sonic` is genuinely behind C
+in both sessions.
 it is a statistical tie. An earlier version of this section said the CI excluded
 1.0; that was true of a different comparison and is not true of this one.
-
 **NO LONGER BLOCKED ON MEASUREMENT.** `harness/vm-perf.sh` gives hardware
 counters through a KVM guest — `perf_event_paranoid` is a property of A kernel,
 so booting a second one where we are root settles it, with nothing on the host
