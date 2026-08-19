@@ -8763,3 +8763,44 @@ described in terms that are still true, and two of them were not.
 Bead updated. The recommendation stands at (a) or (d), and (a) is stronger than it
 was: three sessions, two of them finding no detected difference, the newest the
 only one whose binary was provably fresh.
+
+## D198 — qaq.13.4 was describing work as finished that D183 unfinished
+
+The companion to D197. Both remaining decisions had drifted from the tree they
+describe, and this one in two directions at once.
+
+**Its option (b) is not a choice any more; it is built.** D182 added
+`rv64-vector-permitted?` to object.ss -- a parameter defaulting off, in D24's
+scoped-permission shape, routing instructions vec-rv64.ss claims to the vector
+encoder and letting everything else fall through, which is the mechanism
+`x86-encode` has always used. driver.ss's slp gate reads it, so that gate is now
+the capability question its own comment asked for rather than a target name.
+Choosing (b) means deciding it may be switched ON, not building it.
+
+**And its opening sentence is no longer true.** "Everything for two-lane packed
+arithmetic on RV64 is now built and tested" was accurate when written -- the
+blocker then was the ISA floor, and everything up to it genuinely was done. With
+the permission wired the compile gets past that and stops at:
+
+```
+(fmul.d ft1 v3 v3)
+```
+
+a scalar multiply reading a vector register, which is D183: slp assumes a scalar
+can read lane 0 of a pack for free, and that is a fact about xmm, not about
+packed registers.
+
+**So the decision is smaller than it looks and the work behind it is larger.**
+Picking (a), (b) or (c) does not produce working packed RV64 code -- it permits
+the attempt. What stands behind all three is giving slp a per-target cost model
+for the packed/scalar boundary and re-deciding whether a pack pays when each
+boundary costs an instruction. For nbody, whose shape is precisely a packed
+subtract feeding a scalar reduction, that may come out negative.
+
+**The pattern across D197 and D198 is worth stating once.** Both beads were
+written as decisions and then waited, and both went stale in the same way: work
+continued underneath them and nobody re-read the question against the tree. A
+bead that says "for Nathan" stops being maintained the moment it is filed, and it
+is the one kind of bead where being wrong is most expensive, because it is read
+once and acted on. LOOP.md tells the loop to re-read a bead against the tree
+before STARTING it; nothing tells it to re-read the ones it is not going to start.
