@@ -4063,3 +4063,60 @@ paying two instructions per call to guarantee survivors that the analysis can
 never produce. The cost lands on functions that USE such a register; the benefit
 lands on every caller above them, and it is largest exactly where we are worst —
 fannkuch, whose hot loop spills a loop counter across a leaf call.
+
+## D96 — two mutually tail-calling loop halves rebuild an identical frame every iteration
+
+Sizing `qaq.23` before building it meant asking whether the leaf callees really
+need the seven registers they write. Reading one of them found something else
+first. `loop%2.14@8.373`, the reversal loop, ends every iteration:
+
+```
+40168f  add    $0x10,%rsp
+401693  jmp    0x4015ba        -> loop%2.372, whose first instruction is:
+4015ba  sub    $0x10,%rsp
+```
+
+The two functions are halves of one loop, tail-calling each other, and each tears
+down a sixteen-byte frame the other immediately rebuilds. Two instructions per
+iteration, in blocks that are **18.5% of the sampled profile** between them
+(`loop%2.372.loop` 11.40%, `loop%2.14@8.373.loop` 7.12%).
+
+**It is not an oversight in the plan; the plan is right and unread.**
+`tail-plan-reuses-frame?` is `(zero? (tail-plan-frame-delta p))`, and with no
+outgoing stack arguments the delta here is zero — the planner says reuse.
+`finalize.ss` suppresses the epilogue before a tail jump only when the target is
+this function (`self-jump?`) or a label inside it (`own-label?`). A tail call to
+a DIFFERENT function always emits the teardown, whatever the plan said.
+
+**The shape is common, not incidental:**
+
+```
+fannkuch:  35 frame teardowns, 13 immediately followed by a tail jmp
+nbody:     26 frame teardowns,  8 immediately followed by a tail jmp
+
+fannkuch frame sizes:  14 functions at 0x10, 2 at 0x20, 1 at 0x80, 1 at 0x30
+```
+
+Fourteen of eighteen functions have the SAME frame size, so most of those thirteen
+tail calls are between frame-compatible functions and could jump straight into
+the callee's body.
+
+**Why the mechanism is already available.** Functions are finalized callee-first
+so a caller sees its callees' real clobber sets (D94/D95). The same ordering makes
+the callee's FRAME SIZE known at the caller's emission time, by the same table
+trick — no new analysis and no fixpoint. When the sizes match, the caller skips
+its epilogue and retargets the jump past the callee's prologue, which the listing
+shows already has its own label (`loop%2.372` is one instruction, then
+`loop%2.372.loop`).
+
+Filed as `qaq.24`. The guards it needs are the interesting part and are stated on
+the bead: equal frame size, a prologue that does nothing but the `sub` (rv64
+non-leaf functions also save `ra` there, D81), and no reliance on the callee's
+spill slots being distinct from ours — they overlay, which is sound only because
+we are leaving.
+
+**A note on how this was found**, since it is the third time in this session.
+The plan was to size `qaq.23`; the evidence answered a question nobody asked. Both
+of the last two entries came from reading emitted code rather than reasoning about
+what the passes should produce, and both overturned the hypothesis that sent me
+there. D95 refuted D94's cycle theory the same way.
