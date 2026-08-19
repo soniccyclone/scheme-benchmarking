@@ -4759,3 +4759,55 @@ long session.
 
 Reverted, since a hint that never fires is maintenance with no behaviour.
 `qaq.21` keeps the sizing and gains the mechanism.
+
+## D108 — the pin mechanism cannot pre-colour outgoing arguments, and that is structural
+
+D107 concluded `qaq.21` wants a pre-colouring rather than a hint, and named
+`parameter-pins` as the model since it already pins INCOMING parameters to the
+registers the convention delivers them in. Reading that mechanism before
+mirroring it finds two reasons it does not transfer.
+
+**It only fires when every call in the function is a tail call.**
+
+```scheme
+(define (parameter-pins target blocks params classes)
+  (if (or (null? params) (not (every-call-is-tail? blocks)))
+      '()
+      ...))
+```
+
+The reason is sound and applies doubly to outgoing arguments: a non-tail call
+destroys the argument registers, so a value pinned to one does not survive it.
+
+**And a pin removes its register from the pool for the WHOLE function.**
+
+```scheme
+(taken (map pin-reg pins))
+(reduced (make-arch (arch-name a)
+                    (without (arch-value a) taken)
+                    (without (arch-raw a) taken) ...))
+```
+
+That is right for parameters -- a handful, live from entry -- and catastrophic
+for outgoing arguments. Pinning the six raw argument registers would leave two of
+an eight-register pool allocatable everywhere in the function, to save two copies
+at each call site. The cure would cost more than the disease by a wide margin.
+
+**So the real shape of the fix is range-based pre-colouring**: a value constrained
+to a specific register over PART of its live range, with the register free
+elsewhere. Linear scan here has no such notion -- a pin is a property of the
+function, not of an interval -- and adding one touches the same expiry and
+eviction logic that D95 and D103 were both about.
+
+`qaq.21` therefore is not a heuristic tweak, not a pin, and not small. It stays at
+P1 because the prize is real -- 7 of `count-flips.loop`'s 24 instructions, in
+blocks that are 39% of the profile -- but the bead now records what it actually
+requires, so the next attempt does not spend a session rediscovering that
+`move-hints` cannot reach (D107) and that pins cost the whole pool (here).
+
+**Three consecutive entries have now ended without a change**, and that is worth
+naming rather than hiding: D102 sized `qaq.23` and found it bought nothing, D107
+implemented the hint and measured zero, D108 read the mechanism and found it
+inapplicable. Each cost under an hour and removed a plausible-looking plan from
+the board. The alternative -- implementing range-based pre-colouring on the guess
+that the copies matter -- is the expensive mistake this sequence avoided.
