@@ -6829,3 +6829,40 @@ twenty-eight traps from it buys correctness evidence rather than time.
 
 The fannkuch gain is the 4.71% D153 measured, and that came from dropping
 unrolling rather than from the checks.
+
+## D156 — nbody's last check, named and pinned
+
+D155 left nbody emitting one trap. It is the step counter:
+
+```
+(mov rdx (mem rsp #f 1 0))
+(add rdx (imm 1))
+(jo (label sonic-overflow-error))
+```
+
+in `loop%67.140`, which is
+
+```scheme
+(let loop ((i 0)) (when (fx< i n) (advance! pos vel mass) (loop (fx+ i 1))))
+```
+
+**`n` arrives from the command line**, so no round count reaches it. The driver's
+own comment predicted exactly this case when justifying the constant: "a
+parameter whose bound is not a known constant ascends forever, one integer per
+round: [0,7] at round 7, [0,41] at round 41". Four rounds was too few for the
+bounded parameters; no number is enough for this one. It is the correct answer
+for this program.
+
+**Pinned at one, in `run-x86-64-test.ss`.** The existing assertion counts branches
+to `sonic-bounds-error` only, so twenty-eight of the twenty-nine traps D155
+removed were invisible to the suite -- fourteen bounds ones were counted and
+fifteen overflow ones were not. A `surviving-traps` helper now counts by label,
+and the new assertion pins the overflow count at exactly one with the reason
+beside it.
+
+Pinning at one rather than zero is the point: zero is not achievable and would
+be a wrong assertion, and without the pin nothing would notice the other
+twenty-eight returning. That is the same gap D132 found in a different form --
+the suite asked whether the output was correct and not what was in it.
+
+Suite 8614 checks across 61 suites.

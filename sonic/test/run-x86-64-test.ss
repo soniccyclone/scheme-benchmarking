@@ -583,10 +583,42 @@
      (compiled-functions c))
     n))
 
+;; Any trap the emitted code branches to, by label -- not just bounds.
+(define (surviving-traps path externs label)
+  (let ((c (compile-sonic path externs)) (n 0))
+    (for-each
+     (lambda (f)
+       (for-each (lambda (i)
+                   (when (and (pair? i) (pair? (cdr i))
+                              (pair? (cadr i)) (eq? (car (cadr i)) 'label)
+                              (eq? (cadr (cadr i)) label))
+                     (set! n (+ n 1))))
+                 (finalized-listing f)))
+     (compiled-functions c))
+    n))
+
 ;; nbody's indices are `3i+k` off a vector whose length was proved at its
 ;; allocation, so every one of them should go -- and now every one does.
 (ck! "nbody emits NO bounds check at all"
      (= 0 (surviving-bounds-checks "../bench/nbody/config-sonic.sps" nbody-externs)))
+
+;; AND EXACTLY ONE OVERFLOW CHECK, WHICH IS PINNED BECAUSE IT IS THE LAST ONE.
+;;
+;; Raising `ascent-rounds` from 4 to 12 took nbody from twenty-nine emitted traps
+;; to one (D155) -- fourteen bounds and fourteen of fifteen overflow. The
+;; survivor is the step counter:
+;;
+;;     (let loop ((i 0)) (when (fx< i n) (advance! ...) (loop (fx+ i 1))))
+;;
+;; emitting `add rdx, 1` then `jo`. `n` arrives from the command line, so the
+;; analysis cannot bound `i` at any round count -- the driver's own comment says
+;; "a parameter whose bound is not a known constant ascends forever, one integer
+;; per round". This is pinned at ONE rather than at zero because one is the
+;; correct answer for this program, and pinned at all because nothing else would
+;; notice the other twenty-eight coming back.
+(ck! "and exactly one overflow check, the step counter against a runtime bound"
+     (= 1 (surviving-traps "../bench/nbody/config-sonic.sps" nbody-externs
+                           'sonic-overflow-error)))
 
 ;; fannkuch-redux now emits none either, and the fact that removed the last
 ;; ones is the one this test used to exist to document.
