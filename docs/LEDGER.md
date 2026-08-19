@@ -3584,3 +3584,71 @@ branch-misses instead. Match the event field, never the annotated text. This is
 the third instrument defect in two sessions (D72's IFS, D85's unforwarded EVENTS)
 and they share one shape: a parser that finds something plausible rather than
 nothing.
+
+## D88 — the constants land, and buy nothing; the loop pays for a dead register
+
+`gconst.ss` implements D87's stage one: a top-level binding never `set!` and
+bound to a literal is substituted at every use. It works, and the emitted code
+changed exactly as predicted.
+
+```
+                       before    after
+listing (instructions)   1525     1468
+global load sites          43       37
+register compares          24        7
+immediate compares         31       45
+```
+
+Seventeen loop bounds stopped being memory reads. The nbody inner loop now opens
+`cmp $0x5,%rsi` where it used to compare two registers.
+
+**And the dynamic counters did not move at all.**
+
+```
+             cycles          instructions      branches
+before      944,578,011     3,321,777,221    300,300,659
+after       969,318,190     3,321,837,373    300,311,324
+```
+
+Instructions up 60k in 3.3 billion; branches up 11k in 300 million. That is
+noise on a deterministic counter — the hot path is doing the same work it did.
+The 57 instructions the listing lost were all in cold code.
+
+**Why: the constant is materialised AND folded, and the materialisation is dead.**
+
+```
+401c07  mov    %rdx,%rsi
+401c0a  mov    $0x5,%rdi      <- defines rdi
+401c11  cmp    $0x5,%rsi      <- the fold DID happen; the immediate is here
+401c15  jl     0x401c20
+401c1b  jmp    0x401ddf
+401c20  imul   $0x3,%rcx,%rdi <- redefines rdi without reading it
+```
+
+The exit block is `mov %r15,%r9 / mov %r9,%rax / add $0x10,%rsp / ret` and never
+reads `rdi`, so the definition at 401c0a is dead on both paths. One wasted
+instruction per iteration, ~50M at N=5e6. It is not NEW waste — before this pass
+the same register was loaded from the global instead. The pass swapped a load for
+a materialisation and the compare got its immediate for free.
+
+So the honest accounting: **stage one is a static win and a dynamic no-op.** The
+hypothesis it was built on — that a constant trip count would unblock unrolling —
+is REFUTED. `unroll-program` and `unroll-fully` both run, the bound is now a
+literal, and the branch count is unchanged to five significant figures. Whatever
+stops the pair loop from unrolling is not the trip count.
+
+Two things fall out, both filed rather than guessed at:
+
+- the dead materialisation survives a pass whose whole job is removing it
+  (`qaq.18`). peephole.ss has a rule for exactly this shape — its own tests say
+  "a constant used TWICE folds into both, and the mov still goes" — so the
+  interesting question is which of its conditions this loop fails.
+- unrolling does not fire on a loop with a literal bound (`qaq.19`). unroll.ss
+  says it needs no trip count at all, which makes the non-firing more surprising
+  rather than less.
+
+**Keep the pass.** It is correct, it is tested (17 checks, the shadowing and
+`set!` cases included), and it removes a real memory dependence from the loop
+header even though nothing downstream has yet cashed it in. But record the
+result honestly: the measurement predicted a win and there is not one, and the
+next agent should not re-derive the same expectation from the same reasoning.

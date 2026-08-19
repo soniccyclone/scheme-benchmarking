@@ -57,6 +57,8 @@ test-suite:
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/gcell-test.ss
 	@echo
+	@$(CHEZ) -q $(LIBS) --script test/gconst-test.ss
+	@echo
 	@$(CHEZ) -q $(LIBS) --script test/preempt-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/select-test.ss

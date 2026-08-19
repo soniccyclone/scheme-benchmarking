@@ -39,7 +39,7 @@
   (import (chezscheme) (nanopass)
           (sonic lang) (sonic read) (sonic expand) (sonic parse) (sonic policy)
           (sonic anf) (sonic assign) (sonic inline) (sonic unroll)
-          (sonic essa) (sonic elide)
+          (sonic essa) (sonic elide) (sonic gconst)
           (sonic repr) (sonic lift) (sonic convert) (sonic lower) (sonic globals)
           (sonic shapes) (sonic elemrange) (sonic interval) (sonic cse) (sonic dce) (sonic contract) (sonic fold) (sonic specialize) (sonic addrfold) (sonic slp)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
@@ -94,8 +94,15 @@
                 (assign-convert-program
                  (anf-program
                   (resolve-policy-program
-                   (parse-program (expand-program (read-all-from-file path))
-                                  externs))))))))))
+                   ;; BEFORE ANF, so every pass below sees literals rather than
+                   ;; global loads. A top-level binding never `set!` and bound to
+                   ;; a literal is that literal; leaving it as storage makes
+                   ;; `(fx< i n-bodies)` a register compare, so no trip count is
+                   ;; constant and `unroll-fully` two lines up can never fire on
+                   ;; the loop that matters. See D87 and gconst.ss.
+                   (propagate-top-constants
+                    (parse-program (expand-program (read-all-from-file path))
+                                   externs)))))))))))
       ;; SHAPES BEFORE ELISION. The interval domain can discharge nbody's inner
       ;; loop arithmetically and never had the premises: a vector's length was
       ;; never connected to the `make-flvector` that produced it, and a
