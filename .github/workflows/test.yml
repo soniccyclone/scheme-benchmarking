@@ -38,6 +38,10 @@ jobs:
     # override existed the whole time; CI simply never set it.
     env:
       SONIC_COMPOSE: docker compose
+      # Docker refuses a cpus value above the host's core count and these
+      # runners have four; the compose default is this box's 8. Nothing about
+      # containment depends on it -- see the note in docker-compose.yml.
+      SONIC_CPUS: 4
 
     steps:
       - uses: actions/checkout@v4

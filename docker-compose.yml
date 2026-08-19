@@ -28,7 +28,19 @@ services:
     # one.
     memswap_limit: 8g
 
-    cpus: 8
+    # NOT A CONTAINMENT LIMIT, unlike the three around it, and the difference
+    # is why this one is substitutable. Memory, swap and pids exist to keep a
+    # runaway off the host and are asserted by tools/test-containment.sh; the
+    # CPU share is fairness, nothing verifies it, and a runaway is bounded by
+    # the other three whatever it is set to.
+    #
+    # It has to be substitutable because Docker REFUSES a value above the
+    # machine's core count -- "range of CPUs is from 0.01 to 4.00, as there are
+    # only 4 CPUs available" -- and GitHub's runners have four. So a fixed 8
+    # meant no container started in CI at all, which the containment gate then
+    # reported as three passes (D193, D194). The default keeps this host's
+    # behaviour exactly; CI sets SONIC_CPUS=4.
+    cpus: ${SONIC_CPUS:-8}
     pids_limit: 512            # a runaway that forks rather than conses
 
     # The suite reaches nothing over the network, so it is given none. Two
