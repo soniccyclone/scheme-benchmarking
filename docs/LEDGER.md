@@ -8959,3 +8959,45 @@ fix for "this file gets destroyed" pull in opposite directions, and writing the
 first without noticing the second is easy, because staleness is the failure you
 just experienced and emptiness is the one you have not. Refusing to shrink costs
 one comparison and settles both.
+
+## D203 — a default is not a fix when the right value is a property of the host
+
+D202 came from asking whether a fix I had written could fail in the opposite
+direction. Asking the same of the others found one more, and it is the CI bug
+again with a different victim.
+
+D194 fixed "docker refuses `cpus: 8` on a four-core runner" by setting
+`SONIC_CPUS: 4` in the workflow. That fixes CI. It leaves the trap fully armed for
+anyone who clones this onto a machine with fewer than eight cores, because
+`docker-compose.yml` reads `cpus: ${SONIC_CPUS:-8}` and the default is a number
+somebody picked for one particular box:
+
+```
+Error response from daemon: range of CPUs is from 0.01 to 4.00,
+as there are only 4 CPUs available
+```
+
+Docker refuses rather than clamping, so the result is not a slow container, it is
+NO container -- and every assertion in this tree that reads a failed command as
+containment would then pass (D193). A four-core laptop would have reproduced five
+days of CI in one clone.
+
+`tools/container.sh` now computes it: whatever the machine has, capped at 8, which
+is the share `docker-compose.yml` documents as intended. An explicit `SONIC_CPUS`
+still wins.
+
+```
+cores 1 -> 1     cores 4 -> 4     cores 32 -> 8
+cores 2 -> 2     cores 8 -> 8     nproc missing -> 8
+```
+
+**The workflow's `SONIC_CPUS: 4` is removed rather than kept as a belt.** Pinning
+it there would mean CI never exercises the computation, and CI is the only
+four-core machine this project has. A safety net that hides whether the thing
+under it works is the shape D193 spent five days on.
+
+**The lesson is narrower than "test on small machines".** `${VAR:-8}` reads like a
+default and behaves like a hardcoded constant for everyone who does not know the
+variable exists. When the correct value is a property of the host, the shell
+should ask the host; when it is a policy, a default is right. `cpus` is the first
+and was written as the second.

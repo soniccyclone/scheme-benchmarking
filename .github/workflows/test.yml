@@ -38,10 +38,9 @@ jobs:
     # override existed the whole time; CI simply never set it.
     env:
       SONIC_COMPOSE: docker compose
-      # Docker refuses a cpus value above the host's core count and these
-      # runners have four; the compose default is this box's 8. Nothing about
-      # containment depends on it -- see the note in docker-compose.yml.
-      SONIC_CPUS: 4
+      # SONIC_CPUS is no longer needed here: tools/container.sh computes it from
+      # the host, capped at 8, so a four-core runner asks for four (D203). Left
+      # unset deliberately -- pinning it would hide whether that works.
 
     steps:
       # v4 runs on node20, which GitHub deprecated and now force-runs on node24

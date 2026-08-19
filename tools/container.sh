@@ -112,6 +112,36 @@ sonic_assert_limits() {
 # these, so the container's environment stays a known quantity.
 SONIC_ENV_FORWARD="N N1 N2 REPS WARMUP TOP NBODY BASELINE CONFIGS EVENT SONIC_INSTRUMENT PARALLEL_MAX"
 
+# THE CPU SHARE HAS TO FIT THE MACHINE, or no container starts at all.
+#
+# docker-compose.yml asks for `cpus: ${SONIC_CPUS:-8}`, and Docker REFUSES a value
+# above the host's core count rather than clamping it:
+#
+#   Error response from daemon: range of CPUs is from 0.01 to 4.00,
+#   as there are only 4 CPUs available
+#
+# That is what kept CI from starting a container for five days (D194), and the
+# fix there was to set SONIC_CPUS=4 in the workflow -- which fixes CI and leaves
+# the same trap for anyone cloning this onto a machine with fewer than eight
+# cores. A default is not a fix when the correct value is a property of the host.
+#
+# So it is computed rather than defaulted: whatever the machine has, capped at 8,
+# which is the number docker-compose.yml documents as the intended share. Nothing
+# to configure, and an explicit SONIC_CPUS still wins.
+#
+# Not a containment limit -- memory, swap and pids are, and are asserted by
+# tools/test-containment.sh. This one only has to be legal.
+if [ -z "${SONIC_CPUS:-}" ]; then
+    _sonic_cores=$( (nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8) )
+    case "$_sonic_cores" in
+        ''|*[!0-9]*) _sonic_cores=8 ;;
+    esac
+    [ "$_sonic_cores" -lt 1 ] && _sonic_cores=1
+    [ "$_sonic_cores" -gt 8 ] && _sonic_cores=8
+    export SONIC_CPUS="$_sonic_cores"
+    unset _sonic_cores
+fi
+
 sonic_run() {
     local service=$1; shift
     local compose; compose=$(sonic_compose) || return 1
