@@ -8091,3 +8091,52 @@ range and asserts only that those two differ. Not inert: keying by class again
 fails it.
 
 Suite 8651 / 0 / 63.
+
+## D183 — "lane 0 is the scalar" is an x86-64 fact, and it is what slp is built on
+
+With the V permission wired through, the storage class corrected and the free
+pool fixed, compiling nbody for RV64 with packing on gets further and stops here:
+
+```
+Exception in encode-instr: not an RV64 float register
+  -- in instruction with irritants ((v3) (fmul.d ft1 v3 v3))
+```
+
+A SCALAR multiply reading a vector register. Nothing is malformed; this is slp.ss
+doing exactly what its header says it does:
+
+> **LANE 0 IS THE SCALAR.** A packed register's low double IS the scalar value,
+> bit for bit, and every scalar instruction reads exactly that. So a scalar use
+> of a pack's LOW member costs NOTHING: the use is rewritten to name the pack and
+> gets the same bits it always did.
+
+That is true on x86-64 and it is not a convenience -- it is the thing that makes
+the pass pay. nbody's `dx` and `dy` are loaded and subtracted PACKED and then
+squared SCALAR into the reduction, and the reduction is deliberately not packed
+because summing across lanes is reassociation, which D24 forbids. The pass only
+works because the packed value and the scalar value are the same bits in the same
+register, so the boundary between packed and scalar code costs zero instructions.
+
+**On RV64 the boundary is not free, because the two files are different files.**
+Lane 0 of `v3` is not addressable by `fmul.d`; reading it out costs a `vfmv.f.s`,
+which D172 added an encoding for. So every scalar use of a packed low member --
+free on x86-64, and the pass rewrites uses to exploit that -- becomes an
+instruction on RV64.
+
+**This is a bigger finding than a missing rule, and it changes what qaq.13 is.**
+The nine selection rules were the visible gap and they are done. The real gap is
+that slp's cost model is x86-64's: "only the HIGH member needs an instruction,
+and only one however many scalar uses it has" is a sentence about a machine where
+low-lane access is free. On RV64 the pass would have to insert an extract at each
+packed-to-scalar boundary and then decide whether the pack still pays -- which is
+a different pass decision, not a lowering detail, and it may well come out
+negative for exactly nbody's shape, where the whole point is a packed subtract
+feeding a scalar reduction.
+
+Nothing further was attempted. The permission stays off, the tree is green, and
+the x86-64 image is byte-identical to before any of this (D182). What is written
+down now is the reason the milestone is not a matter of finishing the lowering.
+
+Filed on qaq.13.2. The honest scope for RV64 packing is: teach slp to price the
+packed/scalar boundary per target, or accept that this pass is x86-64's and RV64
+wants a different one -- and both of those are decisions above a lowering bead.
