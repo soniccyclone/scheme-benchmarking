@@ -585,10 +585,20 @@
                         (if (and (pair? opt) (pair? (cdddr opt))
                                  (pair? (cddddr opt)))
                             (car (cddddr opt))
-                            (lambda (v) v))))
+                            (lambda (v) v))
+                        (if (and (pair? opt) (pair? (cdddr opt))
+                                 (pair? (cddddr opt))
+                                 (pair? (cdr (cddddr opt))))
+                            (cadr (cddddr opt))
+                            (make-eq-hashtable))))
 
+  ;; `frames` maps a function name to `(frame-bytes . ra-bytes)`. It is both
+  ;; written (this function records its own) and read (a tail call asks about its
+  ;; target). Callee-first finalization is what makes the read meaningful, the
+  ;; same property that lets `clobbers` work without a fixpoint.
   (define (finalize-function* target arch name blocks alloc classes own-labels
-                              params outgoing tail-outgoing remat slot-rep)
+                              params outgoing tail-outgoing remat slot-rep
+                              frames)
     (let* ((sp (spiller-for target))
            (assign (alloc-result-map alloc))
            (spills (alloc-result-spills alloc))
@@ -1304,6 +1314,46 @@
       ;; boundary -- the same reason frame-layout-bytes rounds up.
       (define ra-bytes (if non-leaf? 16 0))
 
+      ;; Bound rather than written as a bare expression: this sits among
+      ;; internal definitions, which must all precede any expression in a body.
+      (define recorded-frame
+        (hashtable-set! frames name (cons bytes ra-bytes)))
+
+      ;; A TAIL CALL INTO AN IDENTICAL FRAME KEEPS IT.
+      ;;
+      ;; `loop%2.14@8.373` ended every iteration with `add $0x10,%rsp` and jumped
+      ;; to `loop%2.372`, whose first instruction is `sub $0x10,%rsp` -- two
+      ;; halves of one loop, each rebuilding what the other just tore down, in
+      ;; blocks that are 18.5% of fannkuch's profile (D96). `tail-call-plan`
+      ;; already reported a zero frame delta; nothing consulted it.
+      ;;
+      ;; Both `ra-bytes` must be zero. On rv64 a non-leaf saves `ra` OUTSIDE the
+      ;; spill frame, and a tail call has to restore it before jumping or the
+      ;; callee returns to the wrong place -- so a saved `ra` is exactly the case
+      ;; where the epilogue is load-bearing. On x86-64 `non-leaf?` is always #f.
+      ;;
+      ;; Overlaying the callee's spill slots on ours is sound only because we are
+      ;; LEAVING: nothing of ours is read after the jump.
+      (define (reuse-frame-target i)
+        (and (zero? ra-bytes)
+             (let ((tgt (jump-target i)))
+               (and (symbol? tgt)
+                    (let ((f (hashtable-ref frames tgt #f)))
+                      (and f (= (car f) bytes) (zero? (cdr f))
+                           (string->symbol
+                            (string-append (symbol->string tgt) ".loop"))))))))
+
+      ;; Rewrite the jump to land past the callee's prologue.
+      (define (retarget-to body i)
+        (let ((tgt (jump-target i)))
+          (cons (car i)
+                (map (lambda (x)
+                       (cond ((and (pair? x) (eq? (car x) 'label) (eq? (cadr x) tgt))
+                              (list 'label body))
+                             ((eq? x tgt) body)
+                             (else x)))
+                     (cdr i)))))
+
       ;; Wrapped OUTSIDE the spill frame, so every existing sp displacement into
       ;; that frame is unchanged. Only what a CALLEE sees above it moves, which
       ;; is why incoming-offset adds ra-bytes too.
@@ -1363,21 +1413,29 @@
                                                    ;; not after it.
                                                    (append
                                                     pre
-                                                    (if (and ins
-                                                             (or ((spiller-returns? sp) ins)
-                                                                 (and ((spiller-tail-jump? sp) ins)
-                                                                      (not (own-label? ins own-labels))
-                                                                      ;; the back edge keeps the frame
-                                                                      (not (self-jump? ins)))))
-                                                        (append
-                                                         ((spiller-epilogue sp) bytes)
-                                                         (ra-restore))
-                                                        '())
-                                                    (if ins
-                                                        (list (if (self-jump? ins)
-                                                                  (retarget ins)
-                                                                  ins))
-                                                        '())
+                                                    (let ((reuse
+                                                           (and ins
+                                                                ((spiller-tail-jump? sp) ins)
+                                                                (not (own-label? ins own-labels))
+                                                                (not (self-jump? ins))
+                                                                (reuse-frame-target ins))))
+                                                      (append
+                                                       (if (and ins
+                                                                (not reuse)
+                                                                (or ((spiller-returns? sp) ins)
+                                                                    (and ((spiller-tail-jump? sp) ins)
+                                                                         (not (own-label? ins own-labels))
+                                                                         ;; the back edge keeps the frame
+                                                                         (not (self-jump? ins)))))
+                                                           (append
+                                                            ((spiller-epilogue sp) bytes)
+                                                            (ra-restore))
+                                                           '())
+                                                       (if ins
+                                                           (list (cond (reuse (retarget-to reuse ins))
+                                                                       ((self-jump? ins) (retarget ins))
+                                                                       (else ins)))
+                                                           '())))
                                                     post)))
                                                instrs)))))
                          blocks)))
@@ -1688,7 +1746,10 @@
     (let ((by-label (make-eq-hashtable))
           ;; function name -> the registers calling it can destroy. Absent means
           ;; "not known", which every caller treats as "everything".
-          (clobbers (make-eq-hashtable)))
+          (clobbers (make-eq-hashtable))
+          ;; function name -> (frame-bytes . ra-bytes), for D96's tail-call
+          ;; frame reuse. Same callee-first argument as `clobbers`.
+          (frames (make-eq-hashtable)))
       (for-each (lambda (b) (hashtable-set! by-label (car b) (cadr b)))
                 (cadddr selected))
       (let* (;; NOT THE ORPHAN BUCKET. `partition-into-functions` gathers blocks
@@ -1786,7 +1847,11 @@
                    ;; copy -- and the spill set, which allocation has just
                    ;; produced.
                    (let ((sp (alloc-result-spills alloc)))
-                     (move-aliases (cdr fn) (lambda (v) (memq v sp)))))))
+                     (move-aliases (cdr fn) (lambda (v) (memq v sp))))
+                   ;; SHARED across every function in the program, and that is
+                   ;; the whole point: a caller asks it about a callee that was
+                   ;; finalized earlier, which callee-first ordering guarantees.
+                   frames)))
             ;; What this one writes, for whoever calls it. Its own callees are
             ;; already recorded -- that is what `callee-first` buys -- so the
             ;; union closes over the call graph without a separate fixpoint.

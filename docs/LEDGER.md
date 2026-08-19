@@ -4120,3 +4120,56 @@ The plan was to size `qaq.23`; the evidence answered a question nobody asked. Bo
 of the last two entries came from reading emitted code rather than reasoning about
 what the passes should produce, and both overturned the hypothesis that sent me
 there. D95 refuted D94's cycle theory the same way.
+
+## D97 — the frame reuse lands: fannkuch loses 2.78% of its instructions
+
+D96's optimisation, implemented. `finalize.ss` now carries a `frames` table
+alongside `clobbers` — function name to `(frame-bytes . ra-bytes)` — populated by
+the same callee-first ordering, so a caller can ask what its tail-call target's
+frame looks like without a fixpoint or a second pass. When the sizes match and
+neither end saves `ra`, the caller skips its epilogue and retargets the jump to
+the callee's `.loop` label, past the prologue.
+
+```
+                                      before        after
+fannkuch instructions            27,847,0xx,xxx  27,073,9xx,xxx   -2.78%
+fannkuch listing (instructions)           1,103           1,097
+teardowns immediately before a tail jmp      13               7
+nbody instructions                3,321,7xx,xxx   3,321,796,162   unchanged
+```
+
+Cycles, measured with repetition because D94 put the noise floor at 2%:
+
+```
+before (5 runs)  9,895.8  9,918.6  9,931.5  9,954.5  10,090.0   mean 9,957.6M
+after  (4 runs)  9,798.0  9,798.6  9,815.9   9,822.8             mean 9,808.8M
+```
+
+The ranges do not overlap, so the ~1.5% is real rather than a reading of noise —
+and the post-change runs cluster inside 0.25%, which is worth noting on its own:
+some of the earlier variance was the frame churn itself.
+
+**This is the first change this session that moved a benchmark.** Everything
+between D84 and D96 either refuted a plan before implementation (three times) or
+landed correct and measured at zero (`gconst`, the clobber threading). Worth
+stating plainly because the ledger otherwise reads as a run of failures, and it
+was not: the refutations are what made this one findable. D96 exists because
+sizing `qaq.23` meant reading emitted code, and reading emitted code is what has
+worked all session.
+
+**Two things it did not do, recorded so nobody assumes otherwise.** nbody is
+unchanged — it has eight teardown-then-jmp sites and none of them are hot, which
+is consistent with D89: nbody's spare instructions are free. And only six of
+fannkuch's thirteen sites qualified. The others fail one of the guards — a
+mismatched frame size, or a jump to something with no `frames` entry, such as a
+runtime routine. Whether the remaining seven are reachable by relaxing a guard is
+not investigated and should not be assumed.
+
+**The guards, since they are the part that could be wrong.** Equal frame bytes;
+`ra-bytes` zero at BOTH ends, because on rv64 a non-leaf saves `ra` outside the
+spill frame and a tail call must restore it before jumping or the callee returns
+into the wrong place — that is precisely where the epilogue is load-bearing. On
+x86-64 `non-leaf?` is always false, so the guard is free there. Overlaying the
+callee's spill slots on ours is sound only because we are leaving and nothing of
+ours is read after the jump. Suite green at 8589/0/59, including the eleven-way
+bit-exact oracle and the RISC-V smoke gate, which share this code.
