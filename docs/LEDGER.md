@@ -8187,3 +8187,44 @@ what a pinned assumption is for -- the value of writing the belief down was
 getting told the day it stopped being true, three entries later.
 
 Suite 8652 / 0 / 63, x86-64 image unchanged.
+
+## D185 — rematerialisation, defined by negation, on both targets
+
+Continuing D184's audit for the shape "dispatch on storage class where the
+register file is what matters" found the same defect once more, in the same file,
+on both targets at once:
+
+```
+;; x86-64                          ;; rv64
+(and (not (eq? sc 'raw-f64))       (and (not (eq? sc 'raw-f64))
+     ... `((mov ,r (imm ,d))))          ... `((addi ,r zero ,d)))
+```
+
+"Not a double" meant "an integer" only while there were two classes that could
+reach a register. `raw-f64x2` satisfies it, so a packed pair would have been
+rematerialised with `mov xmm3, imm32` or `addi v3, zero, imm` -- an integer
+instruction naming a register from another file.
+
+**This is D173 for the third time.** That entry replaced `arch-int-scratch`,
+which meant "the scratches that are not float", after finding it would hand a
+vector scratch to the integer spill path. The lesson it drew was that a partition
+defined by negation is correct exactly while it has two members, and stops being
+correct silently. Two more instances have turned up since, in D184 and here, and
+all three were introduced years apart by different code with the same reasoning.
+
+Both now name the integer classes positively -- `(memq sc '(tagged raw-word))` --
+so a class the guard has not been taught about is simply not rematerialised. That
+is the safe direction: the cost of declining is a reload, and the cost of
+accepting wrongly is a value built in the wrong register file.
+
+Behaviour-preserving, and checked as such rather than asserted: the x86-64 nbody
+image is `c56783f9…` before and after, identical. Suite 8652 / 0 / 63.
+
+Guarded by a test that asks both spillers for a packed remat and requires #f,
+alongside the `raw-word` cases that must keep working. Not inert: restoring the
+negation on either target fails it.
+
+**The audit is what produced D184 and D185, and it was worth running.** D182 was a
+bug I wrote; the useful move after fixing it was not to move on but to ask what
+else had the same shape. Two more, one of them older than the vector work and
+capable of a silently wrong answer.

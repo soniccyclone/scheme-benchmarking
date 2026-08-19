@@ -62,7 +62,7 @@
           ;; here that nothing could reach through the compiler -- packed
           ;; lowering for rv64 is behind an ISA-floor decision (D176) -- and a
           ;; guard nobody has watched fail is not yet a guard (D133, D146).
-          spiller-reload spiller-store
+          spiller-reload spiller-store spiller-remat
           spiller-x86-64 spiller-rv64 spiller-for
           finalized? finalized-name finalized-listing
           ;; `make-finalized` is exported for merge-identical-functions' test,
@@ -680,8 +680,14 @@ See LEDGER.md D184."
      ;; `mov r64, imm32` is one instruction. A double would be a pool load,
      ;; which costs exactly what the reload it replaces costs, so it is not
      ;; rematerialised.
+     ;; NAMED POSITIVELY, for the reason D173 gives about scratch files: "not
+     ;; raw-f64" meant "integer" only while there were two classes, and
+     ;; `raw-f64x2` passes it. That would rematerialise a constant into an xmm
+     ;; with `mov xmm3, imm32`. The classes that live in an integer register are
+     ;; the two named here, and a class this does not know about is not
+     ;; rematerialised -- the safe direction, since the cost is a reload.
      (lambda (r d sc)
-       (and (not (eq? sc 'raw-f64))
+       (and (memq sc '(tagged raw-word))
             (integer? d) (exact? d)
             (<= (- (expt 2 31)) d (- (expt 2 31) 1))
             `((mov ,r (imm ,d)))))
@@ -741,8 +747,10 @@ address register, and a 16-byte frame slot. See LEDGER.md D170."
      (lambda (i) #f)
      ;; `addi rd, zero, imm` covers 12 bits signed in one instruction. Anything
      ;; wider is lui/addi, which is two, and two is not cheaper than a reload.
+     ;; Positive, as on x86-64 above: `raw-f64x2` satisfies "not raw-f64" and
+     ;; would take `addi v3, zero, imm`.
      (lambda (r d sc)
-       (and (not (eq? sc 'raw-f64))
+       (and (memq sc '(tagged raw-word))
             (integer? d) (exact? d)
             (<= -2048 d 2047)
             `((addi ,r zero ,d))))

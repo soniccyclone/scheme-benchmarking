@@ -701,6 +701,16 @@
            (lambda () ((spiller-store spiller-x86-64) 16 'xmm3 'raw-f64x2)))
           (raises-spill?
            (lambda () ((spiller-reload spiller-x86-64) 'xmm3 16 'raw-f64x2)))))
+(ck! "rematerialisation names the integer classes POSITIVELY -- 'not raw-f64'
+       admitted a packed pair and would have built one with addi/mov"
+     (and (not ((spiller-remat spiller-rv64)    'v3 5 'raw-f64x2))
+          (not ((spiller-remat spiller-x86-64)  'xmm3 5 'raw-f64x2))
+          ;; and the classes that must keep rematerialising still do
+          (equal? ((spiller-remat spiller-rv64) 't3 5 'raw-word)
+                  '((addi t3 zero 5)))
+          (equal? ((spiller-remat spiller-x86-64) 'rax 5 'raw-word)
+                  '((mov rax (imm 5))))))
+
 (ck! "and a scalar double on x86-64 still spills through movsd, so the refusal
        is narrow"
      (equal? ((spiller-store spiller-x86-64) 16 'xmm3 'raw-f64)
