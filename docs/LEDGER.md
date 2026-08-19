@@ -8921,3 +8921,41 @@ where D89, D111 and D167 have each measured instruction removal buying no time -
 D167 removed 9.9% of fannkuch's instructions and the clock did not move. Recorded
 because it completes the count-flips account and because "why does this loop copy
 three times" now has an answer, not because it should be scheduled.
+
+## D202 — the fix for a stale export could have emptied it
+
+D190 taught `make guard` to refresh `.beads/issues.jsonl` unconditionally, on the
+argument that the operation is idempotent so it should not depend on anyone
+suspecting staleness. Idempotent it is; safe it was not.
+
+`tools/setup.sh` runs `make guard`. The export is git-tracked and the Dolt database
+is gitignored, so **on a fresh clone the database does not exist and the file
+does** -- which is the whole point of committing it, and is how CLAUDE.md records
+beads restoring itself when this host moved to podman. An export from an empty
+database writes zero issues over the recovery path.
+
+Nothing lost: the ordering that would do it needs `bd export` to run before bd has
+imported, and on this machine the database was already populated every time guard
+ran. That is a property of when it happened to be run, not of the code, and the
+consequence is losing an issue graph -- the same asymmetry D170 and D184 record,
+where the cost of being wrong is high and the odds of noticing are low.
+
+The export now writes to a temporary file and moves it into place only if the new
+count is non-zero AND not smaller than the committed one:
+
+```
+[guard] beads export REFUSED: database has 149 issues, the
+        committed export has 154. Not overwriting. If the
+        database is empty this is a fresh clone -- run any bd
+        command to import, then re-run make guard.
+```
+
+Validated by making the committed file larger than the database and watching the
+refusal fire with the file left untouched -- D133 and D146, and the fourth guard
+this session watched failing rather than assumed (D181, D188, D193).
+
+**The general shape is worth one sentence.** A fix for "this file goes stale" and a
+fix for "this file gets destroyed" pull in opposite directions, and writing the
+first without noticing the second is easy, because staleness is the failure you
+just experienced and emptiness is the one you have not. Refusing to shrink costs
+one comparison and settles both.

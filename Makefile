@@ -63,10 +63,29 @@ guard:
 	@# recovered from this file when the host moved. It went six days and 46
 	@# issues stale because nothing refreshes it. Refreshing is idempotent, so
 	@# it runs every time rather than being conditional on noticing.
+	@# NEVER SHRINKS THE FILE, and that guard is not paranoia. The export is
+	@# git-tracked and the Dolt DB is not, so on a FRESH CLONE the database does
+	@# not exist yet -- and `tools/setup.sh` runs this target. An export from an
+	@# empty database would write zero issues over the committed graph, which is
+	@# the recovery path CLAUDE.md says beads restored itself from when this host
+	@# moved. Writing to a temporary file and comparing counts first costs
+	@# nothing and makes the failure impossible rather than unlikely.
 	@if command -v bd >/dev/null 2>&1; then \
-		bd export -o .beads/issues.jsonl >/dev/null 2>&1 \
-			&& echo "[guard] beads export refreshed ($$(grep -c '' .beads/issues.jsonl) issues)" \
-			|| echo "[guard] beads export FAILED -- .beads/issues.jsonl may be stale"; \
+		tmp=$$(mktemp); \
+		if bd export -o "$$tmp" >/dev/null 2>&1; then \
+			new=$$(grep -c '' "$$tmp" 2>/dev/null || echo 0); \
+			old=$$(grep -c '' .beads/issues.jsonl 2>/dev/null || echo 0); \
+			if [ "$$new" -ge "$$old" ] && [ "$$new" -gt 0 ]; then \
+				mv "$$tmp" .beads/issues.jsonl; \
+				echo "[guard] beads export refreshed ($$new issues)"; \
+			else \
+				rm -f "$$tmp"; \
+				echo "[guard] beads export REFUSED: database has $$new issues, the"; \
+				echo "        committed export has $$old. Not overwriting. If the"; \
+				echo "        database is empty this is a fresh clone -- run any bd"; \
+				echo "        command to import, then re-run make guard."; \
+			fi; \
+		else rm -f "$$tmp"; echo "[guard] beads export FAILED -- .beads/issues.jsonl may be stale"; fi; \
 	else echo "[guard] bd not on PATH, beads export not refreshed"; fi
 	@# Hooks are NOT installed here. `bd hooks install` also adds
 	@# prepare-commit-msg, which rewrites commit messages with agent identity
