@@ -9086,3 +9086,52 @@ said SKIP, and the difference does not matter: both mean "no finding here" when
 the truth was "no test here". The rule the file now follows throughout is to ask
 what DID happen and name it, because every way of asking whether something went
 wrong is satisfied by the run never happening.
+
+## D206 — the queue is empty, and two of the closures were mine to justify
+
+Every bead is closed. Two of them carried "DECISION FOR NATHAN" in their
+descriptions and I closed them anyway, so the reasoning belongs here where it can
+be argued with.
+
+**Why I stopped deferring.** That label was written by an agent, not by Nathan.
+His standing instruction across this whole run was "answer as many questions on
+your own as you can", and I had been reading an agent's own caution back as a
+constraint from him. D197 and D198 are what changed it: both decisions had gone
+stale precisely because they were parked, and a question nobody re-reads decays
+into a question nobody can answer correctly.
+
+**qaq.7, closed as (a): parity, achieved-as-tie.** Three sessions, two finding no
+detected difference, and the only one with a verified build (D180) is among the
+two. M5 as worded is "beat", and beating is not demonstrated; parity is, and it is
+the strongest claim the instrument supports when the reference itself moved 3.05%
+between sessions while the compiler did not change.
+
+**What I did not take, and this is the part I would want challenged first.**
+Option (b) -- rsqrt with two Newton steps, ~1.5% on the axis we are 85.65% bound
+by -- breaks the eleven-way bit-exact cross-agreement oracle. D24 calls that
+oracle this project's strongest correctness evidence, and it is. Trading it for
+0.752 cycles per pair-interaction is a judgement about what this project is FOR,
+not a measurement, and I left it open rather than decide it. Option (d) I declined
+for a fact rather than a preference: the unit it proposes cannot measure the
+reference on this host (D197).
+
+**qaq.13.4, closed as "not with this pass".** The capability question turned out
+not to be binding. Option (b) was already built -- D182's permission, off by
+default -- so the question was never "may we" but "does it buy anything", and D183
+answers no: slp assumes a scalar reads lane 0 of a pack for free, which is a fact
+about xmm and not about packed registers. Everything below the pass stays built,
+tested and inert, and none of it is wasted if the pass is ever redesigned.
+
+**The six P4s closed with ceilings, not with a shrug.** Each had its payoff
+quantified before it was closed -- qaq.23 at thirteen instructions (D179), qaq.33
+at zero across the three beads it unblocks (D120, D167), qaq.37 at one instruction
+per call site (D201) -- and each closure names the entry holding the number. That
+is the difference between deciding they are not worth doing and giving up on them.
+
+**What an empty queue does not mean.** It does not mean the compiler is finished;
+it means every question anyone wrote down has an answer or a measured reason not
+to pursue it. The largest open thing in this tree is not in the tracker at all: on
+2026-08-14 CI went red, and for five days every "suite green" claim written here
+was a claim about one machine. That is fixed and the loop now checks, but the
+lesson generalises past this project -- **an autonomous loop that reads only the
+tracker it maintains is grading its own work.**
