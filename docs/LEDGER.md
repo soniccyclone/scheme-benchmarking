@@ -6941,3 +6941,35 @@ changes are independent and only one of them is a speedup:
 
 So the speedup came from deleting a transformation, and what made deleting it
 possible was fixing a constant that had been wrong since it was written.
+
+## D159 — applying the re-read rule to what is left
+
+LOOP.md gained a "before STARTING anything" section (D143) saying a bead's claims
+are measurements and go stale three ways. The check-elision thread changed nbody's
+emitted code substantially -- a different function name, unrolling gone,
+twenty-eight fewer traps -- so the beads describing that code were due a re-read
+before anyone acts on them.
+
+**`qaq.18` still holds.** nbody's inner loop, now `inner%24.158` rather than
+`inner%24.197`, still opens:
+
+```
+mov  %rdx,%rsi
+mov  $0x5,%rdi        <- overwritten before any read
+cmp  $0x5,%rsi
+```
+
+Three separate changes have now passed over this dead store without removing it:
+`gconst` changed how the constant arrives, `merge-identical-functions` renamed
+the function twice, and the round count removed every trap around it. D110's two
+mechanisms still explain it, and neither has been addressed.
+
+**The queue after tonight** is nine: two epics, M5 awaiting a decision, RVV
+lowering needing a subsystem, and five P4s whose instruction-count payoffs D120
+measured as not converting to time. `qaq.30` is gone -- not decided, dissolved.
+
+That is the useful shape to leave: of the two decisions this session put to
+Nathan, one turned out to be a question about the compiler that the compiler
+could answer, and the answer was a constant. The other -- M5's accuracy trade --
+is genuinely his, and D127 sharpened it by showing the milestone as worded cannot
+be settled by measurement at all.
