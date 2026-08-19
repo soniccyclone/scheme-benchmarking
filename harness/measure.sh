@@ -83,6 +83,9 @@ here_m="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # that is the comparison the ledger is written around; otherwise the first
 # config, which is the old behaviour and is now stated rather than implied.
 run_configs="${*:-$CONFIGS}"
+
+# Nothing is measured off a binary this run did not build. See cfg_build_all.
+cfg_build_all $run_configs || exit 1
 if [ -n "${BASELINE:-}" ]; then
     base_cfg="$BASELINE"
 else

@@ -38,6 +38,40 @@ BUILD="$ROOT/build/nbody"
 CBENCH="/work/bench/nbody"
 CBUILD="/work/build/nbody"
 
+# COMPILE BEFORE MEASURING, ALWAYS, AND REFUSE TO MEASURE IF IT FAILS.
+#
+# bench.sh and measure.sh used to take a configuration name, look up cfg_run_*,
+# and time whatever binary was at that path. Neither compiled. So a compile that
+# failed -- or was never run -- left the PREVIOUS binary in place and both
+# harnesses measured it and printed a number that looked entirely normal. D166
+# is the case that found it: an allocator change came back as 696.00
+# instructions/step both with the change and without it, off a binary that
+# predated it by fifty-one minutes.
+#
+# disasm-sonic.sh reached the same conclusion first and its header says why: it
+# COMPILES rather than accepting a binary, and there is no way to pass it one,
+# because analysing a stale artifact produces addresses that look plausible and
+# are not. These two are the instruments this project's headline numbers come
+# from, so they get the same rule.
+#
+# Unconditional, with no mtime check. A compile is seconds against measurement
+# runs of minutes, and a freshness test is one more thing that can be wrong in
+# the direction of silence -- which is the failure being fixed.
+cfg_build_all() {
+    local c
+    for c in "$@"; do
+        printf '%-12s ' "$c" >&2
+        if cfg_compile "$c" >/dev/null 2>&1; then
+            printf '[built]\n' >&2
+        else
+            printf '[FAIL]\n' >&2
+            printf 'refusing to measure: %s did not compile, and the binary on disk\n' "$c" >&2
+            printf 'is whatever a previous run left there. See LEDGER.md D166.\n' >&2
+            return 1
+        fi
+    done
+}
+
 CONFIGS="sonic sonic-fma sonic-u4 sonic-pad4 c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2b racket-2b chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
 
 mkdir -p "$BUILD"
@@ -63,7 +97,14 @@ cfg_compile_sonic() {
 EOF
     . "$ROOT/tools/container.sh"
     if sonic_in_container; then
-        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
+        # `|| return 1` on BOTH branches, not just the re-exec one. Without it
+        # the chmod below is the function's last command, it succeeds whatever
+        # the compile did, and the caller is told the build worked. That is how
+        # D166's guard came to be inert on its first outing: cfg_compile_sonic
+        # returned 1 from the host and 0 from inside the container, for the same
+        # failed compile.
+        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv" \
+            || return 1
     else
         "$ROOT/tools/container.sh" bash -c \
             "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-build.ss" \
@@ -105,7 +146,14 @@ cfg_compile_sonic_u4() {
 EOF
     . "$ROOT/tools/container.sh"
     if sonic_in_container; then
-        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
+        # `|| return 1` on BOTH branches, not just the re-exec one. Without it
+        # the chmod below is the function's last command, it succeeds whatever
+        # the compile did, and the caller is told the build worked. That is how
+        # D166's guard came to be inert on its first outing: cfg_compile_sonic
+        # returned 1 from the host and 0 from inside the container, for the same
+        # failed compile.
+        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv" \
+            || return 1
     else
         "$ROOT/tools/container.sh" bash -c \
             "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-u4-build.ss" \
@@ -147,7 +195,14 @@ cfg_compile_sonic_fma() {
 EOF
     . "$ROOT/tools/container.sh"
     if sonic_in_container; then
-        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
+        # `|| return 1` on BOTH branches, not just the re-exec one. Without it
+        # the chmod below is the function's last command, it succeeds whatever
+        # the compile did, and the caller is told the build worked. That is how
+        # D166's guard came to be inert on its first outing: cfg_compile_sonic
+        # returned 1 from the host and 0 from inside the container, for the same
+        # failed compile.
+        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv" \
+            || return 1
     else
         "$ROOT/tools/container.sh" bash -c \
             "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-fma-build.ss" \
@@ -186,7 +241,14 @@ cfg_compile_sonic_rv64() {
 EOF
     . "$ROOT/tools/container.sh"
     if sonic_in_container; then
-        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
+        # `|| return 1` on BOTH branches, not just the re-exec one. Without it
+        # the chmod below is the function's last command, it succeeds whatever
+        # the compile did, and the caller is told the build worked. That is how
+        # D166's guard came to be inert on its first outing: cfg_compile_sonic
+        # returned 1 from the host and 0 from inside the container, for the same
+        # failed compile.
+        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv" \
+            || return 1
     else
         "$ROOT/tools/container.sh" bash -c \
             "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-rv64-build.ss" \
@@ -211,7 +273,14 @@ cfg_compile_sonic_rv64_fma() {
 EOF
     . "$ROOT/tools/container.sh"
     if sonic_in_container; then
-        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
+        # `|| return 1` on BOTH branches, not just the re-exec one. Without it
+        # the chmod below is the function's last command, it succeeds whatever
+        # the compile did, and the caller is told the build worked. That is how
+        # D166's guard came to be inert on its first outing: cfg_compile_sonic
+        # returned 1 from the host and 0 from inside the container, for the same
+        # failed compile.
+        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv" \
+            || return 1
     else
         "$ROOT/tools/container.sh" bash -c \
             "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-rv64-fma-build.ss" \
@@ -252,7 +321,14 @@ cfg_compile_sonic_pad4() {
 EOF
     . "$ROOT/tools/container.sh"
     if sonic_in_container; then
-        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv"
+        # `|| return 1` on BOTH branches, not just the re-exec one. Without it
+        # the chmod below is the function's last command, it succeeds whatever
+        # the compile did, and the caller is told the build worked. That is how
+        # D166's guard came to be inert on its first outing: cfg_compile_sonic
+        # returned 1 from the host and 0 from inside the container, for the same
+        # failed compile.
+        scheme -q --libdirs "$ROOT/sonic/src:$ROOT/sonic/vendor/nanopass" --script "$drv" \
+            || return 1
     else
         "$ROOT/tools/container.sh" bash -c \
             "scheme -q --libdirs /work/sonic/src:/work/sonic/vendor/nanopass --script /work/build/nbody/sonic-pad4-build.ss" \

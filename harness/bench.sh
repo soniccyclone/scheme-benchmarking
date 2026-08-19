@@ -119,6 +119,9 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 US=$(printf '\037')
 
+# Nothing is measured off a binary this run did not build. See cfg_build_all.
+cfg_build_all ${*:-$CONFIGS} || exit 1
+
 for c in ${*:-$CONFIGS}; do
     # PREFLIGHT, IN THE MAIN SHELL. Timing a command that does not exist yields
     # a number: after `make clean` removed build/, this script reported c-native

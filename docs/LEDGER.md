@@ -7366,3 +7366,47 @@ holds. It is strictly less work for the same answer on both benchmarks and both
 targets, it removes a documented coarseness rather than adding a special case, and
 the instruction counts are the figures this project has repeatedly found
 reproducible where cycles are not. Nothing here claims a speedup.
+
+## D168 — the harness now compiles what it measures, and the guard was inert first
+
+D166 fixed the broken compile and filed the hazard that made it invisible:
+`bench.sh` and `measure.sh` take a configuration name and time whatever binary is
+at that path. Neither compiled. Fixed by `cfg_build_all`, which compiles every
+named configuration before anything is timed and refuses to report a number if
+one fails.
+
+**The refusal did not work the first time, and only deliberately breaking a
+compile found that.** With `config-sonic.sps` pointed at a file that does not
+exist, the harness printed `[built]` and measured 676.00 instructions/step -- the
+same number as a good build, off the stale binary, which is precisely the failure
+being fixed.
+
+The cause is in `cfg_compile_sonic` and its five siblings:
+
+```
+if sonic_in_container; then
+    scheme -q --libdirs ... --script "$drv"        # <- no || return 1
+else
+    "$ROOT/tools/container.sh" bash -c "..." || return 1
+fi
+chmod +x "$BUILD/sonic"                            # <- last command, always 0
+```
+
+The re-exec branch propagated the failure and the in-container branch did not, so
+`chmod` became the function's exit status and every failed compile inside a
+container reported success. `set -e` does not help: the call sits in an `if`
+condition, where a non-zero status is the question being asked rather than an
+error. The same function therefore returned 1 from the host and 0 from inside the
+container for one failed compile, and these harnesses re-exec themselves into a
+container before doing anything.
+
+`|| return 1` on both branches, in all six.
+
+**The general lesson is the one this project keeps relearning, in a new place.**
+D133 and D146 established that an assertion is not finished until you have watched
+it fail; D148, D151 and D160 found instruments reporting confident numbers from
+the wrong stage, the wrong shape and the wrong target. This is the same rule
+applied to a GUARD rather than a measurement: a check that cannot fail is not a
+check, and the only way to know is to make the thing it guards against actually
+happen. Had `cfg_build_all` been committed on the strength of its passing run, it
+would have read as protection while protecting nothing.
