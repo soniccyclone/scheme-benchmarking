@@ -46,11 +46,33 @@ setup:
 
 # The guard lives in local git config and is NOT cloned. Re-apply after any
 # fresh clone or `git submodule update --init`. See the hard rule in CLAUDE.md.
+# LOCAL GIT STATE THAT IS NOT CLONED, RE-APPLIED.
+#
+# Both halves exist because `.git/` does not travel. The nanopass pushurl lives
+# in `.git/modules/`, and git hooks live in `.git/hooks/`, so a fresh clone or a
+# move between machines silently loses them -- which is what happened when this
+# host went from WSL+Docker to native Ubuntu.
 guard:
 	@git -C sonic/vendor/nanopass config remote.origin.pushurl \
 		"NO-PUSH-UPSTREAM--ask-Nathan-first--see-CLAUDE.md" 2>/dev/null \
 		&& echo "[guard] nanopass push disabled" \
 		|| echo "[guard] nanopass submodule not initialised, nothing to guard"
+	@# The beads export is the SHAREABLE copy; the Dolt DB under
+	@# .beads/embeddeddolt/ is gitignored, and CLAUDE.md records that beads
+	@# recovered from this file when the host moved. It went six days and 46
+	@# issues stale because nothing refreshes it. Refreshing is idempotent, so
+	@# it runs every time rather than being conditional on noticing.
+	@if command -v bd >/dev/null 2>&1; then \
+		bd export -o .beads/issues.jsonl >/dev/null 2>&1 \
+			&& echo "[guard] beads export refreshed ($$(grep -c '' .beads/issues.jsonl) issues)" \
+			|| echo "[guard] beads export FAILED -- .beads/issues.jsonl may be stale"; \
+	else echo "[guard] bd not on PATH, beads export not refreshed"; fi
+	@# Hooks are NOT installed here. `bd hooks install` also adds
+	@# prepare-commit-msg, which rewrites commit messages with agent identity
+	@# trailers, and that is a change to how Nathan's own commits look rather
+	@# than a guard. Reported so the choice is visible.
+	@if command -v bd >/dev/null 2>&1 && bd hooks list 2>/dev/null | grep -q "not installed"; then \
+		echo "[guard] beads git hooks are NOT installed; 'bd hooks install' if you want them"; fi
 
 test:
 	@$(MAKE) -C sonic test

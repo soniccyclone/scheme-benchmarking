@@ -8404,3 +8404,43 @@ Nothing to fix, and this is the second such finding. Recorded because the audit'
 real conclusion is not "four bugs" but "four bugs, all in the layer where a
 mistake is merely wrong, none in the layer where it is fatal" -- and because a
 future storage class will land on this same split.
+
+## D190 — the beads export was six days stale, and nothing was watching
+
+`.beads/issues.jsonl` is the git-tracked record of the issue graph; the Dolt
+database under `.beads/embeddeddolt/` is gitignored. The export was last written
+2026-08-13 and held 100 issues against the database's 146, so every bead created
+or annotated since -- qaq.13.1 through qaq.13.4, qaq.33, qaq.34, and the measured
+recommendations on qaq.15, 18, 21, 23 and 26 -- existed only on this machine.
+
+**It matters more than the unpushed commits did.** CLAUDE.md records that beads
+self-healed on this host by auto-importing from this exact file when the move to
+podman lost the old database. The JSONL is the recovery path. A recovery path six
+days behind restores a queue that has forgotten the last week of reasoning about
+itself.
+
+**Why nothing noticed.** `bd` answers from the database, so `bd ready`, `bd show`
+and `bd stats` were all correct throughout and nothing in the workflow compares
+them against the export. The root cause is one directory: `.git/hooks/` contains
+only samples. The five beads hooks are present in `.beads/hooks/` and were never
+installed into git, and `bd hooks list` says so plainly once asked.
+
+That is the same failure as the nanopass push guard, which CLAUDE.md already warns
+about -- `.git/` does not travel, so a fresh clone or a move between machines
+silently drops it. This host moved from WSL with Docker to native Ubuntu. The
+guard was re-applied because CLAUDE.md says to; the hooks were not, because
+nothing said to.
+
+Fixed by extending `make guard`, which is exactly the target for local git state
+that is not cloned. It now also refreshes the export unconditionally -- the
+operation is idempotent, so it does not depend on anyone suspecting staleness --
+and reports whether the hooks are installed.
+
+**It reports the hooks rather than installing them, deliberately.** `bd hooks
+install` includes `prepare-commit-msg`, which rewrites commit messages with agent
+identity trailers. That changes how Nathan's own commits look, which is a
+decision about his repository rather than a guard on it.
+
+Verified a superset before overwriting the tracked file: every id in the old 100
+appears in the new 146, none missing, statuses matching `bd stats` at 135 closed
+and 11 open. Committed and pushed.
