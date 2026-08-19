@@ -396,6 +396,9 @@
     (vsetvli a5 a4 (e32 m2 tu mu))
     (vsetvli s2 s3 (e64 m8 ta mu))
     (vsetivli t1 4 (e64 m1 ta ma))
+    ;; the exact form every packed selection rule emits: rd=zero discards the
+    ;; granted vl rather than burning a scratch, and the length is a literal
+    (vsetivli zero 2 (e64 m1 ta ma))
     (vsetivli a0 31 (e8 mf2 tu ma))
     (vsetvl t0 a2 a3)
     (vle64.v v0 a0)

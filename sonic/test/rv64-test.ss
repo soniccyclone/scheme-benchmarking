@@ -656,6 +656,64 @@
      (let ((ov (rv64-overflow-scratch)))
        (and (memq (rv64-addr-scratch) ov) #t)))
 
+;;; --- packed pairs on RV64 (D174) ------------------------------------------
+;;;
+;;; The five arithmetic rules and the two that get a pair into and out of the
+;;; vector file. What is asserted here is the SHAPE -- that a vtype precedes
+;;; every one, that operand order is what RVV means by it, and that the two
+;;; sequences go through the scratch. The individual encodings are verified
+;;; byte-for-byte against binutils in vec-rv64-test.ss; this is the other half.
+
+(define (p2sel op dst srcs)
+  (let ((r (assq op rv64-rules)))
+    (unless r (error 'p2sel "no rule for this packed op" op))
+    ((cdr r) dst 'raw-f64x2 srcs)))
+
+(display "
+-- packed pairs --
+")
+
+(ck! "every packed operation states the vtype first: RVV computes on whatever
+       vl and SEW currently say, so two lanes is a property of the machine
+       rather than of the opcode"
+     (for-all (lambda (x)
+                (equal? (car (p2sel (car x) (cadr x) (caddr x)))
+                        '(vsetivli zero 2 (e64 m1 ta ma))))
+              '((p2add v3 (v1 v2)) (p2sub v3 (v1 v2)) (p2mul v3 (v1 v2))
+                (p2div v3 (v1 v2)) (p2splat v4 (fa0)) (p2pack v5 (fa0 fa1))
+                (p2hi fa2 (v6)))))
+
+(ck! "the vtype write discards its result rather than taking a scratch: we are
+       asserting a length, not asking for one"
+     (eq? (cadr (car (p2sel 'p2add 'v3 '(v1 v2)))) 'zero))
+
+(ck! "the four arithmetic pairs are three-address, so no copy is needed"
+     (and (equal? (cdr (p2sel 'p2add 'v3 '(v1 v2))) '((vfadd.vv v3 v1 v2)))
+          (equal? (cdr (p2sel 'p2mul 'v3 '(v1 v2))) '((vfmul.vv v3 v1 v2)))))
+
+;; vfsub.vv vd, vs2, vs1 computes vs2 - vs1 and this tree keeps TEXTUAL operand
+;; order, so the first source must land in the vs2 slot. Backwards is a wrong
+;; answer on subtract and divide and no difference at all on add and multiply,
+;; which is exactly the bug a test on `add` alone would miss.
+(ck! "subtract and divide put the LEFT operand where RVV reads the minuend"
+     (and (equal? (cdr (p2sel 'p2sub 'v3 '(v1 v2))) '((vfsub.vv v3 v1 v2)))
+          (equal? (cdr (p2sel 'p2div 'v3 '(v1 v2))) '((vfdiv.vv v3 v1 v2)))))
+
+(ck! "p2pack splats the low lane then slides the high one in over the scratch,
+       never over dst -- dst may BE one of the sources"
+     (equal? (cdr (p2sel 'p2pack 'v5 '(fa0 fa1)))
+             '((vfmv.v.f v31 fa0) (vfslide1down.vf v5 v31 fa1))))
+
+(ck! "p2hi slides lane one down and moves it to the scalar file"
+     (equal? (cdr (p2sel 'p2hi 'fa2 '(v6)))
+             '((vslidedown.vi v31 v6 1) (vfmv.f.s fa2 v31))))
+
+(ck! "the temporary is the arch's vector scratch, not a register named twice"
+     (eq? rv64-vector-scratch (car (arch-vector-scratch arch-rv64))))
+
+(ck! "and it is not allocatable, so nothing else can be holding it"
+     (not (memq rv64-vector-scratch (arch-vector arch-rv64))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))

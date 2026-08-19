@@ -66,6 +66,7 @@
 
 (library (sonic target-rv64)
   (export rv64-selector rv64-rules rv64-addr-scratch rv64-overflow-scratch
+          rv64-vector-scratch
           current-litpool
           rv64-trap-label rv64-call-emitter)
   (import (chezscheme)
@@ -111,6 +112,16 @@
   ;; consumer would have the same problem again. See bead 1mp.9.
   (define rv64-addr-scratch (make-parameter 't1))
   (define rv64-overflow-scratch (make-parameter '(t0 t1)))
+
+  ;; The vector temporary D172's two-instruction sequences need. Read off the
+  ;; arch rather than written down again: regs.ss holds it out of the allocatable
+  ;; pool, and two places naming the same register independently is how they come
+  ;; to disagree.
+  (define rv64-vector-scratch
+    (let ((s (arch-vector-scratch arch-rv64)))
+      (when (null? s)
+        (error 'target-rv64 "rv64 has no vector scratch register"))
+      (car s)))
 
   ;; Where a failed check goes. One label per check name; the handler is E3's.
   (define (rv64-trap-label check-name)
@@ -568,8 +579,72 @@
         ((checked)   (emit-check 'rv64-select pn ops tag))
         (else (error 'rv64-select "unexpected control on a chk" c)))))
 
+  ;; --- packed pairs ---------------------------------------------------------
+  ;;
+  ;; THE VTYPE GOES IN FRONT OF EVERY ONE OF THEM, AND THAT IS THE FIRST VERSION
+  ;; ON PURPOSE. x86-64 spells width in the mnemonic -- `vaddpd` is two lanes
+  ;; whatever the machine was doing a moment ago -- so its packed rules are one
+  ;; line each and stateless. RVV computes on whatever `vtype` and `vl` say at
+  ;; the instruction, so two-lane f64 is a property of the machine BETWEEN two
+  ;; points rather than of the op (D169).
+  ;;
+  ;; One `vsetivli` per operation cannot be wrong and costs one instruction each.
+  ;; Hoisting it out of a region is the optimisation, and D171 already bounded
+  ;; where that is legal: `vtype` and `vl` are caller-saved under the psABI, so a
+  ;; hoisted `vsetivli` does not survive a call and the cheap placement is only
+  ;; available in call-free regions. Measure before hoisting -- D167 is the
+  ;; standing reminder that an argument from a mechanism is not a measurement.
+  ;;
+  ;; `vsetivli` and not `vsetvli`: the length is the literal 2, so it needs no
+  ;; register to carry an AVL. `rd` is `zero`, which discards the granted vl
+  ;; rather than burning a scratch -- we are asserting a length, not asking for
+  ;; one, and at vl=2 with e64/m1 every RVV implementation grants it.
+  (define vtype-2xf64 '(e64 m1 ta ma))
+
+  (define (setvl2) `((vsetivli zero 2 ,vtype-2xf64)))
+
+  ;; `vfsub.vv vd, vs2, vs1` computes vs2 - vs1, and this file's tables keep
+  ;; TEXTUAL operand order, so `(vfsub.vv dst a b)` is a - b. Same for divide.
+  ;; Getting that backwards is a wrong answer on two of the four and no
+  ;; difference at all on the other two, which is the sort of thing the
+  ;; differential oracle catches and a unit test on `add` does not.
+  (define (packed2 mn)
+    (lambda (dst sc srcs)
+      (unless (= (length srcs) 2)
+        (error 'rv64-selector "a packed pair op expects two sources" mn srcs))
+      `(,@(setvl2) (,mn ,dst ,(car srcs) ,(cadr srcs)))))
+
   (define rv64-rules
     (list
+     (cons 'p2add (packed2 'vfadd.vv))
+     (cons 'p2sub (packed2 'vfsub.vv))
+     (cons 'p2mul (packed2 'vfmul.vv))
+     (cons 'p2div (packed2 'vfdiv.vv))
+     ;; one scalar into both lanes
+     (cons 'p2splat
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 1)
+               (error 'rv64-selector "p2splat expects one source" srcs))
+             `(,@(setvl2) (vfmv.v.f ,dst ,(car srcs)))))
+     ;; (a, b) from two scalars: splat a, then slide b into the top lane.
+     ;; Through the scratch rather than through `dst`, because `dst` may BE one
+     ;; of the sources -- `vfmv.v.f dst, a` would then destroy `b` before the
+     ;; slide reads it.
+     (cons 'p2pack
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'rv64-selector "p2pack expects two sources" srcs))
+             `(,@(setvl2)
+               (vfmv.v.f ,rv64-vector-scratch ,(car srcs))
+               (vfslide1down.vf ,dst ,rv64-vector-scratch ,(cadr srcs)))))
+     ;; lane 1 back out to the scalar file
+     (cons 'p2hi
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 1)
+               (error 'rv64-selector "p2hi expects one source" srcs))
+             `(,@(setvl2)
+               (vslidedown.vi ,rv64-vector-scratch ,(car srcs) 1)
+               (vfmv.f.s ,dst ,rv64-vector-scratch))))
      (cons 'const  r:const)
      (cons 'add    (binop 'add 'fadd.d))
      (cons 'sub    (binop 'sub 'fsub.d))

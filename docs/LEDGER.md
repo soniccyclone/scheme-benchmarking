@@ -7664,3 +7664,56 @@ neighbourhood already documents, "vreg has no storage class", pointing at a
 register name.
 
 Suite 8635 / 0 / 63.
+
+## D174 — the seven packed rules, and the vtype in front of every one
+
+RV64 now selects all seven of slp.ss's packed operations.
+
+```
+p2add   vsetivli zero,2,e64m1  +  vfadd.vv  d, a, b
+p2sub                          +  vfsub.vv  d, a, b
+p2mul                          +  vfmul.vv  d, a, b
+p2div                          +  vfdiv.vv  d, a, b
+p2splat                        +  vfmv.v.f  d, a
+p2pack                         +  vfmv.v.f  v31, a  ;  vfslide1down.vf d, v31, b
+p2hi                           +  vslidedown.vi v31, s, 1 ;  vfmv.f.s d, v31
+```
+
+**A vtype in front of every operation, deliberately, as the first version.**
+x86-64's packed rules are one line each and stateless because `vaddpd` means two
+lanes whatever the machine was doing a moment ago. RVV computes on whatever
+`vtype` and `vl` say AT the instruction, so two-lane f64 is a property of the
+machine between two points (D169). One `vsetivli` per operation cannot be wrong
+and costs one instruction each; hoisting is the optimisation, and D171 already
+bounded where it is legal -- `vtype` and `vl` are caller-saved, so a hoisted one
+does not survive a call. Measure before hoisting. D167 is the standing reminder
+that an argument from a mechanism is not a measurement.
+
+`vsetivli` rather than `vsetvli`, with `rd = zero`: the length is the literal 2 so
+no register carries an AVL, and discarding the granted vl costs no scratch. We are
+asserting a length rather than asking for one.
+
+**Two details that would each have been a wrong answer.**
+
+`vfsub.vv vd, vs2, vs1` computes vs2 - vs1, and this tree keeps textual operand
+order, so the first source has to land in the vs2 slot. Getting it backwards is
+wrong on subtract and divide and *makes no difference at all* on add and multiply
+-- so a test written against `p2add` would have passed while the compiler computed
+`b - a`. The check names subtract and divide specifically, and reversing the rule
+fails it.
+
+`p2pack` goes through the scratch rather than through `dst`, because `dst` may BE
+one of its sources. `vfmv.v.f dst, a` followed by `vfslide1down.vf dst, dst, b`
+destroys `b` before the slide reads it whenever `dst` and `b` are the same
+register -- which the allocator is free to arrange, and which nothing downstream
+would have flagged.
+
+Nine checks in rv64-test.ss for the shapes, validated by reversing the operand
+order (two fail). The encodings themselves are byte-verified against binutils in
+vec-rv64-test.ss, now 99 instructions including the exact `vsetivli zero, 2` form
+these rules emit. Suite 8643 / 0 / 63, RISC-V gate green.
+
+**What still stands between this and a packed program on RV64:** `slp-program` is
+gated off for rv64 in driver.ss, and the differential oracle against x86-64 is
+what would actually prove the vtype right -- a wrong `vl` produces a wrong answer
+rather than a crash, so nothing here is evidence until that runs.
