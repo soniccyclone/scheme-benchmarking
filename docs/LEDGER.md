@@ -4982,3 +4982,58 @@ fannkuch and expecting time. Measure the front end first -- taken-branch density
 mispredict rate, and how they move -- because three separate optimisations in this
 session (D97's frame reuse, D106's clobber sets, this) all removed real work and
 none of them bought time on it.
+
+## D112 — fannkuch is a quarter front-end stalled, and that is what D101 could not see
+
+D111 removed 3.2% of fannkuch's instructions and 15% of its branches and made it
+3.5% slower, leaving three quarters of the regression unexplained. The counter
+that explains it:
+
+```
+              cycles       front-end stalled     L1-icache misses
+fannkuch   9,917,359,629   2,502,761,867 (25.2%)          771,369
+nbody        941,578,405       4,401,656 (0.5%)            67,363
+```
+
+**A quarter of fannkuch's cycles are spent with the front end unable to deliver
+an instruction**, and it is not instruction-cache: 771K misses over 27 billion
+instructions is nothing. It is branch prediction. 148M mispredicts at roughly
+sixteen cycles of redirect is 2.4B, against 2.50B measured stalled -- the whole
+of it, near enough.
+
+**This corrects D101 properly.** That entry ran llvm-mca on the hot blocks, saw
+them issuing at ~6 instructions per cycle with no bottleneck reported, and
+concluded fannkuch is dispatch-limited so instruction count is the lever.
+llvm-mca has no branch predictor. It modelled the quarter of the machine that was
+not the problem, correctly, and said nothing about the quarter that was. D111 is
+what that blind spot costs: a clean optimisation, correct on every static count,
+that made the benchmark slower.
+
+**Separating the two components changes what the target is:**
+
+```
+              total     stalled   executing   IPC while executing
+fannkuch      9.92B      2.50B      7.41B           3.65
+gcc           8.44B     ~2.74B      5.70B           1.95
+```
+
+gcc spends MORE absolute time on mispredicts than we do and is still faster,
+because its executing portion is 5.70B against our 7.41B. We issue nearly twice
+as densely -- 3.65 against 1.95 -- and carry 2.4x the instructions to do it.
+
+**So the target is 23%.** To match gcc's executing cycles at our own issue
+density needs 20.8B instructions where we have 27.0B. Not the 3.2% D111 removed,
+and not anything a peephole reaches: 23% of a Scheme's instruction count against
+C is a representation question -- tagging, checks, indirection -- not a
+code-generation one.
+
+**And the constraint that makes it hard.** Any change that trades instructions
+for branches loses, because branches are where the 25% goes. D111 removed 861M
+branches and gained 4.2M mispredicts, and the mispredicts cost more than the
+branches saved. A fannkuch optimisation must cut instructions WITHOUT touching
+control flow, or cut mispredicts directly.
+
+**Three optimisations in this session removed real work from fannkuch and none
+bought time**: D97's frame reuse, D106's clobber sets, D111's branch inversion.
+D112 says why -- they were all aimed at the 75% that is not the bottleneck, and
+one of them disturbed the 25% that is.
