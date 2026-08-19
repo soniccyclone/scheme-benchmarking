@@ -6264,3 +6264,41 @@ about the compiler:
 
 Forty-five entries larger than it started, and the largest single result is a
 measurement methodology rather than a speedup.
+
+## D142 — half of `qaq.13`'s description was fixed three days ago
+
+`qaq.13` is the last unstarted feature, and reading it before starting found half
+its premise stale. It lists two gaps and prescribes doing them in order:
+
+> 2. The RV64 target does not yet run nbody at all (1mp.6). It compiles end to
+> end and executes 564M instructions before a non-terminating loop takes it off
+> the end of an array.
+
+That was D81's subject and is asserted in the suite today:
+
+```
+ok  an RV64 image we emit is loaded and run by the kernel, and exits 42
+ok  nbody RUNS on rv64 under qemu
+ok  and its energies are BIT-IDENTICAL to the x86-64 build's
+```
+
+So the sequencing -- finish (2), then write (1) -- is half done, and what remains
+is only the packed lowering: `p2add`, `p2sub`, `p2mul`, `p2splat` and `p2hi` have
+selection rules in `target-x86-64.ss` and none for rv64, and `driver.ss` gates
+`slp-program` off for that target accordingly. The gate's own comment anticipates
+this: "RV64 grows one -- RVV, or pairs -- this becomes a capability question
+rather than a target name."
+
+**And that half is not incrementally reachable.** RV64 without RVV has no packed
+float, so there is no first step that produces a measurable packed operation
+before a vector register class and stateful `vsetvli` both exist. That is why it
+stays the last unstarted item rather than becoming the next one: it is the only
+remaining work whose smallest useful increment is a subsystem.
+
+**Worth noting how the staleness survived.** The bead was split out on
+2026-08-18, the same day D81 landed, and nothing re-read it afterwards. Beads
+carry their filing-time reasoning the way ledger entries do, but unlike ledger
+entries they are meant to be current -- and there is no convention here for
+re-reading an open bead against work done since. Every stale line found this
+session (D123's prescription, D124's, D125's, and this) was found by acting on
+the bead rather than by reviewing it.
