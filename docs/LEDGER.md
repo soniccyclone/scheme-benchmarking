@@ -5569,3 +5569,48 @@ sharper question than D123's, answerable by the same method one stage later, and
 it still decides whether `qaq.30` is a trade or a gap.
 
 Diagnostic reverted; suite green.
+
+## D125 — correcting D124: ABCD is inside elide, and the diagnostic measured the wrong thing
+
+Two errors in D124, both mine, both found by continuing to look.
+
+**ABCD is not a later stage.** D124 said `elide` is "not what discharges them --
+`abcd.ss` is, ... running at stage 07 after it". `abcd.ss` is called FROM
+`elide.ss`, at line 314, as one of the ways `elide` answers a bounds query:
+
+```scheme
+[(abcd-in-bounds? (eenv-graph env) i (or n (abcd-length-vertex v)))
+ (values #t 'abcd)]
+```
+
+The "Stage 07" in its header is a module label, which I read as a pipeline
+position. So there is no later pass to measure at, and D124's instruction to
+take the comparison at ABCD instead of elide is wrong in the same way D123's was
+-- confidently, and about a pass that is not where it says.
+
+**And the inconsistency that produced it has a mundane explanation.** D124 found
+twenty-plus bounds sites reported KEPT with unrolling on, in a configuration whose
+binary emits zero bounds branches, and treated the contradiction as evidence of
+another pass. `elide-stats-sites` is a MUTABLE accumulator and
+`elide-to-fixpoint` runs the analysis repeatedly; a site kept in round one and
+proved in round three is still in the list. The diagnostic printed the union
+across rounds, not the final state. The contradiction was in the instrument.
+
+**What survives from D123 and D124.** The mechanism, which is documented in
+`elide.ss` and is not in question: a loop variable's range is derived at the call
+site and dies there, because lifting made the loop body a separate procedure
+whose parameters arrive with no facts, so the interval must round-trip through
+the driver as a premise. Unrolling puts two iterations in one procedure and skips
+the round-trip. That remains the best account of D118's fourteen-versus-zero.
+
+**What does not survive: both prescriptions.** D123 said measure at elide, D124
+said measure at ABCD, and the correct answer is that a useful measurement has to
+distinguish a site's FINAL verdict from its history -- which means reading the
+last round's stats, or counting `chk` nodes still marked `checked` in the program
+`elide-to-fixpoint` returns, rather than the accumulated site list. Both beads
+carry a prescription; both are now wrong; `qaq.30` gets the correction.
+
+Three entries chasing one question, each ending in a confident instruction that
+the next entry had to withdraw. The common failure is not the guessing -- D110
+and D116 guessed and were caught the same way -- it is writing the guess into a
+bead as a method, which lends it an authority the reasoning never had.
