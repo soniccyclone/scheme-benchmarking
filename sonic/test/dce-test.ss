@@ -20,7 +20,7 @@
 ;;;
 ;;; Input is an Lmach datum: (program ([lbl (block (i ...) transfer)] ...) entry).
 
-(import (chezscheme) (sonic dce))
+(import (chezscheme) (sonic dce) (sonic driver) (sonic pipeline))
 
 (define checks 0)
 (define failures 0)
@@ -128,6 +128,37 @@
 (let-values (((out st) (run (one-block '((const live raw-word 1)) '(ret live)))))
   (ck! "the program's entry label survives the rewrite"
        (eq? (caddr out) 'entry)))
+
+;; --- THE PASS IS NOT INERT ON A REAL PROGRAM --------------------------------
+;;
+;; Everything above is a fixture, and a fixture cannot catch inertness: it tests
+;; the shape it was written for, which is by construction a shape the pass
+;; handles. D132 is the case that motivates this -- `merge-identical-functions`
+;; did nothing at all on RV64 for two entries, invisible because every check
+;; asked whether the output was CORRECT and none asked whether the pass did
+;; ANYTHING.
+;;
+;; dce cannot be asserted from the emitted code: its removals happen over Lmach
+;; and selection, peephole and the allocator then create and remove their own.
+;; The tempting property -- "no dead const survives to the listing" -- is FALSE
+;; against a working pass, because a `chk` keeps such definitions live at this
+;; level and their uses become immediates only later (D110, D136).
+;;
+;; So it is asserted where it runs, using the driver's stage hook to capture the
+;; program dce is handed.
+(define captured #f)
+(parameterize ((compile-stage-hook
+                (lambda (stage prog)
+                  (when (eq? stage 'lmach/addrfold) (set! captured prog)))))
+  (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs))
+
+(ck! "the stage hook delivered nbody's Lmach program" (and captured #t))
+
+(let-values (((out st) (dce-program captured)))
+  (ck! "dce removes something from nbody: the pass is not inert"
+       (> (dce-stats-removed st) 0))
+  (unless (> (dce-stats-removed st) 0)
+    (display "       removed=") (display (dce-stats-removed st)) (newline)))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)

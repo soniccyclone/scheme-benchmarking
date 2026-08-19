@@ -26,7 +26,7 @@
   ;; Named `compile-sonic` rather than `compile-program`: Chez's own
   ;; `(chezscheme)` exports both `compile-program` and `compile-to-file`, and
   ;; shadowing them in a library body is an error rather than a shadow.
-  (export compile-sonic compile-sonic-to-file
+  (export compile-sonic compile-sonic-to-file compile-stage-hook
           ;; Exported so the LEGALITY pass can be run on the same IR the back
           ;; end sees. One `elide-program` call discharges 68 of nbody's 227
           ;; checks; this fixpoint discharges nearly all of them, and a
@@ -147,12 +147,15 @@
                ;; removes it -- which is the whole point: the vreg never reaches
                ;; register allocation, so it never competes for a register and
                ;; never spills.
+               ((hook-lmach) ((compile-stage-hook) 'lmach cprog))
                ((aprog addr-st) (addrfold-program cprog))
+               ((hook-addrfold) ((compile-stage-hook) 'lmach/addrfold aprog))
                ;; SLP after DCE, so the packer sees the final instruction set
                ;; and does not pack something about to be deleted. Its packed
                ;; values are ordinary raw-f64 vregs -- a 128-bit pair lives in
                ;; one float register -- so nothing downstream changes.
                ((dprog dce-st) (dce-program aprog))
+               ((hook-dce) ((compile-stage-hook) 'lmach/dce dprog))
                ;; SLP THEN CONTRACTION, and the order is the whole point.
                ;;
                ;; Contraction first was the obvious reading -- fuse, then pack
@@ -300,6 +303,27 @@
   ;; means exactly one site turns per round. nbody's nest wants 5 + 10 + 5,
   ;; and at 24 the rounds ran out on the cheap loop before reaching the
   ;; expensive one.
+  ;; A TEST'S VIEW OF THE MIDDLE OF THE PIPELINE.
+  ;;
+  ;; `compile-sonic` returns finalized functions, so a pass whose effect is
+  ;; visible in the emitted code can be asserted end-to-end -- `elide` by its
+  ;; bounds branches, `addrfold` by spills, `merge` by duplicate functions. A
+  ;; pass whose removals are consumed downstream cannot: D136 tried to write
+  ;; `dce`'s assertion and found the obvious property ("no dead const survives
+  ;; to the listing") is FALSE against a working pass, because a `chk` keeps
+  ;; those definitions live at dce's level and selection folds their uses only
+  ;; later.
+  ;;
+  ;; Such a pass can only be asserted where it runs. This hook is called with
+  ;; the stage name and the program at each point the driver already binds one,
+  ;; so a test can capture the form it needs without re-running the front half
+  ;; by hand -- which `unroll-test.ss` does in nine lines that drift whenever a
+  ;; pass moves.
+  ;;
+  ;; Default is a procedure that ignores both arguments, so compilation is
+  ;; unchanged when nobody is looking.
+  (define compile-stage-hook (make-parameter (lambda (stage prog) (void))))
+
   (define unroll-fully-rounds (make-parameter 24))
 
   ;; Specialize, fold, repeat. Bounded twice over: specialize.ss has its own

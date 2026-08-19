@@ -6064,3 +6064,44 @@ lacking an assertion. Reading the lines cut that to five. Attempting one of the
 five found that the five are not the problem the other six were. Three
 successive narrowings, none of which needed information that was unavailable at
 the start.
+
+## D137 — a stage hook, and `dce` asserted where it runs
+
+D136 concluded that five passes cannot be asserted end-to-end because their
+effect is consumed downstream, and that this is one design question -- what the
+pipeline lets a test see -- rather than five test-writing tasks. Answering it
+cost three lines.
+
+`compile-stage-hook` is a parameter the driver calls with a stage name and the
+program at each point it already binds one. Default ignores both arguments, so
+compilation is unchanged when nobody is looking; the suite is identical at 8602
+checks with the hook in and nothing using it.
+
+`dce` now has its assertion, and it is placed where the pass runs rather than
+where its effect would have to survive four later passes to be visible:
+
+```scheme
+(parameterize ((compile-stage-hook
+                (lambda (stage prog)
+                  (when (eq? stage 'lmach/addrfold) (set! captured prog)))))
+  (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs))
+
+(ck! "dce removes something from nbody: the pass is not inert"
+     (> (dce-stats-removed st) 0))
+```
+
+**Validated by breaking it**, per D133: with `removable?` forced to `#f` the
+assertion fails and reports `removed=0`. Restored, suite green at 8604 checks
+across 60 suites.
+
+**What this leaves.** `cse`, `peephole`, `fold` and `specialize` can now be
+asserted the same way -- the mechanism exists and the idiom is eight lines. That
+is genuinely four test-writing tasks now, which is what D135 mistakenly thought
+they already were.
+
+**The narrowing, end to end:** a grep said eleven passes lacked the assertion;
+reading the matching lines said five; attempting one said the five were blocked
+on something the other six were not; building that thing took three lines and
+unblocked all five. Each step was available at the start. The only thing that
+made the last one visible was refusing to write the assertion the easy way when
+the easy way would have been false.
