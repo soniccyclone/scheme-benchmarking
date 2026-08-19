@@ -5614,3 +5614,47 @@ Three entries chasing one question, each ending in a confident instruction that
 the next entry had to withdraw. The common failure is not the guessing -- D110
 and D116 guessed and were caught the same way -- it is writing the guess into a
 bead as a method, which lends it an authority the reasoning never had.
+
+## D126 — stopping: three instrument errors on one question
+
+D125 said a useful measurement must read a site's final verdict rather than its
+history, and prescribed counting `chk` nodes still marked `checked` in the
+program `elide-to-fixpoint` returns. Attempting it produced a third instrument
+error in the same thread.
+
+```
+D124   read elide-stats-sites, a MUTABLE ACCUMULATOR across fixpoint rounds,
+       so sites kept in round one and proved in round three counted as kept
+D126a  walked `p1` as an s-expression; it is a nanopass RECORD, so the walk
+       matched nothing and reported zero
+D126b  unparsed first and still reported zero for BOTH `checked` and
+       `unchecked`, which means the traversal finds no `chk` nodes at all --
+       so the zero is the instrument, not the program
+```
+
+Each was caught by the next attempt, which is the process working. But the rate
+is the signal: three consecutive measurements of one quantity, none of them
+right, on a question that has now consumed D123, D124, D125 and this. The
+marginal value of a fourth attempt tonight is lower than the marginal risk of a
+fourth confident wrong instruction written into a bead -- which is exactly the
+failure D125 identified and this entry would repeat.
+
+**What is established and is not in doubt:**
+
+- Unrolling is what makes nbody's elision work: fourteen bounds branches in the
+  finished binary without it, zero with (D118, measured on the binary rather
+  than on any pass's self-report).
+- The mechanism is documented in `elide.ss`: a loop variable's range is derived
+  at the call site and dies there, because lifting made the loop body a separate
+  procedure whose parameters arrive with no facts, so the interval round-trips
+  through the driver as a premise. Unrolling puts two iterations in one
+  procedure and skips the round-trip.
+- The trade `qaq.30` states is therefore real as measured: nbody's zero checks
+  cost 4.7% of fannkuch (D122).
+
+**What is not established:** whether the round-trip is what fails on the rolled
+loop, and so whether supplying that fact directly would dissolve the trade. The
+question is worth answering and the three prescriptions written for it are all
+withdrawn. `qaq.30` now says only what is known, what is not, and that the
+instrument has to be validated against a configuration with a KNOWN nonzero
+answer before its zeros are believed.
