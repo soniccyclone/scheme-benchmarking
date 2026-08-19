@@ -8687,3 +8687,32 @@ error message naming a socket.
 
 qaq.35 closed. The wall-clock assertion that returned "1 after 0s" was never a
 separate bug; it was the same non-starting container, and it reports 124 now.
+
+## D196 — checkout off node20, verified by the numbers rather than the tick
+
+Minor, and recorded for one reason. Every green run carried:
+
+> Node.js 20 is deprecated. `actions/checkout@v4` targets Node.js 20 but is being
+> forced to run on Node.js 24.
+
+A forced shim is a scheduled failure, so `actions/checkout` moves to v5, the first
+major on node24. v6 and v7 exist and are also node24; v5 is the smallest step that
+answers the deprecation, and a checkout action is not where this project wants to
+discover a behaviour change -- `submodules: recursive` is load-bearing for
+sonic/vendor/nanopass, and a checkout that quietly stopped fetching it would
+present as a compile error in a pass nobody touched.
+
+**Checked by the rule D195 just paid for.** The run is green, and green is not the
+evidence:
+
+```
+containment   8 [PASS] lines
+suite         8653 checks, 0 failures     (identical to this machine)
+nanopass      present in the log
+annotation    gone
+```
+
+Five days of red taught that a passing tick can mean nothing executed. A version
+bump to the step that fetches the source is exactly where that failure would
+recur -- an empty checkout runs no tests and fails nothing -- so the check is that
+the same 8653 arrived, not that the box was green.
