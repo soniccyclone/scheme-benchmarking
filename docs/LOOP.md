@@ -111,8 +111,7 @@ both stable to 0.002%.
 
 Read the intervals, not the point estimates. Plain `sonic` is genuinely behind C
 in both sessions.
-it is a statistical tie. An earlier version of this section said the CI excluded
-1.0; that was true of a different comparison and is not true of this one.
+
 **NO LONGER BLOCKED ON MEASUREMENT.** `harness/vm-perf.sh` gives hardware
 counters through a KVM guest — `perf_event_paranoid` is a property of A kernel,
 so booting a second one where we are root settles it, with nothing on the host
