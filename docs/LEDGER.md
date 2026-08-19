@@ -7114,3 +7114,93 @@ transfer automatically -- but neither does the opposite. Whether `next.loop` is
 hot enough for its 12 spills to matter is unmeasured; `MODE=record
 harness/vm-perf.sh` on fannkuch answers it, and qaq.23 should not be scheduled
 before it does.
+
+## D163 — a mapped fannkuch profile, and qaq.21 is seven times qaq.23
+
+D162 left one question: is `next.loop` hot enough that its 12 spills matter? A
+sampled cycle profile at n=11, mapped to functions, answers it and reprioritises
+two beads at once.
+
+**Getting the profile required three corrections, all of the same species.** The
+first run profiled `/work/build/fk`, which does not exist -- `measure-fannkuch.sh`
+builds into `build/fannkuch/`, as its own header says. `perf record` on a missing
+binary reports a header and no samples, and the empty output was the only tell.
+The second mapped the report's `[.]` column directly against listing addresses;
+that column is load-relative, and the absolute address is `0x400000` plus it.
+The third would have disassembled `bench/fannkuch/config-sonic.sps` while the
+profiled binary was built from `build/fannkuch/fk.sps`, the n=11 rewrite -- the
+exact stale-artifact trap `disasm-sonic.sh`'s header exists to prevent.
+
+The result, per function, against the instruction mix of the listing that built it:
+
+```
+function                    prof%  insns  r2r mov  spill
+loop%2.224.loop             34.58     19        5      0
+loop%2.14@8.225.loop        17.16     18        3      0
+count-flips.loop            15.61     19        6      0
+copy-perm.loop              10.12     16        3      0
+next.loop                    9.36     54       12     12
+join.129.loop                1.29     18        8      0
+step.loop                    1.11     30        9      9
+```
+
+**qaq.23 is smaller than it looked.** All the spill traffic is real and still
+confined to the two cycle members, but they are 10.47% of the profile between
+them, and `next.loop` -- the one that carries twelve of the spills -- is fifth.
+Not one of the four hottest blocks spills at all.
+
+**qaq.21 is much larger than P4.** The top four blocks are 77.5% of the profile,
+and 17 of their 72 instructions are register-to-register copies: **23.6% of the
+work in the hot path moves a value from one register to another.** count-flips
+is a third copies. An upper bound, if every copy vanished and cycles followed
+instructions in those blocks, is about 18% of total cycles; the real figure will
+be lower, and it is still an order above anything else open.
+
+**This is the one place D120's blanket finding does not transfer.** That entry
+concluded instruction counts do not convert to time on fannkuch, resting on D111
+-- 863M instructions and 861M BRANCHES removed, 3.5% slower -- explained by D112,
+which measured 25.2% of cycles front-end stalled on mispredicts. Removing a
+register copy does not remove a branch. It removes decode and fetch pressure,
+which is the resource D112 says is the constrained one. The two experiments push
+on opposite things, and D111 is not evidence about this one.
+
+qaq.21 moves to P2. qaq.23 stays P4 with its ceiling now measured rather than
+assumed.
+
+## D164 — fannkuch's instruction baseline moved 10.5% and every stale citation of it is wrong
+
+Rebuilding fannkuch at n=11 to get D163's profile produced a number that does not
+match the one this project has been quoting:
+
+```
+                   recorded (D127)      measured now      delta
+sonic              27,033,942,394       29,877,604,024    +10.5%
+c-native           10,992,262,824       10,992,262,824     unchanged
+ratio                        2.46x               2.72x
+```
+
+The reference is identical to the digit, so this is ours and not the harness.
+D127 measured the recorded figure as stable to 0.001% across sessions, so a 10.5%
+move is a real change in what we emit, not noise.
+
+**It is expected, and it is a win.** Turning `unroll-size-budget` off by default
+was the qaq.30 resolution: raising `ascent-rounds` to 16 made elision independent
+of unrolling, so unrolling could go, and fannkuch got 6.0% FASTER with the ranges
+non-overlapping. An unrolled loop amortises its increment and test over several
+bodies; removing the unrolling hands those back. We bought 6.0% of cycles with
+10.5% of instructions.
+
+That is the cleanest statement of D89/D111 this project has, and it runs in the
+direction nobody tests: those entries showed instructions removed while cycles
+rose. This is instructions ADDED while cycles fell, on a different benchmark and
+a different mechanism. Instruction count is not a proxy for time here in either
+direction.
+
+**The bookkeeping consequence is the point of this entry.** `27,033,942,394`
+appears in prose, in LOOP.md's standing, and in at least one bead's acceptance
+criteria, where it is the number a future change is supposed to fall against.
+Every one of those now silently compares against a baseline that is 2.8 billion
+instructions stale, which is D94's failure exactly -- a fresh measurement read
+against a figure from before an unrelated change. Corrected in LOOP.md and in
+qaq.26; the older ledger entries keep their numbers, because they were right when
+written, and carry a pointer here.

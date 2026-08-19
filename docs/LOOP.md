@@ -134,8 +134,15 @@ and its wall clock moved 1.50% (D127).
 So do not quote either row as the standing. The supportable claim is that
 **sonic-fma and c-native are within a few percent of each other, and which side
 of the line the interval falls on depends on the day.** What reproduces is the
-instruction counts: nbody 2,981.7M against ref-native's 1,667.5M, fannkuch 2.46x,
-both stable to 0.002%.
+instruction counts: nbody 2,981.7M against ref-native's 1,667.5M, both stable to
+0.002%, and fannkuch 2.72x -- 29,877,604,024 against 10,992,262,824 at n=11. That
+fannkuch figure was 2.46x until unrolling went default-off; the count rose 10.5%
+and bought 6.0% of cycles, so do not read it as a regression (D164).
+
+fannkuch's own wall clock at n=11, 9 reps, freshly built: sonic 3222.9 ms min
+against c-native's 2736.2 ms, **1.178x behind**. The mapped cycle profile is in
+D163 -- four blocks are 77.5% of it and 23.6% of their instructions are register
+copies.
 
 Read the intervals, not the point estimates. Plain `sonic` is genuinely behind C
 in both sessions.
