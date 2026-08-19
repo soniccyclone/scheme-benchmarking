@@ -36,6 +36,39 @@ skipped=0
 skip() { echo "  [SKIP] $1"; skipped=$((skipped + 1)); }
 
 # ---------------------------------------------------------------------------
+# 0. CAN A CONTAINER RUN AT ALL?
+# ---------------------------------------------------------------------------
+#
+# Every assertion below asks whether something was PREVENTED, and reads a failed
+# command as evidence that it was. If no container starts, all of them are
+# satisfied by nothing happening. That is not hypothetical: CI ran this entire
+# gate in 0.8 seconds -- against roughly thirty locally, where one assertion
+# alone waits six seconds for a timeout -- and reported three passes. Nothing had
+# executed.
+#
+# So the gate establishes that it can run a container before it claims anything
+# about what a container prevents, and it does NOT suppress stderr here, because
+# the reason it cannot start is the whole diagnosis. Every other invocation in
+# this file discards stderr, which is why five days of CI said '' instead of
+# saying what was wrong.
+echo "0. a container starts at all"
+alive_err=$(mktemp)
+alive=$("$here/tools/container.sh" bash -c 'echo CONTAINER-ALIVE' 2>"$alive_err" | tail -1)
+if [ "$alive" != "CONTAINER-ALIVE" ]; then
+    echo "  [FAIL] no container started, so nothing below would be tested"
+    echo "  ---- stderr from the attempt ----"
+    sed 's/^/  | /' "$alive_err" | head -20
+    rm -f "$alive_err"
+    echo
+    echo "containment: ABORTED -- a gate that cannot start a container cannot"
+    echo "report on one. Three assertions here read a failed command as proof"
+    echo "that something was prevented, so this would otherwise have passed."
+    exit 1
+fi
+rm -f "$alive_err"
+ok "a container starts and runs a command"
+
+# ---------------------------------------------------------------------------
 echo "1. the limits are present in the cgroup"
 # ---------------------------------------------------------------------------
 # BOTH CGROUP LAYOUTS, because this readback had only one and container.sh has

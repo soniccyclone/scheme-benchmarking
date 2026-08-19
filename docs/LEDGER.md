@@ -8542,3 +8542,54 @@ diagnosis, not a verified repair.
 Locally: 7 passed, 0 failed, 0 skipped, unchanged. Whether CI agrees is the next
 push's business, and assertion 4 -- the ENTRYPOINT timeout returning 1 after 0s --
 is still open and still unexplained.
+
+## D193 — the gate ran in 0.8 seconds and reported three passes
+
+D192's diagnosis was wrong. The cgroup layout was not the problem, and neither was
+the one I reached for after it. The evidence that settles it is a timestamp:
+
+```
+##[group]Run ./tools/test-containment.sh     08:01:01.2
+containment: 3 passed, 3 failed, 1 skipped   08:01:02.0
+```
+
+**Eight hundred milliseconds.** Locally this gate takes around thirty seconds --
+assertion 4 alone waits six for a `timeout` to fire, and the memory bomb has to
+allocate its way to 8g first. Nothing in CI executed. Every container invocation
+failed instantly and every assertion that reads a failed command as containment
+reported success.
+
+That is three false passes, not one, and 2b was only the one visible enough to
+notice because its payload had a filename:
+
+```
+[PASS] runaway was refused before it could allocate (MemoryError)
+[PASS] fork bomb stopped short of 2000 processes
+[SKIP] no vng in the image                       <- honest, after D191
+[FAIL] memory.max is ''                          <- honest by accident
+```
+
+The `[FAIL]`s were the only true statements in the run, and they were true for the
+wrong reason: `''` is what you read when the command produced no output at all.
+
+**The shape, for the fourth time in this one file.** An assertion that asks
+"was this prevented?" is satisfied by nothing happening, and nothing happening is
+the easiest state to reach. D191 named it after finding three instances inside
+assertion 2b; the same sentence describes assertions 2 and 3, and neither was
+touched, because a gate reporting 4 passed / 3 failed looks like a gate with three
+bugs rather than a gate that never ran.
+
+Fixed with an assertion that cannot be satisfied by absence: **step 0 runs a
+container and requires it to say `CONTAINER-ALIVE`.** If it does not, the gate
+prints the stderr from the attempt -- unsuppressed, unlike every other invocation
+in this file, which is why five days of CI logs said `''` rather than saying what
+was wrong -- and aborts rather than continuing into assertions that would pass.
+
+Locally unchanged: 8 passed, 0 failed, 0 skipped. What CI now reports is a real
+question with a real answer, which it has not been since 2026-08-14.
+
+**And the standing lesson gets sharper.** D191 said the loop should read CI. This
+says something narrower and worse: the gate was RED for five days and its own
+output was misleading about why, so even reading it would have sent someone after
+three imaginary bugs. A wall-clock sanity check -- thirty seconds of work took
+one -- was the cheapest available signal and nothing was looking at it.
