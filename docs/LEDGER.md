@@ -5186,3 +5186,56 @@ assumed -- the specializer split them for a reason D89 partly documents, and
 `qaq.21`'s pre-colouring would remove the copies without removing the
 transitions. Filed as `qaq.29`, with the profile, the four listings and the copy
 counts, so the next attempt starts from the shape rather than from a count.
+
+## D116 — unrolling costs fannkuch 5.6%, and it is what makes bounds-check elision work
+
+`qaq.29` asked whether the four reversal functions could be merged. Diffing them
+answers a different question first: `loop%2.372` and `loop%2.14.434` are
+**identical modulo label names**, as are `loop%2.14@8.373` and `loop%2.14@8.435`.
+Two exact copies of each reversal half. `unroll-program` made them -- by-two
+unrolling duplicates the body, unconditionally, with `unroll-size-budget` at
+1000.
+
+**Turning it off is a large win.** Both configurations swept across four
+`layout-pad` values, per D105:
+
+```
+unroll OFF   9,261.4  9,426.3  9,624.7  9,162.0   mean 9,368.6M cycles
+unroll ON    9,984.7  9,962.9  9,783.6  9,975.3   mean 9,926.6M
+```
+
+Ranges do not overlap. **5.6% faster with the pass off**, while executing 13.7%
+MORE instructions -- 30.73B against 27.03B. nbody moves 0.17%, inside its noise,
+while paying 6.7% more instructions.
+
+That is exactly D112's picture: fannkuch spends 25.2% of its cycles front-end
+stalled on mispredict redirects, and duplicating a hot loop doubles its branch
+targets. What the predictor loses exceeds what the removed loop control saves.
+Third time this session that fewer instructions meant more time on this
+benchmark, and the first with a mechanism established rather than suspected.
+
+**And it cannot simply be switched off, which the test suite caught and I would
+not have.** With unrolling disabled:
+
+```
+FAIL nbody emits NO bounds check at all
+FAIL fannkuch-redux emits no bounds check either, once perm's contents are bounded
+```
+
+**Unrolling is load-bearing for check elision.** The duplicated body is what gives
+the interval and element-range analyses the second copy of the induction step
+they need to prove the index in range. So the 13.7% extra instructions in the
+"off" column are partly re-added bounds checks -- and it was still 5.6% faster
+with them.
+
+**So this is a trade, not an optimisation, and the trade is not mine to make.**
+Five and a half percent on one benchmark against the check-elision property that
+D5 and D24 are built on -- the thing this compiler is arguably *for*. Reverted,
+and the suite is green at 8589/0/59.
+
+Recorded on `qaq.29` and raised to Nathan alongside M5's accuracy question, since
+both are decisions about what SonicScheme promises rather than about what is
+fast. A third possibility exists and is untested: keep unrolling for the analysis
+and UNDO it afterwards, once the checks are proven and before code generation.
+That would need the elision facts to survive re-rolling, which nothing in the
+tree currently does.
