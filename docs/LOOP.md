@@ -10,6 +10,25 @@ wasted hour, it is a wrong number in the ledger that later work is built on.
 
 ---
 
+## Before `bd ready`: is main green?
+
+```
+gh run list --limit 3
+```
+
+**A red main outranks every open bead.** This is not a style preference. CI was
+failing on every push from 2026-08-14 to 2026-08-19 while this loop reported
+progress each iteration and wrote 130 ledger entries, because the loop read its
+own issue tracker and nothing else (D191). An agent that checks only the queue it
+maintains is measuring its own opinion.
+
+If it is red: find out what broke before adding to it, and treat "the gate cannot
+run here" as red rather than as passing. D191's third false pass in one assertion
+came from reading a failure as a success -- the gate asked whether something went
+wrong instead of whether the right thing went right.
+
+---
+
 ## Where the project actually stands
 
 **CHECKS EMITTED, which is what D5 and D24 make this project about.** Both
