@@ -8638,3 +8638,52 @@ theory that was wrong (D192); and no one was reading CI at all, so none of it
 surfaced (D191). Four entries to arrive at one missing environment variable --
 and the variable is the least interesting part. Each layer had a failure mode that
 made the layer below it invisible.
+
+## D195 — CI is green, and every assertion in it now actually ran
+
+```
+✓ suite in 6m43s
+```
+
+First passing run since before 2026-08-14. What matters more than the tick is what
+the containment gate now prints inside CI:
+
+```
+0.  [PASS] a container starts and runs a command
+1.  [PASS] memory.max is 8g (8589934592)
+1.  [PASS] pids.max is 512
+2.  [PASS] runaway was SIGKILLed by the cgroup OOM killer (137)
+2.  [PASS] host swap barely moved during the runaway (0 MiB)
+2b. [PASS] guest runaway died inside the guest (GUEST-BOMB-EXIT=137)
+3.  [PASS] fork bomb stopped short of 2000 processes
+4.  [PASS] a spinning process was killed and reported 124
+```
+
+Compare that with what the same gate said five days running: three passes, none of
+which had executed anything. `SIGKILLed by the cgroup OOM killer (137)` is a
+kernel doing the thing the limit exists for; `refused before it could allocate
+(MemoryError)` was python declining to try, in a container that never started.
+Both print `[PASS]`.
+
+**Two lines of configuration, and neither is the point.**
+
+```
+SONIC_COMPOSE: docker compose     # the picker chose podman; podman had no socket
+SONIC_CPUS: 4                     # docker refuses cpus above the core count
+```
+
+The point is that four separate mechanisms each hid the next one down. CI chose an
+engine that could not start a container. The gate's assertions were satisfied by
+nothing happening, so they reported success (D193). Its one honest complaint was
+an empty string, which is what a suppressed error looks like, and it sent me after
+a cgroup layout that was not the problem (D192). And nothing read CI at all, so
+none of it surfaced for five days (D191).
+
+**The gate is now worth its runtime, and it was not before.** A containment gate
+that passes without running is worse than no gate: it is the reason nobody looks.
+The fix that mattered was not either variable -- it was step 0, an assertion that
+absence cannot satisfy, which turned five days of confident nonsense into one
+error message naming a socket.
+
+qaq.35 closed. The wall-clock assertion that returned "1 after 0s" was never a
+separate bug; it was the same non-starting container, and it reports 124 now.
