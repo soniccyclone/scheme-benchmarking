@@ -8593,3 +8593,48 @@ says something narrower and worse: the gate was RED for five days and its own
 output was misleading about why, so even reading it would have sent someone after
 three imaginary bugs. A wall-clock sanity check -- thirty seconds of work took
 one -- was the cheapest available signal and nothing was looking at it.
+
+## D194 — CI picked the other engine, and the override had been there all along
+
+D193's step 0 was written to make CI say why no container starts. It did, on the
+first run:
+
+```
+Cannot connect to the Docker daemon at unix:///run/user/1001/podman/podman.sock
+Error: executing /usr/libexec/docker/cli-plugins/docker-compose ... exit status 1
+```
+
+`sonic_compose` picks the engine like this:
+
+```
+if   [ -n "${SONIC_COMPOSE:-}" ];              then $SONIC_COMPOSE
+elif command -v podman >/dev/null 2>&1;        then podman compose
+elif command -v docker >/dev/null 2>&1;        then docker compose
+```
+
+**GitHub's ubuntu-latest has podman installed.** So CI took the podman branch,
+while the step immediately before it had built the image with `docker compose
+build`. Podman then delegated to the docker-compose plugin as its external
+compose provider, which went looking for a podman socket that no service was
+running, and every container invocation failed in about a tenth of a second.
+
+The picker's rule is "podman if it is INSTALLED", and what it needed to ask is
+whether the engine can actually reach a backend. Installed and working are
+different questions, and on a machine with both engines the first one is the
+wrong question.
+
+Fixed by setting `SONIC_COMPOSE: docker compose` in the workflow. **The override
+existed from the start** -- it is the first branch of the picker -- and CLAUDE.md
+already stated the intent in words: "tools/container.sh picks the engine -- podman
+compose here, docker compose in CI -- so there is still one code path." CI simply
+never said which. The mechanism was right, the configuration was missing, and
+nothing anywhere compared the two.
+
+**Five days of red, and the chain that produced it is worth reading whole:**
+CI chose an engine that could not start a container; the containment gate's
+assertions were satisfied by nothing happening, so it reported passes (D193); its
+one honest complaint was an empty string, which sent me after a cgroup layout
+theory that was wrong (D192); and no one was reading CI at all, so none of it
+surfaced (D191). Four entries to arrive at one missing environment variable --
+and the variable is the least interesting part. Each layer had a failure mode that
+made the layer below it invisible.

@@ -23,6 +23,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
+    # WHICH ENGINE, SAID OUT LOUD.
+    #
+    # tools/container.sh picks podman when podman is installed, and GitHub's
+    # ubuntu-latest has it -- so CI chose podman while the step above built the
+    # image with `docker compose`, and podman then handed off to the
+    # docker-compose plugin, which tried to reach a podman socket that is not
+    # running:
+    #
+    #   Cannot connect to the Docker daemon at unix:///run/user/1001/podman/podman.sock
+    #
+    # Nothing started, for five days, and the containment gate reported passes
+    # because its assertions were satisfied by nothing happening (D193). The
+    # override existed the whole time; CI simply never set it.
+    env:
+      SONIC_COMPOSE: docker compose
+
     steps:
       - uses: actions/checkout@v4
         with:
