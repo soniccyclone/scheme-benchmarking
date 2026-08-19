@@ -4417,3 +4417,54 @@ for THIS benchmark and measured to be the wrong one for nbody. Neither should be
 justified by nbody numbers, and any measurement of them must be fannkuch's
 deterministic instruction count rather than cycles, which carry 2% noise (D94)
 and are a quarter mispredict recovery besides.
+
+## D102 — a free register goes unused while a value spills, and D95's framing was imprecise
+
+Sizing `qaq.23` — implement the callee-saved registers the convention declares —
+found that it would not buy what D95 implied, and found something else.
+
+**D95 said the flip counter is spilled ACROSS a call. Read the block again:**
+
+```
+mov  %rcx,%r13         r13 = the incoming counter
+...
+call 0x401649
+mov  %rax,%rdx
+mov  %r13,0x8(%rsp)    r13 SURVIVED the call, in a register
+addq $0x1,0x8(%rsp)    and the INCREMENT's destination is the stack
+```
+
+The counter crosses the call in `r13` perfectly well. What lands on the stack is
+the increment's RESULT, which is live across the *next* iteration's call. So the
+spill is an allocation decision, not a failure to survive a call, and the
+sentence in D95 should be read as the latter only if one stops before the fourth
+instruction.
+
+**That weakens `qaq.23`'s premise.** Callee-saved registers guarantee survivors
+that the clobber analysis cannot produce. But here the analysis already produces
+them: neither callee writes `r11`, `r13` or `r14`, so three raw registers survive
+every call in this function without any convention at all. Declaring some of them
+callee-saved adds nothing the caller did not already know.
+
+**And then the actual finding.** The raw pool is
+`(rcx rdx rsi rdi r10 r11 r13 r14)`. `count-flips` writes `r13 r14 rax rbx rcx
+rdx`. It never touches **r11** — which is allocatable rather than scratch (regs.ss
+keeps scratches outside every pool deliberately), is written by neither callee,
+and is not filled by either call site's single argument nor by any return
+register. It is free across the whole function, and a value spills to the stack
+anyway.
+
+Three explanations are available and none is established: the interval's `across`
+set contains r11 for a reason not visible in the listing; linear scan's ordering
+never offers it; or the spill decision happens before the register is known free.
+Filed as `qaq.27` with all three stated so the next attempt starts by
+distinguishing them rather than by picking one.
+
+**Method note, since this is the third time.** The plan was to implement
+`qaq.23`. Sizing it first cost twenty minutes and showed it would have bought
+approximately nothing, which is the same outcome as D93 (hoisting globals, one
+cycle in 3847) and D91 (packing divides, which gcc does not do). Three
+implementations avoided by reading the artifact first; one implementation shipped
+(D97) that was found the same way. The pattern is not that plans are usually
+wrong — it is that a plan and its evidence cost about the same, so there is no
+reason to spend the plan first.
