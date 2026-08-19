@@ -44,7 +44,12 @@ jobs:
       SONIC_CPUS: 4
 
     steps:
-      - uses: actions/checkout@v4
+      # v4 runs on node20, which GitHub deprecated and now force-runs on node24
+      # -- an annotation on every green run and a failure once the shim goes.
+      # v5 is the first major on node24; v6 and v7 exist and are also node24,
+      # but v5 is the smallest step that answers the deprecation, and a checkout
+      # action is not where this project wants to discover a behaviour change.
+      - uses: actions/checkout@v5
         with:
           submodules: recursive        # sonic/vendor/nanopass
 
