@@ -12,6 +12,34 @@ wasted hour, it is a wrong number in the ledger that later work is built on.
 
 ## Where the project actually stands
 
+**CHECKS EMITTED, which is what D5 and D24 make this project about.** Both
+benchmarks, counted on the finished binary by the label each trap branches to:
+
+| | bounds | overflow | before D153-D157 |
+|---|---|---|---|
+| nbody | 0 | 1 | 29 traps |
+| fannkuch | 0 | 3 | 8 traps |
+
+nbody's one is `(fx+ i 1)` against a command-line `n` -- no round count reaches an
+unbounded parameter, so one is the correct answer for that program, and the suite
+pins it at one. fannkuch had never emitted zero bounds checks in this ledger
+before. What moved was `ascent-rounds`, 4 to 16: a constant justified on a single
+example and never re-derived (D157).
+
+**Cycles, four layout-pad values per arm per D105:**
+
+| | before | after | |
+|---|---|---|---|
+| fannkuch | 9,926.6M | 9,331.0M | **-6.0%**, ranges non-overlapping |
+| nbody | 943.5M | 943.9M | unchanged, on 6.9% MORE instructions (D89) |
+
+The 6% decomposes: 1.5% from merging identical functions (D121, D130), 4.5% from
+turning `unroll-program` off -- which only became possible because the round count
+made check elision independent of the duplicated induction step. **The speedup
+came from deleting a transformation.**
+
+---
+
 Slope of N=1,000,000 to 2,000,000, **40 reps**, bootstrap CI, baseline sonic:
 
 | config | ns/step | ratio vs sonic | verdict |
