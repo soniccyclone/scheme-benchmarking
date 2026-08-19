@@ -1334,14 +1334,26 @@
       ;;
       ;; Overlaying the callee's spill slots on ours is sound only because we are
       ;; LEAVING: nothing of ours is read after the jump.
+      ;; EQUAL FRAMES ARE NOT THE REAL PRECONDITION. `add F_caller` followed by
+      ;; the callee's `sub F_callee` is just `rsp += F_caller - F_callee`, so any
+      ;; pair collapses to ONE instruction and an equal pair to none. Returns
+      ;; `(body-label . delta)`, delta being what rsp must move by.
+      ;;
+      ;; `tail-outgoing` must be zero. A tail call that passes arguments on the
+      ;; stack writes them into this frame at offsets the callee reads back from
+      ;; ITS rsp; moving rsp between the write and the read shifts every one of
+      ;; them. With equal frames rsp does not move and the question does not
+      ;; arise, which is why the first version needed no such guard.
       (define (reuse-frame-target i)
         (and (zero? ra-bytes)
              (let ((tgt (jump-target i)))
                (and (symbol? tgt)
                     (let ((f (hashtable-ref frames tgt #f)))
-                      (and f (= (car f) bytes) (zero? (cdr f))
-                           (string->symbol
-                            (string-append (symbol->string tgt) ".loop"))))))))
+                      (and f (zero? (cdr f))
+                           (or (= (car f) bytes) (zero? tail-outgoing))
+                           (cons (string->symbol
+                                  (string-append (symbol->string tgt) ".loop"))
+                                 (- bytes (car f)))))))))
 
       ;; Rewrite the jump to land past the callee's prologue.
       (define (retarget-to body i)
@@ -1420,6 +1432,12 @@
                                                                 (not (self-jump? ins))
                                                                 (reuse-frame-target ins))))
                                                       (append
+                                                       (if (and reuse
+                                                                (not (zero? (cdr reuse))))
+                                                           (if (positive? (cdr reuse))
+                                                               ((spiller-epilogue sp) (cdr reuse))
+                                                               ((spiller-prologue sp) (- (cdr reuse))))
+                                                           '())
                                                        (if (and ins
                                                                 (not reuse)
                                                                 (or ((spiller-returns? sp) ins)
@@ -1432,7 +1450,7 @@
                                                             (ra-restore))
                                                            '())
                                                        (if ins
-                                                           (list (cond (reuse (retarget-to reuse ins))
+                                                           (list (cond (reuse (retarget-to (car reuse) ins))
                                                                        ((self-jump? ins) (retarget ins))
                                                                        (else ins)))
                                                            '())))

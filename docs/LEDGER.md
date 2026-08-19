@@ -4173,3 +4173,53 @@ x86-64 `non-leaf?` is always false, so the guard is free there. Overlaying the
 callee's spill slots on ours is sound only because we are leaving and nothing of
 ours is read after the jump. Suite green at 8589/0/59, including the eleven-way
 bit-exact oracle and the RISC-V smoke gate, which share this code.
+
+## D98 — the same trick for unequal frames, and it is worth 0.15%
+
+D97 required the two frames to be equal. That is not the real precondition:
+`add F_caller` followed by the callee's `sub F_callee` is `rsp += F_caller -
+F_callee`, so ANY pair collapses to one instruction and an equal pair to none.
+All seven sites D97 left behind were frame mismatches, so generalising reaches
+every one of them.
+
+It needs a guard D97 did not. A tail call passing arguments on the STACK writes
+them into this frame at offsets the callee reads back from its own rsp; moving
+rsp between the write and the read shifts all of them. With equal frames rsp does
+not move and the question never arises. So the delta form applies only when
+`tail-outgoing` is zero, and the equal-frame case keeps its unconditional path.
+
+**Measured, and small:**
+
+```
+                              D97           D98
+fannkuch instructions   27,073.9M     27,033.9M     -0.148%
+cycles (3 runs, mean)      9,808.8M      9,799.1M     within noise
+static listing                1,097         1,097     unchanged
+```
+
+The listing does not shrink because the saving is dynamic rather than static: the
+callee's `sub` still exists for its other entrants, and what disappears is one
+execution of it per tail call. 0.15% against D97's 2.78%, which is the expected
+shape — D97 caught the two halves of fannkuch's hot loop, and these seven sites
+are outer loops that run orders of magnitude less often.
+
+**The current fannkuch standing**, answers verified against the SPEC.md oracle
+(556355 / 51, agreeing with gcc):
+
+```
+c-native   2744.306 ms min   10,992,263,036 instructions
+sonic      3340.933 ms min   27,016,993,258 instructions
+ratio           1.2174x                2.458x
+```
+
+D93 recorded 1.24x and 2.51x. The wall-clock gap is now **1.2174x**, about 1.9%
+better than when this session started looking at fannkuch, all of it from D97 and
+D98.
+
+**Kept despite the size.** It is strictly better than D97's version, costs no
+extra complexity — the same table, the same lookup, one arithmetic result instead
+of a boolean — and it removes a special case rather than adding one. But 0.15% is
+not a result to build on, and the ledger should not let a later reader infer that
+frame handling has more left in it. The remaining fannkuch gap is 2.46x the
+instructions of C, and D93's census says the largest identified block doing no
+arithmetic is still the 130 register-to-register moves (`qaq.21`).
