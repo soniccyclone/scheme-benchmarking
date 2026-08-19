@@ -5683,6 +5683,8 @@ answer before its zeros are believed.
 
 ## D127 — the standing moved without the code moving, and that qualifies M5
 
+> **Qualified by D180:** both sessions it compares were measured by a harness that never rebuilt (D166), and a third session with the build verified lands where D86 did -- two of three now say "no detected difference".
+
 Re-measuring both benchmarks after D121, to bring D86's standing current. The
 numbers moved and almost none of it is ours.
 
@@ -7117,6 +7119,8 @@ before it does.
 
 ## D163 — a mapped fannkuch profile, and qaq.21 is seven times qaq.23
 
+> **Corrected by D167:** its argument that D120's finding would not transfer to register copies is FALSIFIED. Removing 9.9% of fannkuch's instructions moved the wall clock not at all.
+
 D162 left one question: is `next.loop` hot enough that its 12 spills matter? A
 sampled cycle profile at n=11, mapped to functions, answers it and reprioritises
 two beads at once.
@@ -7467,6 +7471,8 @@ prerequisite for testing the second.
 
 ## D170 — a vector storage class for RV64, and the one place it refuses
 
+> **Completed by D181:** the spill refusal this entry left unwatched has now been seen to fail, tested through `spiller-store`/`spiller-reload` directly.
+
 First child of D169's decomposition. RV64 now has a fourth storage class,
 `raw-f64x2`, and a register file for it.
 
@@ -7815,6 +7821,8 @@ follows from it. Suite 8644 / 0 / 63.
 Filed for Nathan as qaq.13.4 with the three options and what each costs.
 
 ## D177 — the queue is two decisions, and qaq.23 is probably asking for the wrong thing
+
+> **Answered by D178 and D179:** the fixpoint's soundness question is closed -- verify rather than assume -- and qaq.23's ceiling is measured at thirteen instructions, not twenty-one.
 
 **The shape of the remaining work changed and the record should say so.** Eleven
 beads are open. Two are decisions for Nathan -- `qaq.7`, which D127 showed cannot
