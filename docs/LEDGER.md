@@ -3764,3 +3764,60 @@ Filed as `qaq.20`. Recorded here because the reasoning has a trap in it: D37's
 headline reads as "reciprocal approximation is worthless, stop looking at the
 divider", and the correct reading is "worthless AT 256 BITS, where the divider is
 already cheap". The hot loop is not at 256 bits.
+
+## D91 — gcc does not pack its divides either, and M5 is 0.75 cycles per interaction
+
+D90 proposed packing the scalar divides and filed `qaq.20`. Checking what the
+reference actually does refuted it before a line was written:
+
+```
+ref-native (gcc -O3 -march=native)     sonic
+  46 vmulsd                             84 vmulsd
+  44 vsubsd                             40 vaddsd
+  17 vdivsd                             20 vsubsd
+  14 vsqrtsd                            15 vmulpd
+   8 vmulpd                             14 vdivsd
+   4 vsubpd                             12 vsubpd
+                                         9 vaddpd
+                                         8 sqrtsd
+```
+
+**Zero `vdivpd`. Zero `vsqrtpd`.** gcc wins with scalar divides and scalar
+square roots. And the packing comparison runs the other way from the assumption
+in D90: we emit 36 packed operations to its 12. LOOP.md already said we emit more
+packed arithmetic than c-native and it is still true; D90 reasoned from "our
+divide is scalar, so packing is the missing thing" without checking whether the
+thing we are chasing does it. It does not. `qaq.20` closed unbuilt.
+
+**The gap, stated in the only unit that has been useful.** nbody at N=5e6 is
+5x10^7 pair-interactions:
+
+```
+sonic-fma    17.779 cycles per pair-interaction
+ref-native   17.026
+gap           0.752
+```
+
+Milestone 5 is three quarters of one cycle per interaction. Everything measured
+so far is consistent with both programs computing the same physics down the same
+irreducible dependency chain — a subtract, three multiply-adds, a square root at
+latency ~14 and a divide at latency 13, about 27 cycles of pure latency per
+interaction, achieved in 17 by overlapping independent pairs. Both of us are
+doing that overlap well; gcc is doing it slightly better.
+
+**What this rules out and what it leaves.** It rules out every structural idea
+tried since D85 — instruction count (D89), branch count (D89), unrolling (D89),
+specializer budget (D89), packing the divide (here). It leaves the chain itself,
+where the only known lever is arithmetic that changes results: contraction, which
+D80 already took and which bought the 7.7% that got us here, and reciprocal
+approximation, which D37 measured as a LOSS at 256 bits and D90 correctly noted
+was never measured scalar.
+
+**An honest word about the milestone.** "Beat gcc -O3 -march=native" was framed
+when the gap read 1.141x. It now reads 1.0414x with a confidence interval
+spanning 1.0 — a statistical tie — and the remaining distance is 0.75 cycles on a
+27-cycle chain. That is not a milestone that falls to another optimisation pass;
+it wants either an arithmetic permission the project has so far declined on
+accuracy grounds, or the acceptance that a tie against the reference C compiler
+is the result. Both are Nathan's call, not a compiler's, and the measurement is
+now good enough that the question can actually be put to him.
