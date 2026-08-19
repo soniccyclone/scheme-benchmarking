@@ -21,8 +21,26 @@
 ;;; Reloading at every use rather than once per block is deliberate for now. A
 ;;; global can be written by a call -- anything might assign one -- so caching it
 ;;; in a register across a call is only sound with an analysis that says the
-;;; callee does not, and that analysis does not exist. The cost lands entirely
-;;; outside nbody's loops, which read their vectors from PARAMETERS.
+;;; callee does not, and that analysis does not exist.
+;;;
+;;; THE LINE THAT USED TO FOLLOW SAID THE COST LANDS ENTIRELY OUTSIDE NBODY'S
+;;; LOOPS, WHICH READ THEIR VECTORS FROM PARAMETERS. That was measured and is
+;;; false (D87). The innermost pair loop reloads three globals per iteration --
+;;; a vector pointer and two constants -- which is ~150M instructions at N=5e6
+;;; against a 2981M total.
+;;;
+;;; The second cost is larger than the loads. `(define n-bodies 5)` is a global
+;;; too, so `(fx< i n-bodies)` emits a register compare rather than `cmp $5`, no
+;;; loop trip count is ever a constant, and NOTHING DOWNSTREAM CAN UNROLL. gcc
+;;; flattens the same ten-iteration pair loop and we cannot; that is where our
+;;; 4.6x branch gap against it comes from.
+;;;
+;;; The missing analysis is also weaker than this comment assumed. We compile
+;;; WHOLE PROGRAMS, so "is this cell ever the target of a gset" is a scan, not an
+;;; interprocedural effect analysis. The staged fix, cheapest first: a global
+;;; gset exactly once with a LITERAL is a constant and can be propagated to every
+;;; use, which alone unblocks unrolling; a global holding a pointer written only
+;;; by initialization needs the dominance argument and can wait. See `qaq.17`.
 ;;;
 ;;; ## These cells are GC roots
 ;;;
