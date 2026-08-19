@@ -191,9 +191,17 @@
                            (current-vreg-classes classes)
                            (current-globals gaddrs))
               (let* ((selected (select-program (if (eq? target 'rv64) rv64-selector x86-64-selector) prog))
-                     (fns (finalize-program target (if (eq? target 'rv64) arch-rv64 arch-x86-64) selected
-                                            (cadr prog) entry classes
-                                            (lowered-params)))
+                     ;; MERGED AFTER FINALIZATION, which is the whole point:
+                     ;; the duplicated bodies were present for the analyses that
+                     ;; needed them -- interval and element-range discharge
+                     ;; nbody's bounds checks only with the unrolled induction
+                     ;; step in front of them (D118) -- and are absent from the
+                     ;; code, where D112 measured what a doubled hot loop costs
+                     ;; the branch predictor.
+                     (fns (merge-identical-functions
+                           (finalize-program target (if (eq? target 'rv64) arch-rv64 arch-x86-64) selected
+                                             (cadr prog) entry classes
+                                             (lowered-params))))
                      ;; The prologue's k1 setup is AVX-512 and is emitted only
                      ;; if something reads it, so ask the finalized code. This
                      ;; is computed ONCE and used at both runtime-listing call

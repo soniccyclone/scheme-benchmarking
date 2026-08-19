@@ -172,13 +172,22 @@
                                (string=? (substring s 0 6) "inner%")))
                         (collect (cdr fs) (cons (car fs) acc)))
                        (else (collect (cdr fs) acc))))))
-  ;; THREE, NOT TWO, SINCE SPECIALISATION WAS SWITCHED ON. unroll-by-two gives
-  ;; two callers; specialize.ss then peels the enclosing loop and its copy
-  ;; carries an inner of its own. The assertion's intent is unchanged -- one
-  ;; force loop per unrolled caller, none lost and none duplicated beyond the
-  ;; callers that exist -- and the number tracks how many callers there are.
-  (ck! "the force loop survives to code generation, once per unrolled caller"
-       (= 3 (length inners)))
+  ;; TWO, NOT THREE, SINCE `merge-identical-functions` WAS ADDED. unroll-by-two
+  ;; gives two callers and specialize.ss peels the enclosing loop, which used to
+  ;; leave three `inner%` functions -- and two of them were the same instruction
+  ;; sequence under different label names. finalize.ss now merges those after
+  ;; finalization, so the duplication is present for the analyses that need it
+  ;; (interval and element-range discharge nbody's fourteen bounds checks only
+  ;; with the unrolled induction step, D118) and absent from the code, where a
+  ;; doubled hot loop costs the branch predictor (D112).
+  ;;
+  ;; The assertion's intent is unchanged and is still what is checked: the force
+  ;; loop is not LOST, and is not duplicated beyond the distinct bodies that
+  ;; exist. What moved is that identical bodies are now one function rather than
+  ;; several. The bounds-check assertions in run-x86-64-test.ss are what pin the
+  ;; other half -- nbody still emits none, so the merge did not cost the elision.
+  (ck! "the force loop survives to code generation, once per DISTINCT body"
+       (= 2 (length inners)))
   ;; AND THE PRESSURE WENT DOWN RATHER THAN UP, which is worth asserting
   ;; because the opposite was expected. The doubled body used to spill one
   ;; value; with the peel in place every copy spills NONE. Kept as `at most

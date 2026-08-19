@@ -5403,3 +5403,59 @@ this compiler can reach without an accuracy trade (`qaq.7`) or a policy change
 rather than for a number. Saying so in the ledger is cheaper than a future
 session rediscovering it one bead at a time, which is what D102, D107 and D108
 each cost.
+
+## D121 — merging identical functions: the re-roll, in the one form that is tractable
+
+D116 measured that disabling `unroll-program` makes fannkuch 5.6% faster and
+D118 measured why it cannot simply be disabled: unrolling is what lets the
+interval analysis discharge nbody's fourteen bounds checks. D116 named an
+untested third option -- unroll for the analysis, re-roll before code generation
+-- and said it would need elision facts to survive re-rolling.
+
+It does not, because the re-roll can happen at a level where there is no loop
+structure to recover. `unroll-program` duplicates a body and `lift.ss` makes each
+copy its own function, so the duplicates arrive at finalization as separate
+functions with **identical instruction sequences under different label names**:
+
+```
+fannkuch   (shift%12.3@1.87 shift%12.3@1.20)     24 instructions each
+           (shift%12.3.86 shift%12.19)           37
+           (loop%2.14@8.435 loop%2.14@8.373)     23
+           (loop%2.14.434 loop%2.372)            39
+nbody      (inner%24.207.377 inner%24.197)      103
+```
+
+`merge-identical-functions` keeps one of each group, redirects the others, and
+drops them. The duplication is present for the analyses that need it and absent
+from the code, which is exactly what D116 asked for.
+
+```
+                    before      after
+fannkuch listing     1,092      1,009 instructions
+functions               87         83
+fannkuch cycles    9,926.6M   9,800.5M   -1.27%   t = 2.16
+nbody cycles         942.8M     942.7M   unchanged
+nbody bounds checks       0          0   the elision survives
+```
+
+Four layout-pad values per arm, per D105. t = 2.16 on six degrees of freedom is
+p about 0.07 -- suggestive rather than conclusive, and stated as such. What is
+not in doubt: 83 fewer instructions of code, four fewer functions and therefore
+four fewer sets of branch targets on a benchmark that is 25.2% front-end stalled
+(D112), no change to the dynamic instruction count, and nbody untouched.
+
+**The suite caught the pass being unsound and the symptom understated it.**
+The first version canonicalised EVERY label, so a call to `foo` and a call to
+`bar` both became "the nth label" -- two functions calling different functions
+compared as identical. It surfaced as `label defined twice`, which is the mild
+consequence; the severe one is merging two functions that do different things.
+Only labels a listing DEFINES are renumbered now; everything else compares by
+name.
+
+**One pinned count moved and the reason is recorded beside it.** `the force loop
+survives to code generation, once per unrolled caller` asserted three `inner%`
+functions and now asserts two, because two of the three were the same
+instruction sequence. The assertion's intent -- the loop is not lost and not
+duplicated beyond the distinct bodies that exist -- is unchanged and still
+checked, and the bounds-check assertions pin the other half: nbody still emits
+none, so the merge did not cost the elision it was designed to preserve.

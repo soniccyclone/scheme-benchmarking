@@ -59,6 +59,7 @@
           make-spiller spiller? spiller-target
           spiller-x86-64 spiller-rv64 spiller-for
           finalized? finalized-name finalized-listing
+          merge-identical-functions
           finalized-frame finalized-spills)
   (import (chezscheme)
           (sonic regs)
@@ -95,6 +96,124 @@
     (fields map         ; vreg -> slot index
             count       ; number of spill slots
             outgoing))  ; words reserved for outgoing stack arguments
+
+  ;; --- functions that are the same function ----------------------------------
+  ;;
+  ;; `unroll-program` duplicates a loop body and `lift.ss` turns each copy into
+  ;; its own function, so the two halves of fannkuch's reversal arrive here as
+  ;; FOUR functions that are pairwise identical -- same instructions, same
+  ;; operands, different label names. nbody's `inner%24` arrives twice the same
+  ;; way. Measured: 123 instructions of fannkuch and 103 of nbody are exact
+  ;; copies (D121).
+  ;;
+  ;; WHY MERGING THEM IS THE POINT, and not merely tidy. D116 measured that
+  ;; disabling unrolling makes fannkuch 5.6% faster, because 25.2% of its cycles
+  ;; are front-end stalled on branch mispredicts (D112) and duplicating a hot
+  ;; loop doubles its branch targets. But unrolling is what lets the interval
+  ;; analysis discharge nbody's fourteen bounds checks (D118), so it cannot
+  ;; simply be turned off.
+  ;;
+  ;; Merging here gets both: the duplication is present for the ANALYSIS, which
+  ;; runs long before this, and absent from the CODE. That is D116's "unroll for
+  ;; the analysis, re-roll before code generation" in the one form that does not
+  ;; need loop structure recovered -- two finalized listings either are the same
+  ;; sequence or they are not.
+  ;;
+  ;; SOUNDNESS. Two functions with identical instruction sequences compute the
+  ;; same thing, so redirecting calls is safe by construction. The care is in
+  ;; INTERNAL labels: D97's frame reuse retargets a tail call to `<name>.loop`,
+  ;; so a dropped function's internal labels are referenced from outside it. The
+  ;; correspondence is positional -- the listings are identical modulo naming --
+  ;; so the nth label of the dropped function maps to the nth of the kept one.
+  ;; The labels a listing DEFINES -- the bare symbols in it. Everything else it
+  ;; names is somebody else's.
+  (define (defined-labels listing)
+    (let ((t (make-eq-hashtable)))
+      (for-each (lambda (i) (when (symbol? i) (hashtable-set! t i #t))) listing)
+      t))
+
+  ;; ONLY INTERNAL LABELS ARE RENUMBERED. Canonicalising every label was
+  ;; unsound: a call to `foo` and a call to `bar` both became "the nth label",
+  ;; so two functions calling DIFFERENT functions compared as identical. The
+  ;; suite caught it as `label defined twice`, which is the mild symptom; the
+  ;; severe one is merging two functions that do different things.
+  (define (canonical-listing listing)
+    (let ((own (defined-labels listing)) (m (make-eq-hashtable)) (n 0))
+      (define (lab x)
+        (if (hashtable-ref own x #f)
+            (or (hashtable-ref m x #f)
+                (begin (set! n (+ n 1)) (hashtable-set! m x n) n))
+            x))                                  ; external: compare by NAME
+      (map (lambda (i)
+             (if (symbol? i)
+                 (list 'L (lab i))
+                 (let walk ((x i))
+                   (cond ((and (pair? x) (eq? (car x) 'label) (symbol? (cadr x)))
+                          (list 'label (lab (cadr x))))
+                         ((pair? x) (cons (walk (car x)) (walk (cdr x))))
+                         (else x)))))
+           listing)))
+
+  ;; Every label a listing defines or names, in order of first appearance --
+  ;; the same order `canonical-listing` numbers them in.
+  ;; Restricted to the labels the listing DEFINES, for the same reason: the
+  ;; positional correspondence is only meaningful for those, and mapping an
+  ;; external call target positionally would redirect a call.
+  (define (listing-labels listing)
+    (let ((own (defined-labels listing)) (seen (make-eq-hashtable)) (acc '()))
+      (define (note x)
+        (when (and (hashtable-ref own x #f) (not (hashtable-ref seen x #f)))
+          (hashtable-set! seen x #t)
+          (set! acc (cons x acc))))
+      (for-each (lambda (i)
+                  (if (symbol? i)
+                      (note i)
+                      (let walk ((x i))
+                        (cond ((and (pair? x) (eq? (car x) 'label) (symbol? (cadr x)))
+                               (note (cadr x)))
+                              ((pair? x) (walk (car x)) (walk (cdr x)))
+                              (else #f)))))
+                listing)
+      (reverse acc)))
+
+  (define (rename-labels listing m)
+    (map (lambda (i)
+           (if (symbol? i)
+               (or (hashtable-ref m i #f) i)
+               (let walk ((x i))
+                 (cond ((and (pair? x) (eq? (car x) 'label) (symbol? (cadr x)))
+                        (list 'label (or (hashtable-ref m (cadr x) #f) (cadr x))))
+                       ((pair? x) (cons (walk (car x)) (walk (cdr x))))
+                       (else x)))))
+         listing))
+
+  (define (merge-identical-functions fns)
+    (let ((by-shape (make-hashtable equal-hash equal?))
+          (rename (make-eq-hashtable)))
+      ;; FIRST WINS, in the order finalize produced them, so the choice does not
+      ;; depend on hashing.
+      (for-each
+       (lambda (f)
+         (let* ((k (canonical-listing (finalized-listing f)))
+                (keep (hashtable-ref by-shape k #f)))
+           (if keep
+               ;; Positional correspondence, as argued above.
+               (for-each (lambda (from to) (hashtable-set! rename from to))
+                         (listing-labels (finalized-listing f))
+                         (listing-labels (finalized-listing keep)))
+               (hashtable-set! by-shape k f))))
+       fns)
+      (if (zero? (hashtable-size rename))
+          fns
+          (let ((kept (filter (lambda (f)
+                                (not (hashtable-ref rename (finalized-name f) #f)))
+                              fns)))
+            (map (lambda (f)
+                   (make-finalized (finalized-name f)
+                                   (rename-labels (finalized-listing f) rename)
+                                   (finalized-frame f)
+                                   (finalized-spills f)))
+                 kept)))))
 
   (define-record-type (finalized make-finalized finalized?)
     (fields name listing frame spills))
