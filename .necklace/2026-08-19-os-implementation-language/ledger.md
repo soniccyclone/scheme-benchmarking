@@ -95,3 +95,57 @@ disagreed with each other and with the compiler before I stopped guessing.
 
 Consequence for scoping: any inventory of "what is missing" has to be produced by
 compiling programs, not by reading the primitive table.
+
+## Probe 4 — allocation-free code is already expressible
+
+`repl/04-alloc-free.sps`. Falsifiable: any allocator call inside the leaf.
+
+```
+401574  mov  0xf(%rbx),%r10
+401578  imul $0x3,%r10,%r13
+40157c  lea  -0x1(%r10),%rcx
+401583  add  %rcx,%r10
+```
+
+No heap traffic, no checks, no calls. The only two calls in the program are the
+top-level `make-vector` and `display`. **The back end already emits what a kernel
+path needs**, which is the most load-bearing good news in this round: the gap to
+an OS language is not code quality, and none of the work below is about making
+the compiler emit better instructions.
+
+Third occurrence of the CSE fold, incidentally -- `(vector-ref v i)` twice, one
+load -- so probe 1 was not a special case of a constant index.
+
+## Finding — `volatile` is a control, not a concept
+
+`lang.ss`'s `prim-table` declares each primitive with its arity and its named
+controls:
+
+```
+(fxquotient 2 div-check overflow-check)
+(fl+ 2 fp-contract)
+(flvector-ref 2 type-check bounds-check)
+```
+
+A control is a name that rides on the instruction through every pass and takes a
+value from a lexically scoped `(policy ([name boolean]) ...)` region or a per-call
+spelling. `fp-contract` proves the path works end to end (D24), and the checks
+prove passes act on it.
+
+So MMIO does not need a new mechanism. It needs a `volatile` control on the memory
+primitives plus the passes that currently move or remove loads -- CSE, addrfold,
+the peephole, the interval domain -- taught to refuse when it is set. That is a
+much better position than "add a volatile type", and it is why the spec treats
+the systems work as extending an existing vocabulary rather than inventing one.
+
+## Judgment calls I did NOT make
+
+- Whether `call/cc` is full or escape-only. Full first-class continuations
+  interact with the calling convention, D97/D98 frame reuse, and GC metadata, and
+  a kernel may not want them at any price. Neither reading nor running settles
+  what the OS needs. **For Nathan.**
+- Whether volatile is region-scoped (`policy`) or attached to an object, the way
+  C's `volatile T*` is. Region-scoped is far cheaper given the machinery above;
+  object-scoped matches how driver code is usually written. **For Nathan.**
+- Whether the GC is permitted to run in kernel context at all, which decides
+  whether the collector needs a pause bound or simply a prohibition.
