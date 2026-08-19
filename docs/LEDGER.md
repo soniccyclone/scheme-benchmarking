@@ -8329,3 +8329,36 @@ Nothing to fix here, which is the finding. Recorded because "we looked and it wa
 fine" is worth as much as a bug when it explains why the other place was not, and
 because the next person to add a storage class should know the enforcement now
 exists and where it lives.
+
+## D188 — the coverage assertion, watched failing
+
+D186 added a check that the two positive filters cover their input and then did not
+watch it fail, which is the thing D133 and D146 exist to prevent and which D170
+had to be corrected for by D181. Closing it in the same entry's spirit rather than
+leaving a third instance.
+
+It cannot be triggered the honest way: a `raw-f64x2` is the class that would fall
+through, and both spillers refuse one before the budget runs. So it was triggered
+by making `spill-kind` forget a class that DOES reach the budget -- dropping
+`raw-word` from the integer side:
+
+```
+(case cls
+  ((tagged) 'int)          ; raw-word removed
+  ((raw-f64) 'float)
+  (else #f))
+```
+
+The suite stops at 569 checks with `a spilled value belongs to no scratch pool`,
+against 8653 and clean with the class restored. So the assertion is on a live
+path, it fires, and its message identifies the value.
+
+**What that does and does not establish.** It shows the check is reachable and
+correct when the condition holds -- which is exactly what was unproven. It does
+not show that a packed pair can reach it, because a packed pair cannot: it is
+refused earlier, by D170 for rv64 and D184 for x86-64. Those two refusals are the
+guard for that case, and both have been watched failing (D181, D184). This one
+guards the case nobody has thought of yet, which is the only case an assertion of
+this shape can guard.
+
+Suite 8653 / 0 / 63, tree unchanged.
