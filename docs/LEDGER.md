@@ -8362,3 +8362,45 @@ guards the case nobody has thought of yet, which is the only case an assertion o
 this shape can guard.
 
 Suite 8653 / 0 / 63, tree unchanged.
+
+## D189 — where the same mistake would have been fatal, it was not made
+
+One question the audit left implicit: four negation-defined partitions over
+storage classes shipped in this compiler, and adding a fifth class walked into all
+four. Why did none of them touch the collector?
+
+Because every test of TAGGEDNESS in the tree is positive, without exception:
+
+```
+driver.ss    (eq? (hashtable-ref classes v #f) 'tagged)   ; the GC bit for a frame slot
+callconv.ss  (eq? sc 'tagged)
+globals.ss   (eq? (hashtable-ref classes g #f) 'tagged)
+convert.ss   (and (eq? sc 'tagged) ...)
+```
+
+Searching for a negated one -- `(not (eq? ... 'tagged))` -- returns nothing. So
+`raw-f64x2` answers "not a root" everywhere, which is correct, and it did so from
+the moment the class existed without anyone thinking about it.
+
+**The asymmetry is not luck and it is worth understanding.** Getting taggedness
+wrong has two failure modes and register-partition.md names both: a tagged value
+the collector never finds, and a raw value the collector scavenges as a pointer.
+Both corrupt the heap. The code that decides it was therefore written the careful
+way, and the carefulness shows up as a positive test.
+
+The four bugs were all one layer down -- which POOL, which INSTRUCTION, which
+SCRATCH. Getting those wrong produces a wrong number rather than a corrupted heap,
+and the code that decides them was written the convenient way. The severity of the
+consequence is visible in the style of the predicate, years later, in a codebase
+where nobody wrote that rule down.
+
+`driver.ss` goes further and refuses the ambiguous case outright: two vregs sharing
+a frame slot that disagree about taggedness is an error, "there is no sound GC bit
+for that slot", rather than a bit chosen conservatively. That is the same instinct
+as closing the target domain at the boundary (D187) -- refuse what you cannot
+answer soundly, instead of answering.
+
+Nothing to fix, and this is the second such finding. Recorded because the audit's
+real conclusion is not "four bugs" but "four bugs, all in the layer where a
+mistake is merely wrong, none in the layer where it is fatal" -- and because a
+future storage class will land on this same split.
