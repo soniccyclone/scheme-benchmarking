@@ -8839,3 +8839,41 @@ would have gone looking for `rdi` in a listing that no longer mentions it there,
 and the first thing they would have concluded is that the bug was fixed. The
 register moved because a different pass changed, which is the ordinary way a bug
 report rots: not wrong, just describing a build nobody has any more.
+
+## D200 — the sweep finished: both dead-store beads hold, both named dead registers
+
+Completing D199's re-read. `qaq.26` after D167:
+
+```
+401677  mov  %rcx,%r10       loop variable in
+40167a  mov  $0x0,%rcx       DEAD -- overwritten at 4016a7, ret path uses r10
+4016af  mov  $0x1,%r11       DEAD -- redefined next iteration, unread at ret
+```
+
+Two, as D161 corrected D109 to say, and the registers are `r10`/`r11` where every
+note on the bead says `r13`/`r14`. Same rot as qaq.18, same cause, same effect on
+a reader.
+
+**The more useful thing the re-read turned up is where D167 did NOT help.** It
+removed both copy-ins from `loop%2.224.loop` and none from this block, which still
+opens `mov %rcx,%r10` and closes `mov %rdx,%rcx`. D163's table said so at the time
+-- count-flips 6 register-to-register moves before, 6 after -- and the reason is
+visible here: the parameter is pinned to `rcx`, the back edge WRITES `rcx`, so
+`rcx` is live across the whole body and the body cannot be given it. Live-range
+precoloring helps where a parameter dies early. In a loop that carries its
+parameter, it never dies.
+
+That is a real limit on D167 rather than a missed case, and it belongs somewhere
+findable: the win was 34.58% of the profile in one block and nothing in another,
+and the difference is whether the loop variable is still needed at the bottom.
+
+`qaq.15` was left alone deliberately. Its premise -- `lea` sets no flags, so it is
+illegal where flags are live (D84) -- is structural, and does not name a register
+or a listing that a reallocation can move underneath it.
+
+**Sweep complete.** Five beads re-read against the tree in D197-D200: two
+decisions arguing from superseded numbers, one option that had been built, one
+claim of finished work that was not, and two bug reports naming registers that had
+moved. None of the underlying claims was wrong. All six were unreadable in the way
+that matters -- a reader following them to the code would have found something
+else there and drawn the wrong conclusion first.
