@@ -6902,3 +6902,42 @@ fannkuch  0 bounds, 3 overflow   -- count-flips, join.129 x2
 
 From twenty-nine and eight. Suite 8614 checks across 61 suites, smoke gate
 passing.
+
+## D158 — the consolidated standing after the check-elision thread
+
+Four layout-pad values per arm, per D105. fannkuch, from the state before this
+session touched it:
+
+```
+                                        mean cycles    delta
+pre-session (unroll ON, unmerged)          9,926.6M     --
++ merge-identical-functions (D121,D130)    9,779.3M     -1.5%
++ ascent-rounds 16, unrolling off (D153)   9,331.0M     -6.0% total
+```
+
+Ranges do not overlap between the endpoints. nbody is unchanged at 943.9M against
+943.5M, which is D89: its spare instructions are free, and it now executes 3,481.8M
+of them against 3,256.8M -- more, and no slower.
+
+**Checks emitted, which is the other half and the one D5 and D24 care about:**
+
+```
+              before      after
+nbody         29 traps    1     (0 bounds, 1 overflow)
+fannkuch       8 traps    3     (0 bounds, 3 overflow)
+```
+
+fannkuch has never emitted zero bounds checks in this ledger before tonight.
+
+**The decomposition is worth keeping separate from the total**, because the two
+changes are independent and only one of them is a speedup:
+
+- `merge-identical-functions` removes duplicate code and branch targets. Worth
+  1.5%, and it works on both targets after D132.
+- `ascent-rounds` 4 to 16 removes twenty-eight traps from nbody and five from
+  fannkuch, and buys no measurable time on either -- it is correctness evidence.
+- Turning unrolling off is what the 4.5% is, and it was only available BECAUSE
+  the round count made elision independent of the duplicated induction step.
+
+So the speedup came from deleting a transformation, and what made deleting it
+possible was fixing a constant that had been wrong since it was written.
