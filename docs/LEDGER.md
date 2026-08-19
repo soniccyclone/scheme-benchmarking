@@ -4709,3 +4709,53 @@ the instruction-count claims, which is why D97 keeps its result (-2.78%
 instructions) and loses its gloss (~1.5% cycles). Anyone reading this run of
 entries for a performance history should take the instruction counts and ignore
 the fannkuch cycle figures below five percent.
+
+## D107 — the copies are argument setup, and the allocator never sees where they go
+
+`qaq.21` counted 130 register-to-register moves in fannkuch. Separating the
+hand-written runtime from compiled code, and asking which could share a register
+at all:
+
+```
+runtime  (allocator never sees it)   26 moves, 19 with a dying source
+compiled (the allocator's output)   110 moves, 86 with a dying source
+```
+
+They cluster where it matters -- `count-flips.loop` spends **7 of its 24
+instructions** on copies, `loop%2.372.loop` 6, `loop%2.14.434.loop` 6, in blocks
+that are 39% of the sampled profile between them. And the shape is always the
+same:
+
+```
+mov r14, rdx        the value lands wherever the scan had free
+mov rcx, r14        because rcx is what the convention wants
+call ...
+```
+
+Two copies for one value, because nothing asked the allocator to put it in `rcx`.
+
+**The obvious fix does not work, and measuring why is the result.** `move-hints`
+already maps a vreg to something it would like to share a register with, so
+adding the reverse direction -- a vreg moved INTO a physical register wants that
+register -- is a dozen lines. Implemented, suite green, and it changed nothing at
+all: listing 1092 to 1092, moves 136 to 136, spills 10 to 10.
+
+A counter says why: **zero physical hints were recorded.** The allocator never
+sees a move into a physical register, because argument setup does not exist yet
+when it runs. An Lmach call carries its arguments as OPERANDS -- `(call dst sc
+callee arg ...)` -- and `finalize.ss` materialises the copies afterwards, from
+the assignment the allocator already made. By then the choice is fixed and the
+copies are the cost of it.
+
+**So the fix is not a hint, it is a pre-colouring.** `parameter-pins` already
+does exactly this for INCOMING parameters, pinning them to the registers the
+convention delivers them in, and `allocate-program/precolored` is the entry point
+that honours pins. Outgoing arguments want the same treatment: a call's operands
+pinned to the registers that call will require, so the allocator places them
+there and `finalize` emits no copy. That is a change to the allocation interface
+rather than to a heuristic, and it interacts with everything pins already
+constrain -- which is why it is scoped here rather than attempted at the end of a
+long session.
+
+Reverted, since a hint that never fires is maintenance with no behaviour.
+`qaq.21` keeps the sizing and gains the mechanism.
