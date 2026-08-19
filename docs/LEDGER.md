@@ -6372,3 +6372,42 @@ correction or method; the beads accumulated all of it. A decision item that
 records every step of its own derivation stops being a decision item. The fix is
 not to delete the derivation -- D129 is about exactly that -- but to put the
 answer above it.
+
+## D145 — the VM's memory was contained by a default, and now by a statement
+
+`harness/vm-perf.sh` boots a KVM guest inside the container. Every containment
+argument in this tree predates that: `make containment` checks the container's
+`memory.max` and `pids.max` and proves a runaway dies at 8g, and CLAUDE.md's rule
+exists because an unguarded pass once held 31 GB and the OOM killer took the
+whole VM down three times in one session.
+
+A guest is the one thing here that can ask for memory the container would then
+have to find. Measured, `MemTotal` inside it:
+
+```
+guest MemTotal   982,288 kB   (~960 MiB)
+container limit  8,589,934,592 (8 GiB)
+```
+
+So it was contained -- **by virtme-ng's default, which nothing here states or
+checks.** That is exactly the shape CLAUDE.md argues against: "a limit you have
+to remember to apply fails exactly when a bug is already eating the machine, so
+the limit lives in `tools/container.sh` and applies whether anyone remembers it
+or not."
+
+`vng --memory 1G` is now passed explicitly, with the reasoning beside it. 1G is
+far above what the workloads need -- nbody and fannkuch are a few MiB of heap --
+and far below the cgroup, so the guest can only ever fail fast. `make
+containment` still passes and a counter run still works.
+
+**What this does not do.** `make containment` still does not exercise the VM
+path: it proves the CONTAINER's limits hold, not that a runaway inside the guest
+dies at the guest's limit rather than the container's. Testing that means a
+deliberate memory bomb inside a booted guest, which is a real addition to a gate
+that already takes minutes. Recorded rather than done, and worth doing before
+anyone raises `--memory` for a larger workload.
+
+**Found by asking what this session added that the existing gates do not cover.**
+Nothing failed and nothing was going to fail today. The 31 GB incident that
+motivates the whole containment story also began with something that had not
+failed yet.

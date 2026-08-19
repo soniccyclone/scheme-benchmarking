@@ -110,5 +110,14 @@ trap 'rm -f "$script"' EXIT
 } > "$script"
 chmod +x "$script"
 
-timeout 900 vng --force-9p --cpus "$VMCPUS" -r "$KERNEL" -- "$script" 2>&1 \
+# GUEST MEMORY IS PINNED, NOT INHERITED. virtme-ng's default happens to be about
+# 960 MiB, comfortably inside the container's 8g cgroup -- but that is a default,
+# and CLAUDE.md's whole argument for where the limits live is that a limit you
+# have to remember to apply fails exactly when a bug is already eating the
+# machine. A VM is the one thing in this tree that can ask for memory the
+# container would then have to find, so it says how much it wants.
+#
+# 1G is far above what the workloads need (nbody and fannkuch are a few MiB of
+# heap) and far below the cgroup, so it can only ever fail fast.
+timeout 900 vng --memory 1G --force-9p --cpus "$VMCPUS" -r "$KERNEL" -- "$script" 2>&1 \
     | grep -vE "^\[ *[0-9]+\.[0-9]+\]|virtme-init:|mount:|dmesg\(1\)"
