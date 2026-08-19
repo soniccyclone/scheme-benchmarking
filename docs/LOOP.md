@@ -214,7 +214,18 @@ evidence is checkable rather than taken on faith.
    how D104 rejected a correct change. **nbody moves 0.26% over the same sweep**
    and needs no such care.
 
-3. **REBUILD BEFORE YOU MEASURE.** `disasm-sonic.sh` compiles rather than
+3. **A RATIO RECORDED IN THE LEDGER DOES NOT COMPARE TO ONE YOU MEASURE TODAY.**
+   `bench.sh` measures every configuration in the same run, so a uniform machine
+   change cancels in the ratio -- and the ratio drifts anyway, because the two
+   programs do not respond to machine state alike. Measured (D127): with
+   fannkuch's instruction count seven apart out of twenty-seven billion, so the
+   work is provably identical, its wall clock moved 1.50%; nbody's `sonic-fma`
+   moved +0.45% while `c-native` moved -3.05%, taking the ratio from 1.0414 to
+   1.0811 and the confidence interval from spanning 1.0 to excluding it. Compare
+   a measurement to one taken the same day, or compare instruction counts, which
+   reproduce to 0.002%.
+
+4. **REBUILD BEFORE YOU MEASURE.** `disasm-sonic.sh` compiles rather than
    accepting a binary, and its header explains why; `vm-perf.sh` takes a command
    line and cannot, so the trap is open there. D94 compared a binary built before
    `gconst` against a listing compiled after it and read the difference as an
