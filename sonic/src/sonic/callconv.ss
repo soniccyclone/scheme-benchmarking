@@ -514,6 +514,25 @@
       [(cc blocks classes pins destroys-of)
        (allocate-program/precolored* cc blocks classes pins destroys-of)]))
 
+  ;; A PIN IS A LIVE RANGE, NOT A WITHDRAWN REGISTER.
+  ;;
+  ;; This used to reduce every pool by the pinned registers and hide the pinned
+  ;; vregs from the scan, then merge the pins back into the finished map. That is
+  ;; simple and it is far too coarse: the register is gone for the whole
+  ;; function, so no other value may use it even long after the pinned one is
+  ;; dead. D165 measured the bill on fannkuch's hottest block -- the loop
+  ;; variables sit in rcx/rdx because they are parameters, the body is pushed
+  ;; into rsi/rdi because rcx/rdx were withdrawn, and four of nineteen
+  ;; instructions per iteration shuffle between the two sets.
+  ;;
+  ;; The scan already knows how to hold a register for exactly an interval and
+  ;; release it on expiry, so a pin is handed to it as a decided assignment
+  ;; (`scan-pins`) and the pools are left whole. A body vreg beginning where the
+  ;; parameter ends can then take rcx, and `move-hints` removes the copy.
+  ;;
+  ;; The merge afterwards stays, for a pinned vreg the scan never saw: a
+  ;; parameter that is never read has no live range and so no interval, and the
+  ;; arrival code still asks where it went.
   (define (allocate-program/precolored* cc blocks classes pins destroys-of)
     (check-pins! cc pins)
     ;; No live-range test here, unlike the single-block entry point. Pins over a
@@ -524,21 +543,17 @@
       (unless (= (length rs) (length (remove-duplicates rs)))
         (error 'allocate-program/precolored*
                "two pins claim the same register" rs)))
-    (let* ((a (callconv-arch cc))
-           (taken (map pin-reg pins))
-           (pinned-vregs (map pin-vreg pins))
-           (reduced (make-arch (arch-name a)
-                               (without (arch-value a) taken)
-                               (without (arch-raw a) taken)
-                               (without (arch-float a) taken)
-                               (arch-structural a)
-                               (arch-scratch a)))
-           (result (allocate-program/clobbers reduced
-                                              (hide-blocks blocks pinned-vregs)
-                                              classes destroys-of))
-           (m (alloc-result-map result)))
-      (for-each (lambda (p) (hashtable-set! m (pin-vreg p) (pin-reg p))) pins)
-      (make-alloc-result a m (alloc-result-spills result))))
+    (let ((tbl (make-eq-hashtable)))
+      (for-each (lambda (p) (hashtable-set! tbl (pin-vreg p) (pin-reg p))) pins)
+      (let* ((result (parameterize ((scan-pins tbl))
+                       (allocate-program/clobbers (callconv-arch cc) blocks
+                                                  classes destroys-of)))
+             (m (alloc-result-map result)))
+        (for-each (lambda (p)
+                    (unless (hashtable-ref m (pin-vreg p) #f)
+                      (hashtable-set! m (pin-vreg p) (pin-reg p))))
+                  pins)
+        (make-alloc-result (callconv-arch cc) m (alloc-result-spills result)))))
 
   (define (remove-duplicates xs)
     (let loop ((xs xs) (acc '()))

@@ -23,7 +23,8 @@
           partition-into-functions call-positions
           instr-def instr-uses transfer-uses transfer-targets
           make-alloc-result alloc-result? alloc-result-map
-          alloc-result-spills alloc-result-arch)
+          alloc-result-spills alloc-result-arch
+          scan-pins)
   (import (chezscheme)
           (sonic regs)
           (sonic order))
@@ -445,6 +446,33 @@
        blocks)
       tbl))
 
+  ;; PRECOLOURING, SCOPED TO A LIVE RANGE.
+  ;;
+  ;; callconv.ss used to implement a pin by removing the register from every pool
+  ;; and hiding the vreg from this scan, which costs the register for the WHOLE
+  ;; FUNCTION rather than for the pinned value's live range. D165 measured what
+  ;; that costs: fannkuch's hottest block spends four of its nineteen
+  ;; instructions shuffling loop variables between rcx/rdx, which the parameters
+  ;; hold and the body may therefore never use, and rsi/rdi, which the body gets
+  ;; instead. No hint can undo that -- the register the body wants is not in the
+  ;; pool to be preferred.
+  ;;
+  ;; A pin is a live range with its register decided in advance, so the scan can
+  ;; hold it exactly as long as any other interval and hand it back on expiry.
+  ;; Then a body vreg starting where the parameter ends can HAVE rcx, and
+  ;; `move-hints` coalesces the copy that used to be needed.
+  ;;
+  ;; This is a parameter rather than another argument because `allocate/scan`
+  ;; and `allocate/intervals` are case-lambdas over four arities each, and
+  ;; threading a table through all of them is more places to get it wrong than
+  ;; one dynamic extent with a single setter (callconv.ss's
+  ;; `allocate-program/precolored*`). It is read in exactly one place.
+  (define scan-pins (make-parameter #f))
+
+  (define (pinned-reg v)
+    (let ((t (scan-pins)))
+      (and t (hashtable-ref t v #f))))
+
   (define (allocate-program arch blocks classes)
     (allocate-program/clobbers arch blocks classes (lambda (callee) #f)))
 
@@ -616,7 +644,25 @@
                              (hashtable-set! free dsc (cons dr (hashtable-ref free dsc '()))))
                            (expire (cdr as) keep))]
                         [else (expire (cdr as) (cons (car as) keep))]))])
-                (if (crosses-call? iv)
+                (cond
+                 ;; A PINNED INTERVAL TAKES ITS REGISTER AND NOTHING ELSE.
+                 ;;
+                 ;; No pool test: the register was decided by the convention and
+                 ;; `check-pins!` already ruled on whether that is legal, which
+                 ;; includes the case of a pin to a SCRATCH register -- rax for a
+                 ;; raw word -- that is in no pool by construction and would fail
+                 ;; `check-assignment!` for that reason alone.
+                 ;;
+                 ;; It is free to take. A parameter is live-in at position 0, so
+                 ;; its interval sorts first and nothing has been handed a
+                 ;; register yet; `allocate-program/precolored*` has already
+                 ;; refused two pins on one register.
+                 [(pinned-reg v)
+                  => (lambda (pr)
+                       (hashtable-set! assign v pr)
+                       (hashtable-set! free sc (remq pr (hashtable-ref free sc '())))
+                       (scan (cdr is) (cons iv still-active)))]
+                 [(crosses-call? iv)
                     ;; A REGISTER THE CALLEE DOES NOT WRITE, or the frame.
                     ;;
                     ;; This used to spill unconditionally, on the grounds that
@@ -650,8 +696,9 @@
                             (check-assignment! arch sc r)
                             (hashtable-set! assign v r)
                             (hashtable-set! free sc (remq r pool))
-                            (scan (cdr is) (cons iv still-active)))))
-                (let ([pool (hashtable-ref free sc '())])
+                            (scan (cdr is) (cons iv still-active)))))]
+                 [else
+                  (let ([pool (hashtable-ref free sc '())])
                   (if (null? pool)
                       ;; SPILL. Poletto & Sarkar spill the active interval with
                       ;; the FURTHEST endpoint, which may be this one or one
@@ -671,7 +718,12 @@
                       ;; (regs.ss), so a class with no registers left cannot
                       ;; borrow from a class that has some.
                       (let* ([same (filter (lambda (a)
-                                             (eq? (hashtable-ref classes (car a) #f) sc))
+                                             (and (eq? (hashtable-ref classes (car a) #f) sc)
+                                                  ;; A pin is a constraint, not a
+                                                  ;; preference: evicting one
+                                                  ;; puts the value somewhere the
+                                                  ;; convention says it is not.
+                                                  (not (pinned-reg (car a)))))
                                            still-active)]
                              [furthest (and (pair? same)
                                             (fold-left (lambda (best a)
@@ -734,5 +786,5 @@
                         (check-assignment! arch sc r)
                         (hashtable-set! assign v r)
                         (hashtable-set! free sc (remq r pool))
-                        (scan (cdr is) (cons iv rest))))))))))))
+                        (scan (cdr is) (cons iv rest)))))])))))))
   )

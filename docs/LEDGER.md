@@ -7300,3 +7300,69 @@ build can always measure a stale one. `disasm-sonic.sh` solved this properly by
 refusing to accept a binary at all -- it compiles, and there is no way to pass it
 one. `bench.sh` and `measure.sh` take a configuration name and could do the same.
 Filed.
+
+## D167 — precoloring scoped to a live range: 2.9% and 9.9% fewer instructions
+
+D165 diagnosed fannkuch's hot-path copies as the price of expressing a pin as a
+whole-function pool reduction. Implemented the fix: `allocate-program/precolored*`
+no longer reduces the pools or hides the pinned vregs, and hands the scan a table
+of decided assignments (`scan-pins`) instead. A pinned interval takes its
+register, is never evicted, and releases it on expiry like any other.
+
+It works because of something the interval builder already guarantees and says so
+in a comment: *every parameter of every function is live-in to its entry block at
+position 0*. So a pin sorts first, its register is certainly free when claimed,
+and the release happens exactly when the parameter dies.
+
+The hottest block in fannkuch, before and after:
+
+```
+  mov  %rcx,%rsi                    cmp  %rdx,%rcx
+  mov  %rdx,%rdi                    jl   ...
+  cmp  %rdi,%rsi                    mov  -0x1(%rbx,%rcx,8),%rsi
+  ... body in rsi/rdi ...           ... body in rcx/rdx ...
+  lea  0x1(%rsi),%r10               lea  0x1(%rcx),%rsi
+  lea  -0x1(%rdi),%rsi              lea  -0x1(%rdx),%rcx
+  mov  %r10,%rcx                    mov  %rcx,%rdx
+  mov  %rsi,%rdx                    mov  %rsi,%rcx
+  jmp                               jmp
+```
+
+Both copies IN are gone -- the body now works directly in the registers the
+parameters arrive in. The back-edge shuffle remains, as it must; that one is a
+real parallel copy.
+
+**Deterministic results, both benchmarks, fresh builds either side:**
+
+```
+                  before          after         delta
+nbody          696.00/step    676.00/step      -2.87%
+fannkuch     29,877,604,024  26,912,083,639    -9.92%
+listing            573 insns      553 insns     -3.5%
+r2r copies         104            97            -6.7%
+```
+
+Correctness: 8614 checks / 0 failures / 63 suites, unchanged in count; both
+fannkuch oracles agree (556355, 51); the RISC-V gate passes bit-exact at 17
+significant digits.
+
+**Wall clock shows nothing, and that is the honest report.** fannkuch went from
+3222.9 ms to 3258.8 ms at the minimum of nine reps -- flat to slightly worse, and
+inside the 4.97% code-alignment band D105 measured on this exact benchmark. nbody
+came out at ratio 1.1036 against c-native with a bootstrap CI of [0.9884, 1.1646],
+which does not exclude 1.0 and so detects no difference either way.
+
+**A prediction of mine was falsified and should be recorded as such.** D163 argued
+that D120's "instructions do not convert to time on fannkuch" would not transfer
+to this bead, because D111 removed BRANCHES while a register copy is not a branch,
+and D112 named the front end as the constrained resource. Ten percent of
+fannkuch's instructions are now gone and its wall clock did not move. The argument
+was reasonable and it was wrong; front-end pressure is evidently not relieved by
+removing copies, or is not what bounds this loop.
+
+**Kept anyway, and not because of the wall clock.** The change makes the allocator
+express a constraint it was already trying to express, at the scope it actually
+holds. It is strictly less work for the same answer on both benchmarks and both
+targets, it removes a documented coarseness rather than adding a special case, and
+the instruction counts are the figures this project has repeatedly found
+reproducible where cycles are not. Nothing here claims a speedup.
