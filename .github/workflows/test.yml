@@ -23,24 +23,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
-    # WHICH ENGINE, SAID OUT LOUD.
+    # NOTHING IS PINNED HERE, DELIBERATELY.
     #
-    # tools/container.sh picks podman when podman is installed, and GitHub's
-    # ubuntu-latest has it -- so CI chose podman while the step above built the
-    # image with `docker compose`, and podman then handed off to the
-    # docker-compose plugin, which tried to reach a podman socket that is not
-    # running:
+    # Both of these were set once and both are gone. SONIC_COMPOSE, because
+    # tools/container.sh now picks podman only when a compose PROVIDER is also
+    # installed -- these runners have podman and no provider, so they get docker,
+    # which is what built the image (D204). SONIC_CPUS, because container.sh
+    # computes the share from the host, capped at 8, so a four-core runner asks
+    # for four (D203).
     #
-    #   Cannot connect to the Docker daemon at unix:///run/user/1001/podman/podman.sock
-    #
-    # Nothing started, for five days, and the containment gate reported passes
-    # because its assertions were satisfied by nothing happening (D193). The
-    # override existed the whole time; CI simply never set it.
-    env:
-      SONIC_COMPOSE: docker compose
-      # SONIC_CPUS is no longer needed here: tools/container.sh computes it from
-      # the host, capped at 8, so a four-core runner asks for four (D203). Left
-      # unset deliberately -- pinning it would hide whether that works.
+    # Pinning either would fix CI and hide whether the code that has to work
+    # everywhere else does. CI is the only four-core machine this project has and
+    # the only one with podman-but-no-provider; those are exactly the two cases
+    # worth exercising rather than overriding.
 
     steps:
       # v4 runs on node20, which GitHub deprecated and now force-runs on node24

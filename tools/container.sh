@@ -32,10 +32,36 @@ sonic_root() { (cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd); }
 sonic_in_container() { [ -f /.dockerenv ] || [ -f /run/.containerenv ]; }
 
 # podman first -- it is what this host has. docker for CI, which has that.
+# PODMAN NEEDS A COMPOSE PROVIDER, AND HAVING PODMAN IS NOT HAVING ONE.
+#
+# This used to read `command -v podman` and pick `podman compose` on that alone.
+# CLAUDE.md says why that is not the same question: "Podman needs a compose
+# PROVIDER installed before `podman compose` does anything at all." Without one,
+# podman hands off to the docker-compose plugin, which goes looking for a podman
+# socket:
+#
+#   Cannot connect to the Docker daemon at unix:///run/user/1001/podman/podman.sock
+#
+# GitHub's runners have podman and no provider, so CI picked podman, started no
+# container for five days, and the containment gate reported passes because its
+# assertions were satisfied by nothing happening (D193, D194). Setting
+# SONIC_COMPOSE in the workflow fixed CI and left the same trap for any machine
+# with podman installed and unconfigured -- which is the shape D203 had to undo
+# for the CPU share, so it is worth not repeating.
+#
+# The provider is a PATH lookup, not a probe: `podman info` costs 0.8s here and
+# this function runs on every container start. `podman-compose` on PATH is free
+# and is the thing that actually has to exist.
 sonic_compose() {
     if [ -n "${SONIC_COMPOSE:-}" ]; then echo "$SONIC_COMPOSE"
-    elif command -v podman >/dev/null 2>&1; then echo "podman compose"
+    elif command -v podman >/dev/null 2>&1 && command -v podman-compose >/dev/null 2>&1
+    then echo "podman compose"
     elif command -v docker >/dev/null 2>&1; then echo "docker compose"
+    elif command -v podman >/dev/null 2>&1; then
+        echo "podman is installed but no compose provider is: install" >&2
+        echo "podman-compose, or set SONIC_COMPOSE. Without a provider," >&2
+        echo "'podman compose' starts nothing and says little (see D204)." >&2
+        return 1
     else
         echo "no container engine: install podman (or docker)." >&2
         echo "NOTHING IN THIS TREE RUNS ON THE HOST -- see CLAUDE.md." >&2
