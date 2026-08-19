@@ -3652,3 +3652,64 @@ Two things fall out, both filed rather than guessed at:
 header even though nothing downstream has yet cashed it in. But record the
 result honestly: the measurement predicted a win and there is not one, and the
 next agent should not re-derive the same expectation from the same reasoning.
+
+## D89 — removing 40% of the branches makes it slower, and D85's diagnosis was half wrong
+
+D88 left two questions: does unrolling fire, and why does it not help. The first
+has a flat answer — `unroll-program/report` on nbody says **10 loops unrolled**,
+`inner%24` among them. It fires. Unrolling by two halves loop CONTROL, and gcc's
+advantage is not that it unrolls by two but that it deletes the loop.
+
+The driver already says what that needs: "substituting a loop body at a call with
+literal arguments makes the guard foldable, folding the guard makes the NEXT
+call's argument a literal, and the loop disappears when the guard turns." The
+guard is `(fx< j n-bodies)`. While `n-bodies` was a memory read that guard could
+**never** fold, so `unroll-fully` could duplicate bodies and never resolve one.
+Every measurement of the specializer before D88 was taken in that state,
+including D87's finding that `sonic-u4` is worse.
+
+With gconst in place the guard folds, and the specializer sweep says:
+
+```
+              cycles        instructions    branches      IPC
+sonic       948,296,157   3,321,801,412  300,304,844    3.503
+budget 4    957,294,301   3,131,836,644  250,310,731    3.272
+budget 8    966,380,855   2,856,821,960  180,308,647    2.956
+budget 16   966,073,633   2,856,811,139  180,306,767      "
+budget 32   965,554,693   2,856,813,538  180,307,356      "
+ref-native  851,321,999   1,667,521,452   65,435,919    1.959
+```
+
+It saturates at 8 — three budgets agree to five significant figures, so this is
+the specializer's fixed point and not a budget that wants raising.
+
+**Instructions fall 14%. Branches fall 40%. Cycles rise monotonically.** IPC goes
+3.50 -> 3.27 -> 2.96 across the sweep. Every instruction removed was one the
+machine was issuing for free, and the code growth that removed them costs more in
+issue density than the instructions were worth.
+
+**This corrects D85.** That entry concluded M5 is "an instruction-count problem
+wearing a latency problem's clothes", from 1.79x the instructions at 1.71x the
+IPC. The first half does not survive: instruction count is now measured, not
+inferred, to be the wrong lever. We removed 465M instructions and 120M branches
+and got 18M cycles SLOWER. What D85 got right is the other half — at IPC 3.50 we
+are near issue width and not stalling — and the correct reading of the pair is
+that our surplus instructions are nearly free, so neither adding nor removing
+them moves the clock much. The 4.4% is somewhere else.
+
+D87's own framing needs the same correction. The 4.6x branch gap is real and is
+NOT the cost it looked like: at 0.02% mispredict those branches were already
+approximately free, which is exactly what removing 120M of them just proved.
+
+**What is now ruled out, by measurement rather than argument:** unrolling further
+(saturated, and harmful), specializer budget (three values identical), loop
+control generally, and instruction count as a proxy for time on this benchmark.
+`qaq.19` closes on this. `sonic-u4` should NOT become the default — it is slower
+— but the D87 note calling it "definitively worse" needs this qualifier: it was
+worse because the guard could not fold, and with gconst it is better on two of
+three counters and still loses on the one that matters.
+
+**The remaining instrument.** llvm-mca went into the image in D84 and has never
+been pointed at anything. It models ports and the critical path statically, which
+is the one question left standing: what resource is the hot loop actually waiting
+on, given that it is neither stalling nor instruction-bound.
