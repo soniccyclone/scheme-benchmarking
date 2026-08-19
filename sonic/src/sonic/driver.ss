@@ -305,26 +305,6 @@
   ;; means exactly one site turns per round. nbody's nest wants 5 + 10 + 5,
   ;; and at 24 the rounds ran out on the cheap loop before reaching the
   ;; expensive one.
-  ;; A TEST'S VIEW OF THE MIDDLE OF THE PIPELINE.
-  ;;
-  ;; `compile-sonic` returns finalized functions, so a pass whose effect is
-  ;; visible in the emitted code can be asserted end-to-end -- `elide` by its
-  ;; bounds branches, `addrfold` by spills, `merge` by duplicate functions. A
-  ;; pass whose removals are consumed downstream cannot: D136 tried to write
-  ;; `dce`'s assertion and found the obvious property ("no dead const survives
-  ;; to the listing") is FALSE against a working pass, because a `chk` keeps
-  ;; those definitions live at dce's level and selection folds their uses only
-  ;; later.
-  ;;
-  ;; Such a pass can only be asserted where it runs. This hook is called with
-  ;; the stage name and the program at each point the driver already binds one,
-  ;; so a test can capture the form it needs without re-running the front half
-  ;; by hand -- which `unroll-test.ss` does in nine lines that drift whenever a
-  ;; pass moves.
-  ;;
-  ;; Default is a procedure that ignores both arguments, so compilation is
-  ;; unchanged when nobody is looking.
-  (define compile-stage-hook (make-parameter (lambda (stage prog) (void))))
 
   ;; Calls the hook and returns the program, so a stage can be marked in the
   ;; middle of a nested call chain without restructuring it.

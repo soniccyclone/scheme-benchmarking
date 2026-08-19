@@ -1,4 +1,4 @@
-(import (chezscheme) (sonic peephole))
+(import (chezscheme) (sonic peephole) (sonic driver) (sonic pipeline))
 
 (define failures 0) (define checks 0)
 (define (ck! name ok)
@@ -520,6 +520,46 @@
 (ck! "but a scratch is LIVE at a ret: that is the return value"
      (equal? (peeped '((mov rax rbx) (ret)))
              '((mov rax rbx) (ret))))
+
+;; --- THE PASS IS NOT INERT ON A REAL PROGRAM --------------------------------
+;;
+;; Fixtures cannot catch inertness: each tests the shape it was written for,
+;; which the rule it exercises by construction handles. D132 is the case -- a
+;; pass that did nothing on RV64 for two entries, invisible because every check
+;; here asks whether the output is CORRECT and none asked whether the pass did
+;; ANYTHING.
+;;
+;; peephole cannot be asserted from the finished code: after it runs, running it
+;; again finds nothing, so a working pass and a removed one look identical. It is
+;; asserted on the listing it is HANDED, captured through the stage hook.
+;;
+;; The run-splitting is repeated here rather than imported. `peephole` expects a
+;; straight-line run and raises on a label -- which is why `finalize.ss` calls it
+;; through `peephole-runs` -- and an oracle that reuses the implementation it
+;; checks is not an oracle (D133).
+(define captured #f)
+(parameterize ((compile-stage-hook
+                (lambda (stage prog)
+                  (unless captured
+                    (when (eq? stage 'listing/pre-peephole) (set! captured prog))))))
+  (compile-sonic "../bench/nbody/config-sonic.sps" nbody-externs))
+
+(ck! "the stage hook delivered nbody's pre-peephole listing" (and captured #t))
+
+(when captured
+  (let loop ((xs captured) (run '()) (fused 0))
+    (cond
+     ((null? xs)
+      (let-values (((done st) (peephole 'x86-64 (reverse run))))
+        (let ((total (+ fused (peephole-stats-fused st))))
+          (ck! "peephole rewrites something in nbody: the pass is not inert"
+               (> total 0))
+          (unless (> total 0)
+            (display "       fused=") (display total) (newline)))))
+     ((symbol? (car xs))
+      (let-values (((done st) (peephole 'x86-64 (reverse run))))
+        (loop (cdr xs) '() (+ fused (peephole-stats-fused st)))))
+     (else (loop (cdr xs) (cons (car xs) run) fused)))))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)

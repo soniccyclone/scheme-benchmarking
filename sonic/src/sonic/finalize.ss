@@ -63,6 +63,7 @@
           ;; which needs to build listings directly rather than compile a
           ;; program that happens to contain the shapes it is about.
           make-finalized merge-identical-functions
+          compile-stage-hook
           finalized-frame finalized-spills)
   (import (chezscheme)
           (sonic regs)
@@ -264,6 +265,33 @@
                                    (finalized-frame f)
                                    (finalized-spills f)))
                  kept)))))
+
+  ;; A TEST'S VIEW OF THE MIDDLE OF THE PIPELINE.
+  ;;
+  ;; DEFINED HERE RATHER THAN IN driver.ss, which is where it was first put and
+  ;; where it reads more naturally: `finalize.ss` needs to call it too, for
+  ;; `peephole`, and driver.ss imports finalize.ss, so the parameter has to live
+  ;; on the side of that edge both can reach. driver.ss re-exports it, so callers
+  ;; see no difference.
+  ;;
+  ;; `compile-sonic` returns finalized functions, so a pass whose effect is
+  ;; visible in the emitted code can be asserted end-to-end -- `elide` by its
+  ;; bounds branches, `addrfold` by spills, `merge` by duplicate functions. A
+  ;; pass whose removals are consumed downstream cannot: D136 tried to write
+  ;; `dce`'s assertion and found the obvious property ("no dead const survives
+  ;; to the listing") is FALSE against a working pass, because a `chk` keeps
+  ;; those definitions live at dce's level and selection folds their uses only
+  ;; later.
+  ;;
+  ;; Such a pass can only be asserted where it runs. This hook is called with
+  ;; the stage name and the program at each point the driver already binds one,
+  ;; so a test can capture the form it needs without re-running the front half
+  ;; by hand -- which `unroll-test.ss` does in nine lines that drift whenever a
+  ;; pass moves.
+  ;;
+  ;; Default is a procedure that ignores both arguments, so compilation is
+  ;; unchanged when nobody is looking.
+  (define compile-stage-hook (make-parameter (lambda (stage prog) (void))))
 
   (define-record-type (finalized make-finalized finalized?)
     (fields name listing frame spills))
@@ -1648,6 +1676,10 @@
             ;; because fusing a compare with its branch is only valid once
             ;; nothing can be inserted between them, and the spill code inserted
             ;; above is exactly the thing that could.
+            ;; The listing BEFORE peepholing, for the pass's not-inert
+            ;; assertion: after it, running peephole again finds nothing, so a
+            ;; test cannot tell a working pass from a removed one.
+            (hook-pre-peephole ((compile-stage-hook) 'listing/pre-peephole listing))
             (listing (peephole-runs target listing))
             ;; Delete moves that coalescing made redundant.
             ;;

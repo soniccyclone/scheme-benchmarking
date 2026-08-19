@@ -6178,3 +6178,45 @@ peephole                                                           not yet
 Suite 8611 checks, 0 failures, 61 suites -- up from 8589 and 59 when this thread
 started, all of it assertions that a pass does something rather than that its
 output is correct.
+
+## D140 — every pass now asserts it does something, and the thread that got here
+
+`peephole` was the last. It cannot be asserted from the finished code -- after it
+runs, running it again finds nothing, so a working pass and a removed one look
+identical -- so it is asserted on the listing it is HANDED, captured through a
+new `listing/pre-peephole` marker in `finalize.ss`.
+
+That required moving `compile-stage-hook` from `driver.ss` into `finalize.ss`:
+driver imports finalize, so the parameter had to live on the side of that edge
+both can reach. `driver.ss` re-exports it and no caller sees a difference.
+
+The test repeats `peephole-runs`' label-splitting rather than importing it,
+because `peephole` raises on a label and an oracle that reuses the implementation
+it checks is not an oracle (D133). Validated by forcing `needs-fusion?` to `#f`:
+the assertion fails with `fused=0`.
+
+```
+elide  addrfold  slp  contract  merge  gconst  dce  cse  fold  specialize  peephole
+```
+
+**Eleven passes, every one now asserting that it fires on a real program, every
+assertion validated by deliberately breaking its pass.** Suite 8613 checks across
+61 suites, from 8589 across 59 when this began.
+
+**The thread, because its shape is the useful part.** D132 found
+`merge-identical-functions` doing nothing on RV64 for two entries -- no test
+failed, no measurement looked wrong, and the x86-64 numbers in D121 and D130 were
+real. Every check in this tree asked whether the output was CORRECT; none asked
+whether a pass did ANYTHING.
+
+From there: a grep said eleven passes lacked the assertion, reading the matching
+lines said five, attempting one said those five were blocked on something the
+other six were not, building that thing took three lines, and then four of the
+five went in easily while the fifth needed its own hook. Five successive
+narrowings, none needing information unavailable at the start.
+
+Two of the assertions written along the way were wrong in ways only writing them
+exposed: `peephole`'s first version could not fail, and `fold`'s asserted at a
+stage where a working pass reports zero. Both would have looked like coverage.
+The rule that caught them is the one D133 arrived at and D126 asked for -- an
+assertion is not finished until you have watched it fail.
