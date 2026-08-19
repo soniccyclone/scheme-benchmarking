@@ -6341,3 +6341,34 @@ program changes, the machine drifts, and the instrument was wrong. A bead older
 than the work around it should be re-read before it is acted on, and the cheapest
 moment is when someone picks it up. Every stale line found today was found that
 way; none was found by review.
+
+## D144 — the two blocking beads rewritten to lead with the decision
+
+Both items waiting on Nathan had become unreadable as decisions. `qaq.30` was 129
+lines carrying **fourteen** correction markers -- D116 corrected by D117,
+corrected by D118, then D122, D125, D126 -- so the question was buried under the
+history of my getting it wrong. `qaq.7` was 111 lines with the decision in the
+middle.
+
+Both descriptions now open with the decision, the measurement that settles it,
+the options, and a recommendation. The corrections stay in the notes, where they
+belong: they are how the project reasons and D129 argued for keeping them, but
+they are not what someone deciding needs first.
+
+`qaq.30` in one line: keeping `unroll-program` on buys nbody "emits NO bounds
+check at all", worth 0.17% of nbody, and costs 4.7% of fannkuch. It also names
+what is NOT the question -- this is not safety against speed, since with
+unrolling off fannkuch has FEWER checks and is faster -- because D116 and D117
+both framed it that way and both were wrong.
+
+`qaq.7` in one line: the compiler is within a few percent of `gcc -O3
+-march=native` and which side of the line it falls on depends on the day, so the
+milestone as worded cannot be settled by more optimisation. It gains a fourth
+option D127 makes obvious -- reword the milestone in instruction counts, which
+reproduce to 0.002% and do not drift.
+
+**Worth saying plainly.** Forty of the sixty entries this session are analysis,
+correction or method; the beads accumulated all of it. A decision item that
+records every step of its own derivation stops being a decision item. The fix is
+not to delete the derivation -- D129 is about exactly that -- but to put the
+answer above it.
