@@ -4348,3 +4348,72 @@ why before spending a session on it.
 **What the session actually bought here:** two wrong-code bugs fixed, an
 optimisation correctly declined, and a note in the source that stops it being
 re-attempted. `qaq.25` closes.
+
+## D101 — fannkuch is dispatch-limited, and a quarter of its hottest block is nameable waste
+
+The pipeline model, on fannkuch's three hottest blocks:
+
+```
+count-flips.loop     24 instructions   Block RThroughput 4.0
+loop%2.372.loop      25                                  4.3
+loop%2.14.434.loop   25                                  4.3
+```
+
+Roughly six instructions per cycle, which is the dispatch width, and llvm-mca
+reports **no bottleneck at all** — no port pressure, no dependency chain. These
+blocks are dispatch-limited, so the only lever is fewer instructions. That is the
+opposite of nbody, where D90 found 85.65% register dependencies and D89 measured
+instruction removal making things WORSE. Two benchmarks, opposite cost
+structures; nothing learned on one transfers to the other.
+
+**Where the measured time actually goes.** IPC is 2.76 against the model's ~6, so
+reality is twice the model's throughput limit. Branch misprediction accounts for
+most of the difference:
+
+```
+sonic  144M misses / 5.70B branches (2.52%)   18-29% of its 9.78B cycles
+gcc    171M misses / 2.21B branches (7.73%)   24-41% of its 8.44B cycles
+```
+
+**gcc pays MORE in absolute mispredict cost than we do and is still faster.**
+Its whole advantage is in the other component. Splitting at a 16-cycle penalty:
+our non-mispredict work is 7.48B cycles against gcc's 5.70B — 1.31x — while we
+execute 2.43x the instructions. Our instructions are individually cheaper; there
+are just far too many.
+
+**Itemised, from the 24 instructions of `count-flips.loop` (18.22% of profile):**
+
+```
+mov  %rcx,%r13            parameter shuffle
+mov  $0x0,%rcx            constant into a RETURN register (see below)
+mov  0x600050,%rbx        the array pointer, from memory
+...
+mov  %rdx,%r14            copy
+mov  %r14,%rcx            copy of the copy -- argument setup
+call 0x401649
+mov  %r13,0x8(%rsp)       the flip counter, to the stack
+addq $0x1,0x8(%rsp)       incremented THERE
+jo   0x401514
+mov  0x600050,%rbx        the SAME global, loaded again
+```
+
+Six of twenty-four instructions are waste with a name: a redundant copy in a
+two-step chain, the same loop-invariant global loaded twice, two instructions
+where `add $1,%r13` would do (D95: nothing survives a call, so the counter
+spills), and the `je X / jmp Y` shape that pays a taken branch where an inverted
+test would fall through.
+
+**One of them is not what it looks like.** `mov $0x0,%rcx` reads as dead — `rcx`
+is overwritten before the call and never read on the other path — but the
+convention returns values in `(rax rcx rdx)`, so `rcx` is live at every `ret` and
+no liveness-based pass may remove it. Whether a function returning ONE value
+should keep two more return registers live is a real question and is not
+answered here; filed as `qaq.26` rather than guessed at, since the last two
+entries were both guesses that cost a session.
+
+**What this settles for the open beads.** `qaq.21`'s 130 copies and `qaq.23`'s
+callee-saved registers both target instruction count, which is the right lever
+for THIS benchmark and measured to be the wrong one for nbody. Neither should be
+justified by nbody numbers, and any measurement of them must be fannkuch's
+deterministic instruction count rather than cycles, which carry 2% noise (D94)
+and are a quarter mispredict recovery besides.
