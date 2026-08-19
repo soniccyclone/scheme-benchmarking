@@ -5943,3 +5943,39 @@ known answer before its results are believed; this is the first thing written
 since that followed the instruction.
 
 Suite 8600 checks, 0 failures, 60 suites.
+
+## D134 — the same assertion for `gconst`, and an audit of which passes have one
+
+D133 gave the merge pass an assertion that it did something, on both targets, and
+validated it by breaking the code. The obvious next question is which other
+passes lack one.
+
+**A grep for the phrasing overstates the gap and should not be trusted.** Several
+passes have the property asserted end-to-end under a different name: `elide` has
+"nbody emits NO bounds check at all", which an inert pass cannot satisfy;
+`slp`/`vectorize` have `disasm-test`'s `has-packed-arithmetic?` on nbody;
+`contract` has the fp-contract measurements. Those are not-inert assertions in
+substance.
+
+**`gconst` genuinely had none.** It was added this session (D88) with seventeen
+fixture checks and nothing that runs it on a real program. A fixture cannot catch
+inertness by construction -- it tests the shape it was written for, which is a
+shape the pass handles. Two assertions added: nbody's top-level literals are
+propagated, and their uses are substituted.
+
+Validated the same way, by breaking `literal-init` to refuse every datum:
+
+```
+FAIL nbody's top-level literals are propagated: the pass is not inert
+FAIL and their uses are substituted, not merely counted
+     propagated=0 substituted=0
+```
+
+**What I did not verify.** `specialize`, `dce`, `cse`, `addrfold`, `peephole` and
+`fold` did not match the grep, and I have not read their tests to see whether the
+property is asserted some other way. The honest statement is that six passes are
+UNCHECKED for this, not that six passes lack the assertion -- the difference
+matters, because D132's whole lesson is that an absence of evidence and evidence
+of absence read identically in a test suite.
+
+Suite 8602 checks, 0 failures, 60 suites.

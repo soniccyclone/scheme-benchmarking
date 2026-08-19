@@ -19,7 +19,8 @@
 ;;; the one case where "did I find a literal" and "what was the literal" cannot
 ;;; share a return value, and the pass carries it in a list to keep them apart.
 
-(import (chezscheme) (sonic lang) (sonic parse) (sonic expand) (sonic gconst))
+(import (chezscheme) (sonic lang) (sonic parse) (sonic expand) (sonic gconst)
+        (sonic read) (sonic pipeline))
 
 (define checks 0)
 (define failures 0)
@@ -112,6 +113,33 @@
 ;; and gconst.ss says why it is not taken here.
 (ck! "the top-level binding is NOT removed, only its uses"
      (body-mentions? '((define n 5) (fx< 1 n)) 'n))
+
+;; --- THE PASS IS NOT INERT ON A REAL PROGRAM --------------------------------
+;;
+;; Everything above is a fixture. D132 is what this guards against: the merge
+;; pass shipped and did nothing at all on RV64 for two entries' worth of work,
+;; because every check asked whether the output was CORRECT and none asked
+;; whether the pass did ANYTHING. A fixture cannot catch that -- it tests the
+;; shape it was written for, which is by construction a shape the pass handles.
+;;
+;; nbody defines `n-bodies`, `dt`, `pi` and `days-per-year` as top-level
+;; literals and uses them in its loop guards, so a working pass must substitute
+;; several of them. If a later change makes this pass inert, the count goes to
+;; zero and this fails.
+
+(define nb "../bench/nbody/config-sonic.sps")
+
+(let-values (((p st) (propagate-top-constants/report
+                      (parse-program (expand-program (read-all-from-file nb))
+                                     nbody-externs))))
+  (ck! "nbody's top-level literals are propagated: the pass is not inert"
+       (> (gconst-stats-propagated st) 0))
+  (ck! "and their uses are substituted, not merely counted"
+       (> (gconst-stats-substituted st) 0))
+  (unless (and (> (gconst-stats-propagated st) 0)
+               (> (gconst-stats-substituted st) 0))
+    (display "       propagated=") (display (gconst-stats-propagated st))
+    (display " substituted=") (display (gconst-stats-substituted st)) (newline)))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
