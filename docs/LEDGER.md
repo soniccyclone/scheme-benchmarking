@@ -3713,3 +3713,54 @@ three counters and still loses on the one that matters.
 been pointed at anything. It models ports and the critical path statically, which
 is the one question left standing: what resource is the hot loop actually waiting
 on, given that it is neither stalling nor instruction-bound.
+
+## D90 — the pipeline model, first use: it is the dependency chain and the scalar divider
+
+D84 put llvm-mca in the image and nothing ever pointed it at anything. Fed
+nbody's inner loop body (89 instructions, control flow stripped, `-mcpu=znver5`):
+
+```
+Block RThroughput:  28.0
+Throughput Bottlenecks:
+  Resource Pressure       [ 48.30% ]
+  - Zn4FP1 [ 30.26% ]  Zn4FP0 [ 16.64% ]  Zn4FPSt [ 14.06% ]  Zn4FP45 [ 11.67% ]
+  Data Dependencies:      [ 85.65% ]
+  - Register Dependencies [ 85.65% ]
+```
+
+**85.65% register dependencies.** After D89 ruled out instruction count and
+branches by measurement, this is what is left standing and it is measured rather
+than argued: the loop is limited by the serial chain through the float math,
+subtract -> multiply -> add -> add -> sqrt -> divide -> multiply.
+
+The single worst instruction is unambiguous:
+
+```
+ 1      13    5.00      vdivsd  %xmm5, %xmm0, %xmm3
+```
+
+Latency 13 and **reciprocal throughput 5.00** — the divider is occupied five
+cycles per divide and will not pipeline tighter. Two of them per unrolled body is
+ten cycles of the block's twenty-eight, so divider occupancy alone is a third of
+the throughput ceiling. That is D37's conclusion arrived at independently by a
+static model rather than by a microbenchmark, which is worth something.
+
+**Where this diverges from D37, and it matters.** That entry rejected a
+`fp-reciprocal` permission — rsqrt plus Newton — on the measurement that at 256
+bits it costs 2.371 cycles a lane against the exact form's 2.042. It loses, and
+that measurement stands. But it was taken PACKED at 256 bits, where the divider
+already costs about two cycles a lane. Our hot loop does not run there: it emits
+`vdivsd` and `sqrtsd`, SCALAR, at five cycles of occupancy each.
+
+So D37's number does not settle the scalar case, and the interesting lever is not
+the one it rejected. The same loop already emits **packed** `vsubpd` for the
+coordinate differences and then narrows to scalar for the divide. Packing the
+divides — two pairs' worth in one `vdivpd` — would halve divider occupancy
+without approximating anything, and needs no new permission because it changes no
+result. Approximation trades accuracy for a win D37 measured as absent; packing
+trades nothing.
+
+Filed as `qaq.20`. Recorded here because the reasoning has a trap in it: D37's
+headline reads as "reciprocal approximation is worthless, stop looking at the
+divider", and the correct reading is "worthless AT 256 BITS, where the divider is
+already cheap". The hot loop is not at 256 bits.
