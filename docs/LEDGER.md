@@ -5326,3 +5326,33 @@ throughout and takes under a minute. The lesson is not that the earlier entries
 were careless with their numbers; their numbers were right. It is that all three
 described a mechanism no one had counted, and a count would have replaced the
 argument each time.
+
+## D119 — session state after D84-D118
+
+Thirty-five entries, contiguous, no gaps. The tree is green at 8589 checks / 0
+failures / 59 suites and clean; 127 of 137 beads are closed.
+
+**What shipped:** hardware counters through a KVM guest (D85), `gconst.ss` (D88),
+tail-call frame reuse (D97, D98), two latent wrong-code bugs fixed in
+`fold-immediates` (D99, D100), runtime clobber sets (D106), and a layout-pad
+control (D105).
+
+**What was measured and declined:** strength reduction (D84, unsound), packed
+divides (D91, gcc does not), hoisted globals (D93, one cycle in 3847), the
+copy fold (D100, 0.001%), argument-register hints (D107, never fire), branch
+inversion (D111, 3.2% fewer instructions and 3.5% slower).
+
+**What is waiting on Nathan:** M5's accuracy trade (`qaq.7`, flagged via
+`bd human`), and now the unrolling decision -- 0.17% of nbody's time for 5.6% of
+fannkuch's (`qaq.30`).
+
+**The one thing to carry forward.** Four separate optimisations in this session
+removed real work from fannkuch and made it slower or left it unchanged, and the
+reason turned out to be the same each time: 25.2% of its cycles are front-end
+stalled on branch mispredicts (D112), and every one of those changes moved code
+or branches. nbody is the opposite -- 0.5% front-end stalled, 85.65%
+dependency-bound (D90) -- and instruction counts predict nothing on either. The
+methodology entries (D94's noise floor, D105's 4.97% alignment sensitivity) exist
+because I measured wrongly first and had to correct the record; they are in
+LOOP.md now so the next session starts where this one ended rather than where it
+began.
