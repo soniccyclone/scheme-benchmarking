@@ -603,6 +603,13 @@
                        (if (and all (pair? rest))
                            (loop rewritten out)
                            (loop rewritten (cons (car is) out)))))))
+                  ;; A BARRIER KEEPS THE MATERIALISATION. `leaves-block?` says
+                  ;; why in its own header: a `call` reads argument registers
+                  ;; that appear nowhere in its operands, so `mentions?` returns
+                  ;; false for it and this scan walked straight past. Folding
+                  ;; USES past a barrier stays sound -- the immediate is the
+                  ;; value -- so this clears `all` and keeps scanning.
+                  ((leaves-block? (car rest)) (scan (cdr rest) folds #f))
                   ((foldable-use? (car rest) r) (scan (cdr rest) (+ folds 1) all))
                   ((mentions? (cdr (car rest)) r) (scan (cdr rest) folds #f))
                   (else (scan (cdr rest) folds all)))))))
