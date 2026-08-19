@@ -8804,3 +8804,38 @@ bead that says "for Nathan" stops being maintained the moment it is filed, and i
 is the one kind of bead where being wrong is most expensive, because it is read
 once and acted on. LOOP.md tells the loop to re-read a bead against the tree
 before STARTING it; nothing tells it to re-read the ones it is not going to start.
+
+## D199 — re-validating the blocked beads, and one of them names the wrong register
+
+D198 ended on the observation that a bead nobody starts is a bead nobody
+maintains. The decisions were the expensive case; the blocked P4s are the same
+case with less at stake, and re-reading them against the tree is cheap.
+
+`qaq.18` claims a dead constant materialisation survives in nbody's loop header.
+After D167 reallocated that function, the claim holds and its details do not:
+
+```
+401824  mov   $0x5,%rsi        defines rsi
+40182b  cmp   $0x5,%rdx        folds the same constant, does not read rsi
+40183a  imul  $0x3,%rcx,%rsi   redefines rsi without reading it
+40190e  mov %r15,%rbx / mov %rbx,%rax / ret    rsi unread on the exit path
+```
+
+Dead on both successors, exactly as filed. But the bead names `rdi`, and D143's
+staleness check quotes a three-instruction opening -- `mov %rdx,%rsi / mov
+$0x5,%rdi / cmp $0x5,%rsi` -- that is now two. **The `mov %rdx,%rsi` is gone**,
+and it is worth saying where it went: that is the copy-in D167 removed when
+precoloring stopped costing a register for the whole function. A bead about a dead
+instruction recorded, incidentally, one live instruction being deleted by
+unrelated work.
+
+Nothing here changes the disposition. It is still blocked on qaq.33, D161's
+diagnosis still applies unchanged -- `dead-from?` stops at the block-ending branch
+and answers #f for any non-scratch register, so the peephole cannot see what both
+successors do -- and D120 still measures the payoff at zero wall clock.
+
+**What it does change is whether the bead is readable.** Someone picking it up
+would have gone looking for `rdi` in a listing that no longer mentions it there,
+and the first thing they would have concluded is that the bug was fixed. The
+register moved because a different pass changed, which is the ordinary way a bug
+report rots: not wrong, just describing a build nobody has any more.
