@@ -62,7 +62,7 @@
           finalized-frame finalized-spills)
   (import (chezscheme)
           (sonic regs)
-          (sonic regalloc)
+          (sonic regalloc) (sonic runtime)
           (sonic callconv)
           (sonic parcopy)
           (sonic peephole))
@@ -1768,6 +1768,24 @@
           ;; function name -> (frame-bytes . ra-bytes), for D96's tail-call
           ;; frame reuse. Same callee-first argument as `clobbers`.
           (frames (make-eq-hashtable)))
+      ;; THE RUNTIME GOES IN THE TABLE FIRST. A caller finding no entry assumes
+      ;; the whole register file is gone, and the runtime is hand-written so
+      ;; nothing ever put it there; every one of fannkuch's 21 spills traced to
+      ;; exactly this (D103).
+      ;;
+      ;; `lane-mask?` is #t rather than the value the driver computes from this
+      ;; very code. It only controls whether the prologue emits its AVX-512 k1
+      ;; setup, which writes a mask register and no GP register, so #t is the
+      ;; SUPERSET and over-approximating is the safe direction.
+      ;;
+      ;; A label whose walk refuses returns #f and is not entered, leaving that
+      ;; routine exactly as conservative as before.
+      (let ((rl (runtime-listing target entry #t)))
+        (for-each (lambda (x)
+                    (when (symbol? x)
+                      (let ((c (runtime-clobbers rl x)))
+                        (when c (hashtable-set! clobbers x c)))))
+                  rl))
       (for-each (lambda (b) (hashtable-set! by-label (car b) (cadr b)))
                 (cadddr selected))
       (let* (;; NOT THE ORPHAN BUCKET. `partition-into-functions` gathers blocks

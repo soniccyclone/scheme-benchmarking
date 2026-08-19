@@ -4660,3 +4660,52 @@ hour of careful work on a walk that correctly handled `syscall`'s implicit `rcx`
 and `r11` had to be reconstructed from the session transcript. A change measured
 and rejected should be committed on a branch or its diff kept, because the
 measurement that rejected it may itself be wrong -- as this one was.
+
+## D106 — the clobber table, re-measured with layout controlled: no detected difference
+
+D105 showed D104 rejected a correct change on alignment luck, so the change was
+reconstructed — it had been reverted from backups and never committed, which cost
+half an hour of rewriting a walk that had already been got right. Re-measured the
+way D105 says fannkuch must be: both builds swept across six pad values,
+distributions compared.
+
+```
+           mean       sd     min       max
+without   9763.5M   175.0   9430.7   9900.1
+with      9917.2M   133.2   9748.5  10108.2
+
+difference +153.7M (+1.57%), SE 89.8, t = 1.71, ranges overlap
+```
+
+**No detected difference.** t = 1.71 on ten degrees of freedom is not
+significance at any conventional threshold, and the ranges overlap heavily. So
+D104's "1.8% regression" does not survive layout control — but neither does an
+improvement appear, and the point estimate is still on the wrong side.
+
+**Kept anyway, and the reasoning should be checkable.** The instruction count is
+identical between the two builds on a counter deterministic to 0.002%. The only
+difference in emitted code is that some values live in registers where they used
+to live on the stack — `next.loop` loses five stack references, spills go 11 to
+10. A change that removes memory traffic while executing the same instructions
+cannot plausibly be slower; the +1.57% is layout residue that six samples per
+arm cannot separate from zero, and buying significance here would cost many more
+compiles for a number that is already known to be dominated by alignment.
+
+That is a judgement, not a measurement, and it is recorded as one. What is
+measured: correct, no instruction change, fewer spills, no detected cycle
+difference.
+
+**What it closes.** `newline` writes one register and was charged with twelve.
+The table's emptiness was rediscovered three times in this session under three
+different names — D94 found the analysis skipped for functions with pins, D95
+found callee-saved declared and never implemented, D103 found every fannkuch
+spill traced to this — and each time the machinery existed and the wiring did
+not. `qaq.28` closes; the wart does not come back.
+
+**And a correction to how this session measured.** Six of the eleven cycle
+comparisons in D89-D104 were made between single fannkuch builds at pad 0. Those
+are alignment luck at the one-to-two percent level. The ones that survive are
+the instruction-count claims, which is why D97 keeps its result (-2.78%
+instructions) and loses its gloss (~1.5% cycles). Anyone reading this run of
+entries for a performance history should take the instruction counts and ignore
+the fannkuch cycle figures below five percent.

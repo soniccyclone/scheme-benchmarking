@@ -44,7 +44,7 @@
 ;;; and alloc.ss own that, and the metadata D21 needs is already emitted.
 
 (library (sonic runtime)
-  (export runtime-listing runtime-labels layout-pad
+  (export runtime-listing runtime-labels layout-pad runtime-clobbers
           heap-base-address heap-size
           runtime-data-size
           heap-pointer-cell out-buffer-cell command-line-cell gcmeta-cell
@@ -1223,6 +1223,114 @@
       (addi a0 zero ,exit-type-error)
       (addi a7 zero ,rv64-sys-exit)
       (ecall)))
+
+  ;; --- what a runtime routine destroys ---------------------------------------
+  ;;
+  ;; `finalize-program*` seeds a clobber table for every function it compiles,
+  ;; and a caller finding no entry assumes the WHOLE register file is gone. The
+  ;; runtime is hand-written and was never entered, so every call into it spilled
+  ;; everything live -- all 21 spills in fannkuch, with a full register pool, and
+  ;; `newline`, which writes ONE register, charged with twelve (D103).
+  ;;
+  ;; THE FAILURE DIRECTION IS NOT SYMMETRIC. Over-approximating costs a spill;
+  ;; under-approximating keeps a value in a register the routine overwrites,
+  ;; which is a wrong-code bug no oracle here is guaranteed to catch. Every case
+  ;; this walk does not positively understand returns #f, which the caller reads
+  ;; as "everything" -- exactly today's behaviour.
+  ;;
+  ;; THREE OPCODES WRITE REGISTERS APPEARING IN NO OPERAND:
+  ;;
+  ;;   syscall   rax, and rcx and r11, which the CPU overwrites with rip and
+  ;;             rflags. A first version reading only destinations reported
+  ;;             `display` as writing (rax rdx rsi rdi) and would have let a
+  ;;             caller keep a live value in rcx across a `write`.
+  ;;   cqo       rdx, sign-extending rax into rdx:rax
+  ;;   idiv      rax and rdx
+  (define (rt-written i)
+    (case (car i)
+      ((syscall) '(rax rcx r11))
+      ((cqo) '(rdx))
+      ((idiv) '(rax rdx))
+      ((cmp je jg jge jl jle jmp jne ret call) '())
+      ((add and lea mov movb movsd movzx shl shr sub imul kmovw)
+       (if (symbol? (cadr i)) (list (cadr i)) '()))
+      (else #f)))
+
+  (define (rt-jump-target i)
+    (let ((x (cadr i)))
+      (cond ((symbol? x) x)
+            ((and (pair? x) (eq? (car x) 'label) (symbol? (cadr x))) (cadr x))
+            (else #f))))
+
+  ;; A WORKLIST OVER INSTRUCTION INDICES, not a descent over labels: `%make-vector`
+  ;; and `%cons` both loop, and refusing on a revisited label sent every
+  ;; allocating routine back to "everything". Visiting each instruction once and
+  ;; unioning terminates on any control flow with no fixpoint. `seen-labels` is
+  ;; separate and still refuses -- it guards mutual recursion between routines,
+  ;; where a sound answer would need the fixpoint this deliberately omits.
+  (define (runtime-clobbers listing label)
+    (let ((items (list->vector listing))
+          (at (make-eq-hashtable)))
+      (define indexed
+        (let loop ((i 0) (xs listing))
+          (unless (null? xs)
+            (when (symbol? (car xs)) (hashtable-set! at (car xs) i))
+            (loop (+ i 1) (cdr xs)))))
+      (define (walk start seen-labels)
+        (and (not (memq start seen-labels))
+             (let ((start-i (hashtable-ref at start #f))
+                   (visited (make-eq-hashtable))
+                   (acc '())
+                   (ok #t))
+               (and start-i
+                    (let run ((work (list start-i)))
+                      (cond
+                       ((not ok) #f)
+                       ((null? work) acc)
+                       (else
+                        (let ((i (car work)))
+                          (cond
+                           ;; PAST THE END TERMINATES THE PATH. `%cons` branches to
+                           ;; `sonic-heap-error`, which exits rather than returning,
+                           ;; so the walk falls out of the listing. Nothing follows
+                           ;; the code, so no such path reaches our caller -- and
+                           ;; having walked whatever lay between, the answer
+                           ;; over-approximates, which is the safe direction.
+                           ((or (>= i (vector-length items))
+                                (hashtable-ref visited i #f))
+                            (run (cdr work)))
+                           (else
+                            (hashtable-set! visited i #t)
+                            (let ((x (vector-ref items i)))
+                              (cond
+                               ((symbol? x) (run (cons (+ i 1) (cdr work))))
+                               ((not (pair? x)) (begin (set! ok #f) #f))
+                               ((eq? (car x) 'ret) (run (cdr work)))
+                               ((memq (car x) '(jmp je jg jge jl jle jne))
+                                (let* ((tgt (rt-jump-target x))
+                                       (ti (and tgt (hashtable-ref at tgt #f))))
+                                  (cond
+                                   ((not ti) (begin (set! ok #f) #f))
+                                   ((eq? (car x) 'jmp) (run (cons ti (cdr work))))
+                                   (else (run (cons ti (cons (+ i 1) (cdr work))))))))
+                               ((eq? (car x) 'call)
+                                (let* ((tgt (rt-jump-target x))
+                                       (c (and tgt (walk tgt (cons start seen-labels)))))
+                                  (if c
+                                      (begin (set! acc (append c acc))
+                                             (run (cons (+ i 1) (cdr work))))
+                                      (begin (set! ok #f) #f))))
+                               (else
+                                (let ((w (rt-written x)))
+                                  (if w
+                                      (begin (set! acc (append w acc))
+                                             (run (cons (+ i 1) (cdr work))))
+                                      (begin (set! ok #f) #f))))))))))))))))
+      (let ((r (walk label '())))
+        (and r (let dedup ((xs r) (out '()))
+                 (cond ((null? xs) out)
+                       ((memq (car xs) out) (dedup (cdr xs) out))
+                       (else (dedup (cdr xs) (cons (car xs) out)))))))))
 
   ;; CODE ALIGNMENT, AS A MEASUREMENT CONTROL.
   ;;
