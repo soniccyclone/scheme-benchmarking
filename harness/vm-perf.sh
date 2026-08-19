@@ -25,7 +25,27 @@
 #
 #   harness/vm-perf.sh <command...>
 #   EVENTS=cycles,instructions harness/vm-perf.sh ./build/sonic 1000000
+#   MODE=record harness/vm-perf.sh ./build/fannkuch/fk    a by-function profile
 #
+# MODE=record answers "where does the time go" rather than "how much is there".
+# callgrind can also attribute by function and its counts are exact, but they are
+# INSTRUCTION counts -- and D89 measured instructions and time to be different
+# questions on nbody, where removing 465M of them made it slower. A sampled cycle
+# profile attributes what actually costs.
+#
+# WHAT THIS CANNOT DO FOR YOU: GUARANTEE THE BINARY IS THE ONE YOUR SOURCE MAKES.
+# harness/disasm-sonic.sh has a header explaining why it COMPILES rather than
+# accepting a binary -- analysing a stale artifact against a fresh map produces
+# addresses that look plausible and are not, and it cost two wrong findings in
+# one session. This harness takes a command line, so it cannot compile for you,
+# and the same trap is therefore open here: D94 compared a fannkuch binary built
+# before `gconst` against a listing compiled after it, read a 0.78% instruction
+# difference as an effect of the change under test, and the change was a no-op.
+# REBUILD BEFORE YOU MEASURE, and prefer instruction counts for A/B work -- they
+# are deterministic to 0.002% across runs where CYCLES vary about 2%
+# peak-to-peak, so a one-run cycle comparison at the one-percent level says
+# nothing (D94).
+
 set -uo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -42,7 +62,8 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 # as an argument rather than as a hope.
 EVENTS=${EVENTS:-cycles,instructions,branches,branch-misses}
 VMCPUS=${VMCPUS:-2}
-sonic_reexec sonic env EVENTS="$EVENTS" VMCPUS="$VMCPUS" \
+MODE=${MODE:-stat}
+sonic_reexec sonic env EVENTS="$EVENTS" VMCPUS="$VMCPUS" MODE="$MODE" \
              bash /work/harness/vm-perf.sh "$@"
 
 [ $# -gt 0 ] || { echo "usage: vm-perf.sh <command...>" >&2; exit 2; }
@@ -76,7 +97,16 @@ trap 'rm -f "$script"' EXIT
     # error, which reads exactly like a failed run. perf writes its report to
     # stderr, so discarding stdout costs nothing here: this harness is asked for
     # counters, never for the program's answer. Correctness is the suite's job.
-    printf 'exec perf stat -e %s -- %s >/dev/null\n' "$EVENTS" "$*"
+    if [ "$MODE" = record ]; then
+        # perf.data goes to the guest's /tmp, never to /work: the repo is mounted
+        # read-write and a sampling profiler dropping megabytes into it is how a
+        # tree acquires untracked junk that later gets committed by an `add -A`.
+        printf 'cd /tmp || exit 1\n'
+        printf 'perf record -q -F 4000 -g --output=/tmp/perf.data -- %s >/dev/null 2>&1\n' "$*"
+        printf 'perf report --input=/tmp/perf.data --stdio --no-children --percent-limit 0 2>/dev/null | head -400\n'
+    else
+        printf 'exec perf stat -e %s -- %s >/dev/null\n' "$EVENTS" "$*"
+    fi
 } > "$script"
 chmod +x "$script"
 

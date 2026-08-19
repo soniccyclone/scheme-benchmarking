@@ -494,7 +494,27 @@
                          (sub-transfer (caddr blk))))))
          blocks))
 
-  (define (allocate-program/precolored cc blocks classes pins)
+  ;; `destroys-of` is optional and is the SAME thing finalize.ss hands the
+  ;; unpinned path: a call instruction -> the registers that call can destroy, or
+  ;; #f for "assume everything".
+  ;;
+  ;; It has to be threaded here rather than left out because of which functions
+  ;; take this path. A function has pins exactly when it has PARAMETERS, which is
+  ;; nearly all of them, so passing them through `allocate-program` -- whose
+  ;; `destroys-of` is the constant #f -- meant the clobber analysis applied to
+  ;; almost nothing. Measured on fannkuch: `count-flips` spilled its flip counter
+  ;; to the stack and incremented it there, `mov %r13,0x8(%rsp)` then `addq
+  ;; $0x1,0x8(%rsp)`, across a call to a LEAF that writes neither r13 nor any
+  ;; other callee-saved register. The information to keep it in a register was
+  ;; computed and then discarded at this boundary.
+  (define allocate-program/precolored
+    (case-lambda
+      [(cc blocks classes pins)
+       (allocate-program/precolored cc blocks classes pins (lambda (i) #f))]
+      [(cc blocks classes pins destroys-of)
+       (allocate-program/precolored* cc blocks classes pins destroys-of)]))
+
+  (define (allocate-program/precolored* cc blocks classes pins destroys-of)
     (check-pins! cc pins)
     ;; No live-range test here, unlike the single-block entry point. Pins over a
     ;; CFG come from the parameter list, where distinct parameters take distinct
@@ -502,7 +522,7 @@
     ;; bug in the caller, so it is checked directly and cheaply.
     (let ((rs (map pin-reg pins)))
       (unless (= (length rs) (length (remove-duplicates rs)))
-        (error 'allocate-program/precolored
+        (error 'allocate-program/precolored*
                "two pins claim the same register" rs)))
     (let* ((a (callconv-arch cc))
            (taken (map pin-reg pins))
@@ -513,8 +533,9 @@
                                (without (arch-float a) taken)
                                (arch-structural a)
                                (arch-scratch a)))
-           (result (allocate-program reduced (hide-blocks blocks pinned-vregs)
-                                     classes))
+           (result (allocate-program/clobbers reduced
+                                              (hide-blocks blocks pinned-vregs)
+                                              classes destroys-of))
            (m (alloc-result-map result)))
       (for-each (lambda (p) (hashtable-set! m (pin-vreg p) (pin-reg p))) pins)
       (make-alloc-result a m (alloc-result-spills result))))

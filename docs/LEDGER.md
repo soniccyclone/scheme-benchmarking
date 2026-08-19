@@ -3947,3 +3947,61 @@ in the whole program. Filed as `qaq.21`, and it is the first optimisation in
 several entries whose payoff is not ruled out in advance: fannkuch converts
 instructions to time, and this is the largest identified block of instructions
 that does no arithmetic.
+
+## D94 — the instrument's noise floor, a stale binary, and a fix that was a no-op
+
+Three findings, and the first two are about the instrument rather than the
+compiler.
+
+**The counters are not equally trustworthy.** Five runs of the same fannkuch
+binary through the guest:
+
+```
+cycles        9,918,635,300  9,895,814,550  10,090,014,065  9,954,541,701  9,931,530,148
+instructions 27,847,016,850 27,846,949,133 27,847,440,580 27,847,026,529 27,846,970,094
+```
+
+Instruction counts vary by **0.002%** — deterministic for practical purposes.
+Cycles vary by **1.96% peak to peak**. So a single-run cycle comparison at the
+one or two percent level says nothing, and several numbers in D89 and D93 were
+read more precisely than they deserved. Instruction counts remain sound for A/B
+work; cycle claims need repetition or a difference large enough to clear 2%.
+(D89's specializer conclusion survives — it rests on a monotonic trend across
+three budgets plus deterministic instruction and branch counts, not on the cycle
+figures alone.)
+
+**A stale binary, in the harness written to avoid exactly that.**
+`harness/disasm-sonic.sh` carries a header explaining that it COMPILES rather
+than accepting a binary, because analysing a stale artifact against a fresh map
+"produces addresses that look plausible and are not, and it cost two wrong
+findings in one session". `vm-perf.sh` takes a command line, so it cannot
+compile, and the trap is open there. D93's fannkuch instruction figure
+(27,632,610,299) came from a binary on disk that predated `gconst`, while the
+listing it was reasoned about came from a fresh compile. The corrected figure is
+**27,847,0xx,xxx**, which moves the ratio against gcc from 2.479 to 2.499 and
+changes no conclusion — but the two numbers were never comparable and I read a
+difference between them as an effect. A warning now sits at the top of
+`vm-perf.sh`.
+
+**And the fix under test did nothing.** `finalize.ss` runs the clobber analysis
+only for functions with no pinned parameters, and a function has pins exactly
+when it has parameters — so the analysis applied to almost nothing. That is real
+and is now fixed: `allocate-program/precolored` takes `destroys-of` and threads
+it to `allocate-program/clobbers` instead of the constant-#f `allocate-program`.
+
+It changes not one byte of fannkuch. The listings before and after are identical
+under `diff`. The counter in `count-flips.loop` is still spilled — `mov
+%r13,0x8(%rsp)` then `addq $0x1,0x8(%rsp)` — across a call to a LEAF that writes
+neither r13 nor any other register it needed.
+
+So the pins boundary was not the binding constraint; something upstream is
+already answering "assume everything" for this callee. The candidate the code
+names is the recursive-cycle rule: in this compiler a loop IS a letrec-bound
+self-tail-calling procedure, so if the cycle test is computed over the IR call
+graph rather than the emitted control flow, every loop is a cycle and every call
+into one is unanalysable. That is `qaq.22`.
+
+**The change stays.** It is correct, the suite is green at 8589/0/59 including
+the bit-exact oracle, and it removes a genuine gap that will matter the moment
+the upstream conservatism is relaxed. But it bought nothing today and the ledger
+should not imply otherwise.

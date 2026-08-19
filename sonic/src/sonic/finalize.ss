@@ -1762,8 +1762,12 @@
                  (alloc (if (null? pins)
                             (allocate-program/clobbers arch (cdr fn) classes
                                                        clobbers-of)
+                            ;; clobbers-of goes to BOTH paths. A function has
+                            ;; pins exactly when it has parameters, so omitting
+                            ;; it here applied the analysis to almost nothing.
                             (allocate-program/precolored
-                             (callconv-by-name target) (cdr fn) classes pins)))
+                             (callconv-by-name target) (cdr fn) classes pins
+                             clobbers-of)))
                  (done
                   (finalize-function
                    target arch (car fn) sel-blocks alloc classes labels ps
