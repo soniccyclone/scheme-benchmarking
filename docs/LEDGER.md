@@ -5135,3 +5135,54 @@ downgraded to P3 on nbody evidence; D114 gives no reason to raise it, since
 nothing here isolates it either. Two plausible causes, one measured and refuted,
 one still unmeasured, and the ledger should not let the unmeasured one inherit
 the credibility of having been listed beside it.
+
+## D115 — the reversal is 64% of fannkuch and it is spread over four functions
+
+D114 said roughly 60% of fannkuch's time is in code this session has never
+disassembled, and that was an artefact of a profile that captured 41 samples.
+A fuller one attributes 73.3%:
+
+```
+  20.44%  count-flips.loop         7.18%  loop%2.14@8.435.loop
+  14.76%  loop%2.372.loop          4.77%  next.loop
+  11.82%  loop%2.14.434.loop       2.10%  copy-perm.loop
+  10.00%  loop%2.14@8.373.loop     1.14%  join.240.loop
+```
+
+`count-flips` plus the four `loop%2.*` halves is **64.2%**, and that is exactly
+the code D113 read and called near-optimal. So the claim to correct is D114's,
+not D113's: the time is not somewhere unexamined, it is in the reversal.
+
+**And the reversal is not one loop. It is four functions that tail-call each
+other**, with eight `loop%2.*` labels in the binary altogether:
+
+```
+loop%2.372         30 instructions, 6 register copies, 1 tail jump
+loop%2.14.434      30 instructions, 6 register copies, 1 tail jump
+loop%2.14@8.373    17 instructions, 3 register copies, 1 tail jump
+loop%2.14@8.435    17 instructions, 3 register copies, 1 tail jump
+```
+
+Eighteen register-to-register copies across the four, all of them the argument
+setup D107 identified -- values moved into the registers the next half's
+convention requires. A swap itself is eight instructions (D113); a swap plus the
+transition machinery around it is a good deal more.
+
+**Where the four came from.** `unroll-fully` and the specializer produce variants
+-- `loop%2.14.434` and `loop%2.14@8.435` are specialised copies of `loop%2.372`
+and `loop%2.14@8.373` -- and D89 measured that pass as a net loss on cycles at
+every budget it was given. Its output is still here at the default budget, and
+what it produced is a hot loop distributed over four call-connected pieces.
+
+**This is a better-shaped question than the last four entries had.** It is not
+"where does Scheme overhead come from" (D113: there is none in the flip), nor
+word size (D114: 6%), nor instruction count in the abstract (D111: removing it
+made things worse). It is: **a single reversal loop is compiled into four
+mutually tail-calling functions, and the transitions between them are paid on
+every iteration of the hottest code in the benchmark.**
+
+Whether merging them is possible is not established here and should not be
+assumed -- the specializer split them for a reason D89 partly documents, and
+`qaq.21`'s pre-colouring would remove the copies without removing the
+transitions. Filed as `qaq.29`, with the profile, the four listings and the copy
+counts, so the next attempt starts from the shape rather than from a count.
