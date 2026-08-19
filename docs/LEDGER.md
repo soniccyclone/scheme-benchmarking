@@ -5239,3 +5239,49 @@ fast. A third possibility exists and is untested: keep unrolling for the analysi
 and UNDO it afterwards, once the checks are proven and before code generation.
 That would need the elision facts to survive re-rolling, which nothing in the
 tree currently does.
+
+## D117 — correcting D116: the elision is not worth the transformation that enables it
+
+D116 called the unrolling result "a trade -- 5.6% on one benchmark against the
+check-elision property". That framing is wrong in a way that changes what is
+being asked, and the numbers were already on the page.
+
+```
+                 instructions      cycles      bounds checks   binary
+unroll ON       27,034,305,919   9,926.6M mean     none         7,898 bytes
+unroll OFF      30,734,043,653   9,368.6M mean     present      6,828 bytes
+```
+
+Turning unrolling off does not buy speed at the cost of safety. It produces code
+that **executes more instructions, carries the bounds checks, is 13% smaller, and
+is 5.6% faster.** There is no axis on which the checks are the price.
+
+**What is actually being paid for is the elision, and it costs 5.6%.** The checks
+that unrolling removes were provably unnecessary -- that is what elision means --
+so they were never going to fire, and a never-taken well-predicted branch is
+nearly free. The transformation that proves them unnecessary duplicates the hot
+loop, and on a benchmark spending 25.2% of its cycles on mispredict redirect
+(D112) that duplication costs more than the checks ever did.
+
+So the honest statement is not "5.6% versus safety". It is: **on fannkuch,
+eliding provably-dead bounds checks is a net loss, because the analysis needs a
+transformation whose cost exceeds the checks'.** The elided check was cheap; the
+proof was expensive.
+
+**This is a result about the project's central claim, and it is one benchmark.**
+D5 and D24 rest on check elision being the contribution, and on nbody the same
+configuration is neutral -- 0.17%, inside noise, paying 6.7% more instructions
+for the checks it re-adds. So elision-via-unrolling is neutral on the
+float-heavy, dependency-bound benchmark and harmful on the integer,
+front-end-bound one. Two benchmarks, and they disagree, which is the same shape
+D89 and D101 kept producing.
+
+What Nathan is being asked is therefore narrower than D116 said: not whether to
+give up checking, but whether the elision *machinery* earns its keep on a
+front-end-bound target, and whether the re-roll idea on `qaq.29` is worth
+building to get the proof without the duplication.
+
+**And a note on how the correction happened.** D116's numbers were complete and
+its conclusion was not. I read "checks come back when unrolling is off" as a cost
+without noticing that the same column was already faster. Re-reading a table I
+had written an hour earlier was the whole of it.
