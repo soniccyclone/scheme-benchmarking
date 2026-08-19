@@ -4602,3 +4602,61 @@ right about the mechanism and wrong about the outcome, which no amount of readin
 the artifact beforehand would have caught: the effect that dominated is one the
 listing cannot show. Pre-verification has killed three bad plans this session
 (D91, D93, D102) and could not have killed this one.
+
+## D105 — fannkuch's cycle count moves 5% on code alignment alone
+
+D104 reverted a correct change on a 1.8% cycle regression and guessed the cause
+was code layout. The guess is testable: append unreachable instructions to the
+end of the runtime, which sits before all user code, so every user instruction
+shifts and nothing else changes at all.
+
+```
+             fannkuch cycles      instructions
+pad 0        9,778,552,960        27,033,917,755
+pad 1        9,853,025,913        27,034,063,656
+pad 2        9,734,106,403        27,033,919,882
+pad 3        9,900,108,989        27,034,211,547
+pad 5        9,884,551,119        27,034,135,709
+pad 8        9,430,695,223        27,033,296,643
+```
+
+**A 4.97% spread from alignment**, instruction counts constant to 0.003%. Eight
+unreachable instructions make fannkuch 3.6% FASTER than none.
+
+**nbody, the same sweep: 0.26%.** 942.2M, 944.7M, 944.4M, 942.3M. The difference
+between the two is exactly their established cost structures — nbody is
+dependency-bound (D90: 85.65% register dependencies), where front-end alignment
+cannot matter, and fannkuch is dispatch-limited with a 2.5% mispredict rate
+(D101), where alignment and branch-predictor indexing are most of what there is.
+
+**This is a larger result than any optimisation in this session, and it
+invalidates measurements in it.**
+
+- D104's 1.8% "regression" is inside the layout band. That change -- real clobber
+  sets for runtime routines -- was correct, removed real spills, changed no
+  executed instruction, and was reverted on alignment luck. The revert was wrong.
+- D97's fannkuch **cycle** claim (9,957.6M to 9,808.8M, ~1.5%) is also inside the
+  band and should not have been stated as real. Its INSTRUCTION claim, -2.78% on
+  a deterministic counter, stands untouched and is the reason to keep the change.
+- D98's 0.15% cycle observation was already called noise and remains so.
+- D89's nbody sweep is unaffected: nbody does not move on alignment, and that
+  entry's conclusion rests on instruction and branch counts besides.
+
+**The rule that follows.** A fannkuch cycle comparison between two builds is
+meaningless below about five percent unless both are swept across several pad
+values and the distributions compared. Comparing one build of each at pad 0
+measures alignment luck. `layout-pad` is now a parameter in `runtime.ss` with
+this table in its header, so the control is available rather than merely
+described.
+
+Instruction counts remain the sound currency for fannkuch: deterministic to
+0.002% (D94), unmoved by alignment, and the thing a dispatch-limited benchmark
+actually spends.
+
+**And a process failure worth recording.** D104's implementation was reverted by
+restoring backups and was never committed, so it is NOT in git history -- the
+note I put on `qaq.28` saying it is, is false and is corrected there. Half an
+hour of careful work on a walk that correctly handled `syscall`'s implicit `rcx`
+and `r11` had to be reconstructed from the session transcript. A change measured
+and rejected should be committed on a branch or its diff kept, because the
+measurement that rejected it may itself be wrong -- as this one was.

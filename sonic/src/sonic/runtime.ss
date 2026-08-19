@@ -44,7 +44,7 @@
 ;;; and alloc.ss own that, and the metadata D21 needs is already emitted.
 
 (library (sonic runtime)
-  (export runtime-listing runtime-labels
+  (export runtime-listing runtime-labels layout-pad
           heap-base-address heap-size
           runtime-data-size
           heap-pointer-cell out-buffer-cell command-line-cell gcmeta-cell
@@ -1224,10 +1224,40 @@
       (addi a7 zero ,rv64-sys-exit)
       (ecall)))
 
+  ;; CODE ALIGNMENT, AS A MEASUREMENT CONTROL.
+  ;;
+  ;; Appends N unreachable instructions to the end of the runtime, which sits
+  ;; BEFORE all user code in the image, so every user instruction shifts by 3N
+  ;; bytes with nothing else changed at all.
+  ;;
+  ;; This exists because a cycle comparison between two builds of fannkuch is
+  ;; meaningless below about five percent without it. Measured (D105), same
+  ;; source, padding alone:
+  ;;
+  ;;     pad 0   9,778.6M cycles      pad 3   9,900.1M
+  ;;     pad 1   9,853.0M             pad 5   9,884.6M
+  ;;     pad 2   9,734.1M             pad 8   9,430.7M
+  ;;
+  ;; A 4.97% spread with instruction counts constant to 0.003%. nbody moves
+  ;; 0.26% over the same sweep, and the difference is the two benchmarks'
+  ;; established cost structures: nbody is dependency-bound (D90) where front-end
+  ;; alignment cannot matter, fannkuch is dispatch-limited with a 2.5% mispredict
+  ;; rate (D101) where it dominates.
+  ;;
+  ;; So: to compare two fannkuch builds, sweep both across several pad values and
+  ;; compare the distributions. Comparing one build of each at pad 0 measures
+  ;; alignment luck, which is how D104 read a layout artefact as a 1.8%
+  ;; regression and reverted a correct change.
+  (define layout-pad (make-parameter 0))
+
   (define (runtime-listing target entry . opt)
     (let ((lane-mask? (if (null? opt) #t (car opt))))
       (case target
-        ((x86-64) (x86-64-listing entry lane-mask?))
+        ((x86-64) (append (x86-64-listing entry lane-mask?)
+                          ;; Unreachable: everything above it ends in `ret` or a
+                          ;; jump, so this is bytes and nothing else.
+                          (let loop ((n (layout-pad)) (acc '()))
+                            (if (<= n 0) acc (loop (- n 1) (cons '(mov rsi rsi) acc))))))
         ((rv64) (rv64-listing entry))
         (else (error 'runtime-listing "unknown target" target)))))
 
