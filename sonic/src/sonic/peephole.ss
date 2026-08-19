@@ -503,6 +503,7 @@
   ;; instruction rather than just an operand.
   (define fold-target '(add sub and or cmp))
 
+
   (define (imm-of i)
     (and (pair? i) (eq? (car i) 'mov) (= (length i) 3)
          (pair? (caddr i)) (eq? (car (caddr i)) 'imm)
@@ -517,6 +518,34 @@
          (eq? (cadr i) r)
          (not (mentions? (cddr i) r))))
 
+  ;; WRITES r AS ITS DESTINATION, whether or not it also reads it.
+  ;;
+  ;; `redefines?` above answers a narrower question -- a PURE definition, one
+  ;; that overwrites r without reading it -- because that is what licenses
+  ;; deleting the materialisation. Two-address arithmetic is not that:
+  ;; `sub r13, rdx` computes `r13 = r13 - rdx`, so it both reads and writes, and
+  ;; `redefines?`'s opcode whitelist (mov movsd movzx lea cvtsi2sd) does not list
+  ;; it at all.
+  ;;
+  ;; The run must still STOP there. It did not, and the constant survived across
+  ;; an instruction that had just changed it:
+  ;;
+  ;;     mov  r11, 1
+  ;;     mov  r13, r11      ->  mov r13, 1     (sound)
+  ;;     sub  r13, rdx                          ; r13 is now 1 - rdx
+  ;;     mov  rdi, r13      ->  mov rdi, 1     (WRONG)
+  ;;
+  ;; Reachable only once a fold CREATES a constant in a register that later
+  ;; arithmetic modifies in place, which is why searching the pre-fold listing
+  ;; for the shape found none of it -- the shape exists only in code this pass
+  ;; produces. `cmp` and `test` are excluded because they write flags, not their
+  ;; first operand.
+  (define (modifies? i r)
+    (and (pair? i)
+         (>= (length i) 2)
+         (eq? (cadr i) r)
+         (not (memq (car i) '(cmp test)))))
+
   (define (mentions? x r)
     (cond ((eq? x r) #t)
           ((pair? x) (or (mentions? (car x) r) (mentions? (cdr x) r)))
@@ -530,6 +559,18 @@
          (= (length i) 3)
          (eq? (caddr i) r)
          (not (eq? (cadr i) r))))
+
+  ;; A PLAIN COPY IS NOT LISTED ABOVE, DELIBERATELY, and D100 is why. `mov rcx,
+  ;; rdi` where rdi holds a constant has exactly the right shape, fannkuch does
+  ;; it 21 times in blocks that are ~31% of its profile, and enabling it is one
+  ;; clause. Measured: fannkuch 27,033,942,394 instructions against 27,034,212,993
+  ;; without -- 0.001%, which is nothing.
+  ;;
+  ;; The reason is that the materialisation almost always survives: the source
+  ;; register has another reader, so the copy is REPLACED rather than removed and
+  ;; the instruction count does not move. What does move is code size, a 7-byte
+  ;; `mov r64, imm32` for a 3-byte `mov r64, r64`. A rule that pays bytes for
+  ;; nothing is worse than no rule.
 
   ;; Rewrite one use to take the immediate. `imul`'s immediate form is
   ;; three-address, so the shape changes rather than just the operand.
@@ -626,7 +667,8 @@
                   ;;
                   ;; So the run STOPS here -- uses before the barrier still fold,
                   ;; nothing after it does, and the materialisation is kept.
-                  ((leaves-block? (car rest))
+                  ((or (leaves-block? (car rest))
+                       (modifies? (car rest) r))
                    (cond
                     ((zero? folds) (loop (cdr is) (cons (car is) out)))
                     (else
@@ -645,7 +687,8 @@
        ((null? is) (reverse out))
        ;; The same barrier as the scan: past a call, `r` may hold that call's
        ;; return value rather than the constant.
-       ((or (redefines? (car is) r) (leaves-block? (car is)))
+       ((or (redefines? (car is) r) (leaves-block? (car is))
+            (modifies? (car is) r))
         (append (reverse out) is))
        ((foldable-use? (car is) r) (walk (cdr is) (cons (fold-use (car is) k) out)))
        (else (walk (cdr is) (cons (car is) out))))))

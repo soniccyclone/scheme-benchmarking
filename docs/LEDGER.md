@@ -4286,3 +4286,65 @@ but the trip paid for itself. A wrong-code bug that survives in a compiler until
 some unrelated change happens to reach it is exactly the kind this project's
 oracles exist to catch, and this one was caught by making it reachable rather
 than by reasoning about it.
+
+## D100 — the second latent fold bug, found by bisection; the optimisation is worth nothing
+
+D99 left `qaq.25` open with a failure it could not explain and two refuted
+hypotheses. Bisecting found it, and one of those refutations was wrong.
+
+**Method.** A parameter naming which destination registers a folded copy may
+write, then partition. Every register ALONE passed fannkuch's oracle; all
+thirteen together failed; the minimal failing pair was `(rdi r13)`. That is a
+four-line diff to read instead of a program:
+
+```
+good:                          bad:
+mov  $0x1,%r11                 mov  $0x1,%r11
+mov  %r11,%r13                 mov  $0x1,%r13     fold 1, sound
+sub  %rdx,%r13                 sub  %rdx,%r13     r13 is now 1 - rdx
+mov  %r13,%rdi                 mov  $0x1,%rdi     WRONG
+```
+
+`sub r13, rdx` writes `r13`, and `redefines?` lists only `mov movsd movzx lea
+cvtsi2sd`, so the run continued across an instruction that had just changed the
+value it was propagating.
+
+**D99 checked this hypothesis and got zero hits, and the search was wrong.** It
+looked for the shape in the listing as compiled — a constant materialised into a
+register, then an unrecognised definition of it, then a copy out. The constant
+only ARRIVES in `r13` because of fold 1. The shape exists nowhere in the input
+and only in code the pass itself produces, so searching the input could not find
+it. A pass that rewrites its own scan window has to be reasoned about after the
+rewrite, not before.
+
+**Fixed.** `modifies?` — writes r as its destination, whether or not it also
+reads it — now stops the run in both the scan and `fold-run`. It is deliberately
+separate from `redefines?`, which answers the narrower "pure definition"
+question that licenses DELETING the materialisation; two-address arithmetic reads
+its destination and must not license that. `cmp` and `test` are excluded, writing
+flags rather than their first operand.
+
+This is the second latent wrong-code bug in this pass in one session, after D99's
+"a call writes its return register". Both have the same root: `fold-immediates`
+decides what a register holds from an opcode whitelist rather than from a def/use
+model, and a whitelist is wrong by default for everything not on it. The two
+fixes together make the run stop at any barrier and at any write.
+
+**And the optimisation that found them is not worth having.**
+
+```
+                     without      with
+fannkuch    27,034,212,993   27,033,942,394    -0.001%
+nbody        3,321,767,924    3,321,777,529    +0.0003%
+```
+
+Both are noise. The materialisation almost always survives -- the source register
+has another reader -- so the copy is REPLACED rather than removed and the count
+does not move, while code size grows a 7-byte `mov r64, imm32` for a 3-byte
+`mov r64, r64`. Reverted, with the measurement written into `peephole.ss` beside
+the rule it explains, so the next reader who notices the missing clause finds out
+why before spending a session on it.
+
+**What the session actually bought here:** two wrong-code bugs fixed, an
+optimisation correctly declined, and a note in the source that stops it being
+re-attempted. `qaq.25` closes.
