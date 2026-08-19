@@ -5979,3 +5979,43 @@ matters, because D132's whole lesson is that an absence of evidence and evidence
 of absence read identically in a test suite.
 
 Suite 8602 checks, 0 failures, 60 suites.
+
+## D135 — the audit `qaq.31` asked for, done: four fixture-only, one with no test
+
+D134 filed the audit and warned that a grep miss is not evidence of a gap. Doing
+it properly -- checking whether each pass's test ever runs it on a real program,
+then reading what those references actually are:
+
+```
+addrfold    "--- end to end, on nbody ---", a real section        COVERED
+dce         nbody named once, in a header comment                 fixture-only
+cse         nbody named three times, all header comments          fixture-only
+peephole    nbody named once, in a header comment                 fixture-only
+fold        nbody named once, in a header comment                 fixture-only
+specialize  no test file exists                                   UNCOVERED
+```
+
+**The grep that found "runs on a real program: yes" for five of these was
+counting comments.** Every one of those files discusses nbody in its header --
+they are well-documented passes, and the documentation is what the grep matched.
+A second look at the matching LINES separates a section that compiles nbody from
+a sentence about why the pass exists.
+
+So five passes could go inert without any test noticing, and one of them is
+`peephole`, which this session modified twice (D99's barrier, D100's
+`modifies?`). Had either change made a rule stop firing rather than fire wrongly,
+the suite would have stayed green at 8602 checks.
+
+**Not adding the assertions here, and the reason is specific rather than
+fatigue.** `gconst`'s was easy because the pass reports a substitution count that
+is zero when inert. `peephole`'s honest equivalent is harder: its output property
+is "no instruction sequence still matches a rule's input pattern", and the one
+pattern I checked -- `mov dst,src` followed by `add dst,imm` -- occurs six times
+in nbody today, because the `lea` rewrite that would remove it is unsound without
+EFLAGS liveness (D84, `qaq.15`). An assertion that the pattern is absent would be
+false; an assertion that it is rare would be arbitrary. Choosing the right output
+property for each of these five is the work, and it is worth doing carefully
+rather than at the end of a long session.
+
+`qaq.31` keeps the audit and now names the five, so the next attempt starts from
+which passes need it rather than from a grep.
