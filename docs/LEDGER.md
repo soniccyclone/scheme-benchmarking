@@ -7948,3 +7948,43 @@ The technique is worth more than the result here: an unsound probe is a legitima
 instrument when the question is "how much is there", as long as nothing executes
 what it produces. It cost one compile and it replaced an argument about mechanisms
 with a number.
+
+## D180 — M5 re-measured on binaries the harness actually built
+
+D127 concluded that M5 as worded cannot be settled by measuring harder, because
+the standing moved between two sessions while the compiler did not. D166 then
+found something that bears directly on that conclusion: `bench.sh` never compiled
+anything, and `compile.sh` had been failing from the host since **2026-08-10** --
+eight days before D127. Every M5 figure in the record was taken by a harness that
+ran whatever binary happened to be on disk.
+
+That does not prove the old numbers were stale. The binaries existed, so something
+built them, and which build each session measured cannot be recovered now. It does
+mean the drift D127 attributed to the environment had a second candidate
+explanation the whole time.
+
+With the harness rebuilding first and saying so -- three `[built]` lines before
+any timing -- 40 reps, baseline c-native:
+
+| config | D86 ratio | D127 ratio | **today** |
+| --- | --- | --- | --- |
+| c-native | (baseline) | (baseline) | (baseline) |
+| sonic-fma | 1.0414, CI spans 1.0 | 1.0811, CI **excludes** | **1.0345, CI [0.9693, 1.1247] spans 1.0** |
+| sonic | 1.0969 | 1.1743 | **1.1216, CI [1.0734, 1.2273] real** |
+
+**Two of three sessions now say "no detected difference" between sonic-fma and
+gcc -O3 -march=native, and the odd one out is D127.** That is a better-supported
+standing than the two-session record it replaces, and it is the first row taken
+with the rebuild verified. It does not overturn D127 -- one session is one session,
+and D127's own point was that a single row is not the standing -- but it moves the
+weight of evidence back toward where D86 put it.
+
+Plain `sonic` improved from 1.1743 to 1.1216. Some of that is D167, which removed
+2.87% of nbody's instructions; how much cannot be separated from session drift by
+this measurement, and the instruction count is the part that reproduces.
+
+**What this changes for qaq.7:** nothing about the decision, which is still
+Nathan's. It changes the evidence the decision rests on -- from two sessions
+disagreeing, one of which had a harness that may have measured a stale binary, to
+three sessions of which two agree and the newest is the only one whose build is
+verified.
