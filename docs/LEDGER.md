@@ -6302,3 +6302,42 @@ entries they are meant to be current -- and there is no convention here for
 re-reading an open bead against work done since. Every stale line found this
 session (D123's prescription, D124's, D125's, and this) was found by acting on
 the bead rather than by reviewing it.
+
+## D143 — auditing the open beads for staleness, since nothing else does
+
+D142 found half of `qaq.13`'s description fixed three days earlier and noted the
+gap: beads are meant to be current, ledger entries are meant to be historical,
+and this project has a convention for the second and none for the first. Ten
+beads are open. Checking the ones whose claims this session's changes could have
+invalidated:
+
+**`qaq.21` -- stale number.** It says 130 register-to-register moves in fannkuch;
+there are now **118**. `merge-identical-functions` removed duplicate functions and
+with them their copies of those moves. The analysis is untouched -- they are
+argument setup, the allocator never sees the physical destination (D107), and the
+fix is a range-based pre-colouring linear scan has no notion of (D108) -- but a
+future measurement taken against 130 would report a twelve-move improvement that
+already happened.
+
+**`qaq.18` -- claim holds.** nbody's inner loop still opens
+
+```
+mov  %rdx,%rsi
+mov  $0x5,%rdi        <- overwritten before any read
+cmp  $0x5,%rsi
+```
+
+`gconst` changed how the constant arrives (an immediate rather than a global
+load) and the merge renamed the function from `inner%24.4.385` to `inner%24.197`,
+and the dead store survives both. D110's two mechanisms still explain it.
+
+**The rest were updated in place as this session went**, which is why only these
+two needed checking: `qaq.7` by D127, `qaq.30` by D122 and D125, `qaq.13` by
+D142, the P4s by D120, and `qaq.31` closed.
+
+**The convention this suggests.** A bead's claims are measurements, and this
+session established that measurements go stale in three separate ways -- the
+program changes, the machine drifts, and the instrument was wrong. A bead older
+than the work around it should be re-read before it is acted on, and the cheapest
+moment is when someone picks it up. Every stale line found today was found that
+way; none was found by review.
