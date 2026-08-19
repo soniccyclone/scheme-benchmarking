@@ -3373,3 +3373,41 @@ and not the other, which is a concrete reason to want qaq.13 beyond milestone
 completeness.
 
 The ratio between targets is 2.09x uncontracted and 2.17x contracted.
+
+## D84 — strength reduction is a wrong-code bug here, and the tree already knew
+
+Profiling the nbody inner loop turned up four `imul rX, rY, 3` doing body-index
+arithmetic. Multiplying by 3 is `lea dst, [src + src*2]` — one cycle instead of
+three, same instruction count. I wrote the peephole, confirmed a clean 1:1
+rewrite (`imul: 0  lea: 6  total: 83`), and the suite fell from 8572 checks to
+1301 with four failures.
+
+The failures were not stale pins. `target-x86-64.ss` documents the exact hazard
+in its header, about `lea` for `add`:
+
+> It does not set flags. An overflow `chk` reads the flags the preceding
+> arithmetic left, so selecting `lea` here would silently make every overflow
+> check downstream test stale flags.
+
+`imul` sets OF/CF; `lea` sets nothing. Any overflow check after a strength-reduced
+multiply reads whatever flags some earlier instruction left. That is a silent
+wrong-code bug, and the four peephole tests caught it by pinning the `imul` form.
+Reverted.
+
+**Worth recording: the disassembly says the hot-loop multiplies are unchecked** —
+no `jo` follows any of the 22 `imul`s in the binary. So the rewrite would have
+been safe *there*. Proving it in general needs EFLAGS liveness the compiler does
+not have, and the same analysis would unlock `add` → `lea` too. Measured payoff
+for that: 6 collapsible `mov`+`add` pairs out of 56 adds, in a 1525-instruction
+binary. Not the 5.3% M5 gap. Filed, not built.
+
+**The instrument that was missing.** Two empirical M5 leads died against the same
+wall: instruction counts are flat, so the gap is latency and port pressure, and
+callgrind models no pipeline. perf cannot work rootless here (D60) and no flag
+fixes it. But a pipeline model does not have to be a hardware counter —
+`llvm-mca` is a static one. It reads assembly, needs no PMU, no privileges and no
+sysctl, and reports latency, port occupancy and the critical path through a loop
+body. Added to the image (LLVM 20.1.8), resolved and verified at build time so a
+missing analyser fails the build instead of producing an empty report. Being
+static it is deterministic, the same property that made callgrind the better
+instrument in D60.

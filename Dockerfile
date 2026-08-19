@@ -112,6 +112,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # unconditionally (D59) -- valgrind's VEX cannot decode `kmovw` and used
         # to die in the prologue, reporting zero instructions.
         valgrind \
+        # A PIPELINE MODEL, WHICH callgrind IS NOT. Milestone 5 sits ~5% behind
+        # gcc -O3 -march=native, and the instruction counts say that gap is not
+        # instruction count -- so it is latency and port pressure, which callgrind
+        # cannot see and a hardware counter would have shown. perf is denied here
+        # for the reasons above and no flag fixes it, so the counter route is
+        # closed for good.
+        #
+        # llvm-mca models the scheduler STATICALLY: it reads assembly, not a
+        # running process, so it needs no PMU, no privileges and no relaxed
+        # sysctl. It reports per-instruction latency, port occupancy and the
+        # critical path through a loop body -- the diagnosis M5 was missing.
+        # Being static it is also deterministic, the same property that made
+        # callgrind the better instrument in D60.
+        llvm \
         git \
         make \
         python3 \
@@ -142,6 +156,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # setting --installprefix silently carries nothing across and `scheme` is simply
 # absent in the final image.
 COPY --from=chez /usr/local /usr/local
+# FAIL AT BUILD TIME IF THE PIPELINE MODEL IS NOT THERE. Ubuntu ships llvm-mca
+# under /usr/lib/llvm-N/bin, which is not on PATH; the `llvm` metapackage does
+# not always symlink it. A missing analyser must not turn into a mysteriously
+# empty report three layers away, so it is resolved and checked here.
+RUN set -eu; \
+    mca="$(ls -1 /usr/lib/llvm-*/bin/llvm-mca 2>/dev/null | sort -V | tail -1 || true)"; \
+    if [ -z "$mca" ]; then command -v llvm-mca >/dev/null && mca="$(command -v llvm-mca)"; fi; \
+    [ -n "$mca" ] || { echo "llvm-mca absent after installing llvm" >&2; exit 1; }; \
+    ln -sf "$mca" /usr/bin/llvm-mca; \
+    llvm-mca --version | head -2
+
 RUN ldconfig
 
 WORKDIR /work/sonic
