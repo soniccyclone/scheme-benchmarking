@@ -267,11 +267,50 @@
   (ck! "and no other vreg was handed that register, in any block"
        (for-all (lambda (v) (not (eq? (hashtable-ref m v #f) 'rcx)))
                 '(one nxt acc)))
-  (ck! "the pinned vreg is live in the TRANSFER of the last block, and hiding
-       it there is what keeps the scan from re-placing it"
+  (ck! "the pinned vreg is live in the TRANSFER of the last block, which the
+       scan must count or it would re-place it"
        (null? (alloc-result-spills res)))
   (ck! "the ORIGINAL arch comes back out, not the narrowed one"
        (eq? (alloc-result-arch res) arch-x86-64)))
+
+;; --- a pin lasts a LIVE RANGE, not a whole function ------------------------
+;;
+;; The fixture above cannot tell the two apart: `i` is read in every block, so
+;; its range covers the program and withdrawing rcx for the function and holding
+;; it for the range come to the same thing. This one separates them. `i` dies at
+;; the first instruction and nothing after it can see the value, so rcx is free
+;; for the rest of the program -- and under the implementation this replaced,
+;; which removed rcx from every pool up front, it was free for nobody.
+;;
+;; D165 measured what that cost on a real program: fannkuch's hottest block spent
+;; four of nineteen instructions shuffling loop variables out of the registers
+;; the parameters held and back again, because the body was not allowed to use
+;; them.
+
+(define dies-early
+  '((entry (block ((add t raw-word i i))
+                  (branch-if t body done)))
+    (body  (block ((const a raw-word 1)
+                   (add b raw-word a a))
+                  (ret b)))
+    (done  (block ((const c raw-word 2))
+                  (ret c)))))
+(define dies-cls (make-eq-hashtable))
+(for-each (lambda (v) (hashtable-set! dies-cls v 'raw-word)) '(i t a b c))
+
+(let* ([res (allocate-program/precolored
+             ccx dies-early dies-cls (list (make-pin 'i 'rcx 'raw-word)))]
+       [m (alloc-result-map res)])
+  (ck! "the pin still lands where told"
+       (eq? (hashtable-ref m 'i #f) 'rcx))
+  (ck! "and rcx goes back in the pool once the pinned value is dead, so a later
+       vreg gets it -- the whole point, and false before this change"
+       (let loop ([vs '(t a b c)])
+         (cond [(null? vs) #f]
+               [(eq? (hashtable-ref m (car vs) #f) 'rcx) #t]
+               [else (loop (cdr vs))])))
+  (ck! "nothing spilled: the register came back rather than being withheld"
+       (null? (alloc-result-spills res))))
 
 ;; Two pins on one register is a caller bug here rather than a live-range
 ;; question, because the pins come from a parameter list where distinct
