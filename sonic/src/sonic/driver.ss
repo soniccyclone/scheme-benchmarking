@@ -418,7 +418,23 @@
       ;; destroyed facts that were ascending correctly and left every loop
       ;; unbounded. Dropping is sound and useless; widening is the operator that
       ;; is both.
-      (define ascent-rounds 12)
+      ;; SIXTEEN, and the number is measured rather than argued. It was 4, chosen
+      ;; with the justification below -- `i < n-bodies` gives [0,5] in three
+      ;; rounds -- which is true of that parameter and of nothing else. At 4,
+      ;; nbody emitted twenty-nine traps and fannkuch eight. Swept:
+      ;;
+      ;;   rounds    nbody (bounds . overflow)   fannkuch    compile
+      ;;      4              (14 . 15)            (3 . 5)      3s
+      ;;      6              ( 0 . 15)            (3 . 5)      2s
+      ;;     12              ( 0 .  1)            (0 . 4)      2s
+      ;;     16              ( 0 .  1)            (0 . 3)      2s
+      ;;     32              ( 0 .  1)            (0 . 3)      2s
+      ;;
+      ;; Sixteen is where both stop improving, and no value here costs compile
+      ;; time. What survives is irreducible: nbody's is `(fx+ i 1)` against a
+      ;; command-line `n`, which no round count reaches, and the paragraph below
+      ;; says why -- an unbounded parameter ascends one integer per round forever.
+      (define ascent-rounds 16)
       (define (combine* tag op prev cand)
         (map (lambda (f)
                (let ((old (assq (car f) prev)))

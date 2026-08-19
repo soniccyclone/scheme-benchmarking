@@ -6866,3 +6866,39 @@ twenty-eight returning. That is the same gap D132 found in a different form --
 the suite asked whether the output was correct and not what was in it.
 
 Suite 8614 checks across 61 suites.
+
+## D157 — sixteen, not twelve: D154 found the knee for one check kind and called it the knee
+
+D154 swept `ascent-rounds` against BOUNDS checks, found 12 where both benchmarks
+reached zero, and concluded twelve is the knee. D155 then found the constant was
+costing overflow checks too, and nobody re-ran the sweep. Doing that:
+
+```
+rounds    nbody (bounds . overflow)   fannkuch    compile
+   4              (14 . 15)            (3 . 5)      3s
+   6              ( 0 . 15)            (3 . 5)      2s
+  12              ( 0 .  1)            (0 . 4)      2s
+  16              ( 0 .  1)            (0 . 3)      2s
+  32              ( 0 .  1)            (0 . 3)      2s
+```
+
+**Sixteen is where both benchmarks stop improving**, and no value in this range
+costs compile time. Twelve left one fannkuch overflow check on the table -- in
+`next`, `(add rdx (imm -1))` -- that sixteen discharges.
+
+The table is now in `driver.ss` beside the constant, replacing a justification
+that cited one example. That is the third correction in this thread and all three
+are the same mistake at different scales: **a number validated against the case
+in front of me and generalised without being re-derived.** The original 4 was
+right for `i < n-bodies`; D154's 12 was right for bounds checks; and the sweep
+that would have caught either takes two seconds per point.
+
+Final state of the checks:
+
+```
+nbody     0 bounds, 1 overflow   -- the step counter against a command-line n
+fannkuch  0 bounds, 3 overflow   -- count-flips, join.129 x2
+```
+
+From twenty-nine and eight. Suite 8614 checks across 61 suites, smoke gate
+passing.
