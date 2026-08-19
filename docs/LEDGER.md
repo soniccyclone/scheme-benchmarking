@@ -9001,3 +9001,41 @@ default and behaves like a hardcoded constant for everyone who does not know the
 variable exists. When the correct value is a property of the host, the shell
 should ask the host; when it is a policy, a default is right. `cpus` is the first
 and was written as the second.
+
+## D204 — the engine picker asked whether podman exists, not whether it works
+
+Third and last of the fixes-to-my-own-fixes. D202 found the export could empty the
+file it was meant to keep fresh; D203 found the CPU default was one box's number
+wearing a variable's clothes; this one is the same shape in the engine picker, and
+it was the original CI bug all along.
+
+```
+elif command -v podman >/dev/null 2>&1; then echo "podman compose"
+```
+
+CLAUDE.md states the distinction in the file this ignores: *"Podman needs a
+compose PROVIDER installed before `podman compose` does anything at all."* Without
+one, podman delegates to the docker-compose plugin, which looks for a podman
+socket nothing is serving. GitHub's runners have podman and no provider, which is
+why CI started no container for five days.
+
+D194 fixed that by pinning `SONIC_COMPOSE: docker compose` in the workflow. That
+fixed CI and left the trap armed for any machine with podman installed and
+unconfigured -- exactly what D203 had just finished undoing for `cpus`. Two
+consecutive fixes of mine had the same defect: **repair the one machine that
+showed the symptom, leave the condition.**
+
+The provider is now part of the test, as a PATH lookup rather than a probe --
+`podman info` costs 0.8s here and this runs on every container start, while
+`command -v podman-compose` is free and is the thing that must exist. A podman
+without a provider gets a named error instead of a socket message from a plugin
+nobody asked for.
+
+**Both CI overrides are gone, and that is the point rather than tidiness.** CI is
+the only four-core machine this project has and the only one with
+podman-but-no-provider. Pinning either variable fixes CI and hides whether the
+code that has to work everywhere else does -- which is D193's lesson, applied to
+the fix for D193.
+
+Verified with nothing pinned: 8 containment passes, 8653 checks, 0 failures, on a
+runner that now chooses docker by itself for the right reason.
