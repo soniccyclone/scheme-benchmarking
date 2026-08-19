@@ -6019,3 +6019,48 @@ rather than at the end of a long session.
 
 `qaq.31` keeps the audit and now names the five, so the next attempt starts from
 which passes need it rather than from a grep.
+
+## D136 — why five passes have no not-inert assertion, and it is structural
+
+D135 named five passes that could go inert unnoticed and said choosing the output
+property was the work. Attempting `dce` found the reason the work is hard, and it
+is not per-pass carelessness.
+
+**A pass can be asserted end-to-end when its effect is visible in the final
+artifact.** The ones that have such assertions all do:
+
+```
+elide      bounds branches in the emitted code (nbody: zero)
+addrfold   spills in the force loop (zero)
+slp        packed arithmetic, via disasm-test
+contract   the FMA count
+merge      no two emitted functions identical under renaming (D133)
+gconst     a substitution count that is zero when inert (D134)
+```
+
+**The five that do not, cannot -- their effect is consumed downstream.** `dce`
+removes dead definitions from Lmach; selection, peephole and the allocator then
+create and remove their own. The obvious property, "no dead `const` survives to
+the emitted listing", is FALSE today and would fail against a working pass: D110
+established three that do survive in fannkuch's hottest block, because a `chk`
+reads them at dce's level and their uses are folded into immediates only later.
+`cse`, `peephole` and `fold` have the same shape, and `specialize` has no test at
+all.
+
+**So the assertion these five want is mid-pipeline, and the pipeline does not
+expose intermediate forms.** `compile-sonic` returns finalized functions;
+`addrfold-test.ss`'s end-to-end section works precisely because spills are
+readable from a finalized function. Reaching an Lmach program from a test means
+either re-running the front half by hand -- which `unroll-test.ss` does, in nine
+lines of pipeline that will drift -- or the driver returning its intermediates.
+
+That is a design question rather than five test-writing tasks, and it is the
+useful output of this audit. `qaq.31` says so now: the five are not five gaps of
+the same kind as `gconst`'s, they are one gap in what the pipeline lets a test
+see.
+
+**A note on how far the original grep was from this.** It reported eleven passes
+lacking an assertion. Reading the lines cut that to five. Attempting one of the
+five found that the five are not the problem the other six were. Three
+successive narrowings, none of which needed information that was unavailable at
+the start.
