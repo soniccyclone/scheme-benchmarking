@@ -7559,3 +7559,53 @@ Four checks. Not inert: removing the declaration fails two of them.
 both are correct. A masked operation writes v0 whether or not anything allocated
 it, so a caller must treat it as destroyed; nothing may be given it. Suite 8631 /
 0 / 63, RISC-V gate green.
+
+## D172 — the three instructions a packed pair needs to be built and taken apart
+
+Third piece of D169's decomposition, and the first that had to touch the encoder.
+slp.ss emits seven packed operations:
+
+```
+p2add p2sub p2mul p2div p2splat   ->  vfadd.vv vfsub.vv vfmul.vv vfdiv.vv vfmv.v.f
+p2hi p2pack                       ->  nothing this encoder had
+```
+
+Five of the seven land on mnemonics vec-rv64.ss already encoded. The other two are
+the ones that get a pair INTO and OUT OF the vector file, and without them there
+is no complete packed program on RV64 -- so there is nothing to test the other
+five with, which is why this had to come before any selection rule.
+
+```
+p2hi    d = s[1]      vslidedown.vi t, s, 1   then  vfmv.f.s d, t
+p2pack  d = (a, b)    vfmv.v.f t, a           then  vfslide1down.vf d, t, b
+```
+
+`vfslide1down` shifts every lane down one and puts the scalar in the TOP lane, so
+splatting `a` and sliding `b` in leaves exactly `(a, b)` at vl=2. That is the
+pack, not an approximation of one.
+
+Two new operand forms came with them, and both exist because a field means
+something different here than in the forms already present. `vi` puts a 5-bit
+immediate where `vv` puts vs1. `vwunary` puts an FPR in the vd field -- it reads
+lane zero OUT to the scalar file, the mirror of `vf`, which writes one in.
+
+**Verified against binutils rather than against my reading of the spec**, which is
+this project's rule for anything it encodes and the reason the toolchain is
+pinned:
+
+```
+vslidedown.vi v3,v5,1        3e50b1d7      ours d7 b1 50 3e   match
+vfslide1down.vf v3,v5,fa1    3e55d1d7      ours d7 d1 55 3e   match
+vfmv.f.s fa2,v7              42701657      ours 57 16 70 42   match
+```
+
+Six fixtures in the differential coverage listing, not three: register numbers are
+spread deliberately, because `vfmv.f.s` carries an FPR in vd and a vector register
+in vs2, and a fixture using low numbers for both would pass with the two fields
+swapped. The suite now verifies 98 instructions byte-for-byte against binutils,
+from 92.
+
+Still missing before a packed program runs on RV64: the selection rules
+themselves, and the `vsetvli` placement they need -- D171 already narrowed that,
+since `vtype` and `vl` are caller-saved and a hoisted `vsetvli` is therefore not
+valid across a call. Suite 8631 / 0 / 63.

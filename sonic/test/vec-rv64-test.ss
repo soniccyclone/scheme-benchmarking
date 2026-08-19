@@ -414,6 +414,17 @@
     (vfmv.v.f v2 fa0)
     (vfmv.v.f v17 ft11)
     (vmv.v.v v6 v7)
+    ;; getting a pair apart and together -- what p2hi and p2pack need, and the
+    ;; only three mnemonics slp.ss requires that this encoder did not have.
+    ;; Register numbers spread deliberately: the vd field of vfmv.f.s carries an
+    ;; FPR while its vs2 carries a vector register, so a fixture using low
+    ;; numbers for both would pass with the two fields swapped.
+    (vslidedown.vi v3 v5 1)
+    (vslidedown.vi v30 v31 15)
+    (vfslide1down.vf v3 v5 fa1)
+    (vfslide1down.vf v28 v29 ft11)
+    (vfmv.f.s fa2 v7)
+    (vfmv.f.s ft11 v31)
     (fmadd.d fa0 fa1 fa2 fa3)
     (fmadd.d ft0 fs11 ft11 fs2)
     ;; the scalar bookkeeping the loop is made of, which the vector encoder

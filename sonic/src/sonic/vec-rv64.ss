@@ -181,6 +181,7 @@
   (define op-madd   #b1000011)
 
   (define opivv #b000)
+  (define opivi #b011)
   (define opfvv #b001)
   (define opfvf #b101)
   (define opcfg #b111)
@@ -210,6 +211,25 @@
      (list 'vfmv.v.f 'vf opfvf #b010111)
      ;; whole-vector move, (vmv.v.v vd vs1), vs2 field is zero
      (list 'vmv.v.v  'vmv opivv #b010111)
+     ;; --- getting a pair APART and TOGETHER -----------------------------------
+     ;;
+     ;; slp.ss emits seven packed operations and these are what the last two of
+     ;; them need. p2add/p2sub/p2mul/p2div/p2splat all land on mnemonics this
+     ;; table already had; `p2hi` and `p2pack` do not, and without them there is
+     ;; no way to build a pair or read a lane back out -- so no complete packed
+     ;; program exists to test the rest with.
+     ;;
+     ;;   p2hi   d = s[1]      vslidedown.vi t, s, 1  then  vfmv.f.s d, t
+     ;;   p2pack d = (a, b)    vfmv.v.f t, a          then  vfslide1down.vf d, t, b
+     ;;
+     ;; `vfslide1down` shifts every lane down one and puts the scalar in the TOP
+     ;; lane, so splatting `a` and sliding `b` in leaves (a, b) at vl=2 -- which
+     ;; is the pack, not an approximation of it.
+     (list 'vslidedown.vi  'vi       opivi #b001111)
+     (list 'vfslide1down.vf 'vf-vs2  opfvf #b001111)
+     ;; vd field carries an FPR here, not a vector register: this reads lane
+     ;; zero OUT to the scalar file. vs1 is the fixed selector, as with vunary.
+     (list 'vfmv.f.s  'vwunary opfvv #b010000 #b00000)
      ;; scalar D-extension fused multiply-add, rd = rs1*rs2 + rs3. Lives here
      ;; and NOT in encode-rv64.ss for the same reason vfmadd231pd lives outside
      ;; the baseline x86-64 encoder: it is contraction, it is a permission, and
@@ -322,6 +342,22 @@
            (arity! 2)
            (enc-opv (cadr f) 0 (vreg-number (cadr ops))
                     (car f) (vreg-number (car ops))))
+          ;; (op vd vs2 uimm5) -- the immediate rides in the vs1 field
+          ((vi)
+           (arity! 3)
+           (enc-opv (cadr f) (vreg-number (cadr ops)) (uimm5 who (caddr ops))
+                    (car f) (vreg-number (car ops))))
+          ;; (op vd vs2 rs1) -- unlike `vf`, vs2 is a real operand rather than 0
+          ((vf-vs2)
+           (arity! 3)
+           (enc-opv (cadr f) (vreg-number (cadr ops)) (fpr-number (caddr ops))
+                    (car f) (vreg-number (car ops))))
+          ;; (op rd vs2) -- vd field holds an FPR, reading lane zero to the
+          ;; scalar file. The mirror of `vf`, which writes one in.
+          ((vwunary)
+           (arity! 2)
+           (enc-opv (cadr f) (vreg-number (cadr ops)) (caddr f)
+                    (car f) (fpr-number (car ops))))
           ((r4)
            (arity! 4)
            (bitwise-ior (bitwise-arithmetic-shift-left (fpr-number (cadddr ops)) 27)
