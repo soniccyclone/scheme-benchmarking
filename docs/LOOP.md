@@ -10,6 +10,24 @@ wasted hour, it is a wrong number in the ledger that later work is built on.
 
 ---
 
+## Re-read the decision beads, even though you will not start them
+
+A bead marked "for Nathan" stops being maintained the moment it is filed, and it
+is the one kind where being stale costs most, because it is read once and acted
+on. Both of the ones open now had drifted:
+
+- `qaq.7` argued from two measurement sessions after a third existed, and its
+  option (d) quoted instruction counts D167 had moved -- and proposed a unit that
+  cannot measure the reference on this host at all (D197).
+- `qaq.13.4` offered as an option a permission that had since been built, and
+  opened by calling the work finished after D183 showed it was not (D198).
+
+The rule below says to re-read a bead against the tree before STARTING it. That
+leaves exactly the beads nobody starts unmaintained. **Re-read the decisions too,
+whenever the work they describe has moved.**
+
+---
+
 ## Before `bd ready`: is main green?
 
 ```
