@@ -5709,3 +5709,24 @@ claim than D86 made and the one the data supports.
 The instruction counts are what survive: 2.46x on fannkuch, and nbody's
 `sonic-fma` at 2,981.7M against `ref-native`'s 1,667.5M. Those are reproducible
 to 0.002% and have not moved.
+
+## D128 — LOOP.md carries the standing as two sessions, not one
+
+D127 measured the same compiler and got a different verdict than D86, so quoting
+either as "the standing" misleads. LOOP.md's `qaq.7` section now shows both rows
+side by side with the reason the verdict flipped -- our figure +0.45%, the
+reference -3.05% -- and states what is supportable: sonic-fma and c-native are
+within a few percent, and which side of the line the interval falls on depends on
+the day. The instruction counts are given as what reproduces.
+
+The measurement rules there are now four: instruction counts sound and cycles
+not (D94), fannkuch's 4.97% alignment band (D105), cross-session ratio drift
+(D127), and rebuild-before-measuring (D94).
+
+**A note on the edit itself.** The rewrite was an index-based splice and it left
+two lines of the old paragraph behind, asserting a statistical tie directly under
+the table that qualifies it. Reading the section back caught it; the edit
+reported success. That is the same shape as the three instrument errors in D124
+and D126 -- a tool that returns without complaining is not evidence it did what
+was asked -- and it is worth one line here because the next such edit will be
+made by someone who trusts `assert old in s` the way I did.
