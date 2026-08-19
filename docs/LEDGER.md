@@ -3478,6 +3478,8 @@ harness exists to prevent.
 
 ## D86 — the standing, in one place, and what we have never measured
 
+> **Corrected by D127:** its nbody standing is a single session; D127 measured the same compiler and got a different verdict.
+
 Scattered across a session's worth of tool output is not saved. The numbers
 below are the current measured standing; anything not here was not measured.
 
@@ -3767,6 +3769,8 @@ already cheap". The hot loop is not at 256 bits.
 
 ## D91 — gcc does not pack its divides either, and M5 is 0.75 cycles per interaction
 
+> **Corrected by D127:** the 0.752-cycles-per-interaction figure is one session; the ratio drifts across them.
+
 D90 proposed packing the scalar divides and filed `qaq.20`. Checking what the
 reference actually does refuted it before a line was written:
 
@@ -4007,6 +4011,8 @@ the upstream conservatism is relaxed. But it bought nothing today and the ledger
 should not imply otherwise.
 
 ## D95 — no register is ever saved, so "callee-saved" is a word the codegen does not implement
+
+> **Corrected by D102:** the claim that the flip counter spills ACROSS a call is imprecise -- it crosses in r13.
 
 D94 guessed that the clobber analysis answers "assume everything" for calls into
 loops, because a loop here is a self-tail-calling letrec procedure and the cycle
@@ -4351,6 +4357,8 @@ re-attempted. `qaq.25` closes.
 
 ## D101 — fannkuch is dispatch-limited, and a quarter of its hottest block is nameable waste
 
+> **Corrected by D109 and D110:** the return-register explanation of the dead store is refuted; there are three stores and two mechanisms.
+
 The pipeline model, on fannkuch's three hottest blocks:
 
 ```
@@ -4536,6 +4544,8 @@ fannkuch is dispatch-limited (D101), so removed instructions convert to time her
 in a way they demonstrably do not on nbody.
 
 ## D104 — the missing table, filled in correctly, makes fannkuch slower
+
+> **Corrected by D105 and D106:** the 1.8% regression was code alignment, not the change; the revert was wrong.
 
 D103 diagnosed every fannkuch spill to one cause and filed `qaq.28`. It is
 implemented, measured, and reverted.
@@ -5040,6 +5050,8 @@ one of them disturbed the 25% that is.
 
 ## D113 — where fannkuch's 2.4x actually is, and it is not the inner loop
 
+> **Corrected by D114:** word size is measured at 6% of the gap, not the substantial contributor implied here.
+
 D112 set the target at a 23% instruction cut and called it a representation
 question. Making that concrete meant reading both inner loops rather than
 theorising about tagging.
@@ -5094,6 +5106,8 @@ array-shuffling benchmark measures the word size as much as the compiler. It is
 not a reason to stop, and it IS a reason not to read 2.4x as a compiler deficit.
 
 ## D114 — word size is not the explanation; measured at 6%, not the gap
+
+> **Corrected by D115:** the "60% never disassembled" estimate came from a 41-sample profile; a fuller one puts the reversal at 64.2%.
 
 D113 read both inner loops, found ours carries no interpretive cost, and offered
 two differences to account for the 2.4x: `ref.c` uses 32-bit `int` elements where
@@ -5189,6 +5203,8 @@ counts, so the next attempt starts from the shape rather than from a count.
 
 ## D116 — unrolling costs fannkuch 5.6%, and it is what makes bounds-check elision work
 
+> **Corrected by D117 and D118:** the framing as a trade against safety is wrong -- turning unrolling off gives FEWER checks on fannkuch and is faster.
+
 `qaq.29` asked whether the four reversal functions could be merged. Diffing them
 answers a different question first: `loop%2.372` and `loop%2.14.434` are
 **identical modulo label names**, as are `loop%2.14@8.373` and `loop%2.14@8.435`.
@@ -5241,6 +5257,8 @@ That would need the elision facts to survive re-rolling, which nothing in the
 tree currently does.
 
 ## D117 — correcting D116: the elision is not worth the transformation that enables it
+
+> **Corrected by D118:** the check counts were still inferred here; fannkuch loses checks with unrolling off, it does not gain them.
 
 D116 called the unrolling result "a trade -- 5.6% on one benchmark against the
 check-elision property". That framing is wrong in a way that changes what is
@@ -5498,6 +5516,8 @@ measurement of what that bought is here rather than assumed.
 
 ## D123 — why elision needs unrolling is unexplained, and it is the question that matters
 
+> **Corrected by D124, D125 and D126:** its prescribed measurement is withdrawn -- all three attempts at it were instrument errors.
+
 `qaq.30` asks Nathan to choose between nbody's check elision and 4.7% of
 fannkuch. That choice exists only because unrolling is the thing that makes the
 elision work (D118: fourteen bounds branches without it, zero with). If the
@@ -5532,6 +5552,8 @@ entries already. If the missing fact turns out to be cheap to supply directly,
 the trade dissolves and 4.7% of fannkuch comes back with nbody's checks intact.
 
 ## D124 — the mechanism is documented in the source, and the measurement needs a different stage
+
+> **Corrected by D125:** ABCD is called from inside elide.ss, not a later stage, and the evidence for that claim was an accumulator misread.
 
 D123 asked why elision needs unrolling and prescribed a measurement. Doing it
 found the explanation was written down all along, in `elide.ss`'s own record
@@ -5730,3 +5752,31 @@ reported success. That is the same shape as the three instrument errors in D124
 and D126 -- a tool that returns without complaining is not evidence it did what
 was asked -- and it is worth one line here because the next such edit will be
 made by someone who trusts `assert old in s` the way I did.
+
+## D129 — forward pointers on the entries this session corrected
+
+The header of this file says a decision that was later reversed "stays here with
+the reversal attached, never edited away". The staying was happening; the
+attaching was not. Eleven entries from D84 onward were corrected by a later one
+and none said so, which means a reader meeting D86's "statistical tie" or D116's
+"trade against safety" had no signal that the next hundred lines overturn it.
+
+Each now carries one blockquote line naming what corrected it and why. No
+original reasoning was edited, which is the point of the convention: the wrong
+argument is evidence about how the project reasons, and deleting it would hide
+the same mistake being made twice.
+
+```
+D86  -> D127   D101 -> D109/D110   D114 -> D115        D123 -> D124/D125/D126
+D91  -> D127   D104 -> D105/D106   D116 -> D117/D118   D124 -> D125
+D95  -> D102   D113 -> D114        D117 -> D118
+```
+
+Eleven corrections in forty-five entries is a rate worth looking at rather than
+away from. They fall into three kinds: **measurement taken with a broken
+instrument** (D104, D124, and the three attempts in D126), **a conclusion drawn
+from numbers that were already on the page** (D116, D117 -- both corrected by
+re-reading a table rather than by new data), and **a structural claim inferred
+from reading code instead of running it** (D95, D101, D113, D123). The third kind
+is the most expensive and the easiest to avoid: every one of them was settled in
+under an hour once someone compiled something and counted.
