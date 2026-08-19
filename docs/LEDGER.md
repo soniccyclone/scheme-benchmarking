@@ -7013,3 +7013,58 @@ and the RV64 one was absent rather than wrong, and both times nothing failed.
 The convention D133 established -- assert on BOTH targets -- exists for the first
 of those. The second suggests it should extend to measurements, not only
 assertions: a number taken on one target is not a number about the compiler.
+
+## D161 — the dead stores are dead, and three beads are one bead
+
+qaq.26 asked why three constant stores survive in fannkuch's hottest block. The
+answer is in two halves, and neither is the one the bead was filed with.
+
+**DCE is right to keep them.** At vreg level -- the level `dce-program` runs on
+-- the constant has a real use:
+
+```
+(count-flips (block ((const t.216 raw-word 0)
+                     (gref g.12 tagged %g-perm)
+                     (load-at k%7.217 raw-word 0 g.12 #f)
+                     (cmp-eq t.219 raw-word k%7.217 t.216))
+              (branch-if t.219 L.then20 L.else21)))
+```
+
+`t.216` feeds the compare. Nothing is dead yet. The redundancy is CREATED later,
+when the back end folds the constant into the compare as an immediate --
+`cmp $0x0,%rdx` -- and leaves the materialisation that fed it behind.
+
+**The peephole cannot remove what folding left.** `drop-dead-copies` is exactly
+the pass for this and `mov` is in `pure-moves`, so the shape matches. It fails on
+`dead-from?`, which scans forward and stops at the block-ending branch:
+
+```
+((leaves-block? (car is))
+ (and (not (eq? (car (car is)) 'ret)) (scratch-reg? r)))
+```
+
+`rcx` is not a scratch register, so the answer is #f. The store is nevertheless
+dead on BOTH successors -- the `ret` path loads `rax` from `r13` and never reads
+`rcx`, the loop path overwrites it at `mov %r14,%rcx` before any read -- but
+seeing that requires looking at the successors, and this pass by construction
+does not. That conservatism is not a bug; it is what D99 and D100 installed after
+two wrong-code bugs came from a scan that ran past a barrier.
+
+**Also: the count is two now, not three.** D109 read three; the block today has
+`mov $0x0,%rcx` and one `mov $0x1,%r14`. The elision and merge work took one
+without anyone aiming at it, which is the second time a P4's premise decayed
+under unrelated work (D142 was the first).
+
+**The consolidation.** Three open beads want the same missing thing:
+
+| bead | wants | blocked on |
+|---|---|---|
+| qaq.15 | `lea` where flags are dead | EFLAGS liveness on the finished listing |
+| qaq.18 | drop a dead materialisation in nbody's header | register liveness across the back edge |
+| qaq.26 | drop two dead stores in fannkuch | register liveness across a branch |
+
+One analysis -- liveness over the finished listing, registers and flags, computed
+across blocks rather than within one -- unblocks all three. None of them is worth
+building it alone, and D120 already measured all three payoffs as instructions
+that do not convert to time on either benchmark. Recorded so that if the analysis
+is ever built for a reason that DOES pay, these three come along free.
