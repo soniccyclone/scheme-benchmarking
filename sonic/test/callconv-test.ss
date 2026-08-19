@@ -100,6 +100,28 @@
                                     (arg-registers cc sc)))
                          '(tagged raw-word raw-f64)))
               (list ccx ccr)))
+;; --- the vector file across a call ----------------------------------------
+;;
+;; D170 gave rv64 a v-register pool; this says what happens to one at a call.
+;; The RISC-V psABI makes v0..v31 temporaries with no callee-saved vector
+;; registers, and that is also the only answer defensible here: the clobber
+;; analysis learns what a callee writes by reading its listing, and nothing
+;; there can see a vector write, so a callee-saved v register would be a promise
+;; kept by nobody.
+(ck! "every vector register is caller-saved on rv64"
+     (for-all (lambda (r) (caller-saved? callconv-rv64 r))
+              (arch-vector arch-rv64)))
+(ck! "and NONE is callee-saved: a promise the clobber analysis cannot keep is
+       not made"
+     (not (exists (lambda (r) (callee-saved? callconv-rv64 r))
+                  (arch-vector arch-rv64))))
+(ck! "v0 is caller-saved too, though it is not allocatable -- a masked
+       operation writes it whether or not anyone allocated it"
+     (and (caller-saved? callconv-rv64 'v0)
+          (not (memq 'v0 (arch-vector arch-rv64)))))
+(ck! "x86-64 declares no vector registers, having no separate file to declare"
+     (null? (arch-vector arch-x86-64)))
+
 ;; The foreign-boundary payoff: our callee-saved set is inside System V's, so a
 ;; call out to C preserves everything we were keeping there.
 (ck! "x86-64 callee-saved is a subset of System V's callee-saved GPRs"

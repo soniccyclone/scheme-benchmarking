@@ -190,9 +190,31 @@
      '((tagged   . (a0 a1 a2 a3 a4 a5 a6 a7))
        (raw-word . (t3 t4 t5 t6))
        (raw-f64  . (fa0 fa1 fa2 fa3 fa4 fa5 fa6 fa7)))
+     ;; caller-saved, and EVERY VECTOR REGISTER IS IN IT.
+     ;;
+     ;; That is what the RISC-V psABI says -- v0..v31 are temporaries, with no
+     ;; callee-saved vector registers at all -- and it is also the only answer
+     ;; this compiler can currently defend. D162's clobber analysis learns what
+     ;; a callee writes by reading its listing, and nothing there knows how to
+     ;; see a vector write; declaring some v register callee-saved would be a
+     ;; promise made by a convention and kept by nobody.
+     ;;
+     ;; The consequence is deliberate and it is not a spill. D170 made the rv64
+     ;; spiller REFUSE `raw-f64x2`, so a packed value the allocator finds live
+     ;; across a call cannot be spilled and stops the compile with a named
+     ;; error. Loud beats a wrong answer, and it beats a silent convention
+     ;; violation: packed values must be dead at every call, and that is now
+     ;; ENFORCED rather than assumed.
+     ;;
+     ;; `vtype` and `vl` are caller-saved too, by the same ABI, and this list
+     ;; cannot express a CSR. It matters for qaq.13.2: a `vsetvli` hoisted out of
+     ;; a loop is not valid across a call, because the callee may have set its
+     ;; own and owes us nothing.
      '(a0 a1 a2 a3 a4 a5 a6 a7 t3 t4 t5 t6
        ft0 ft1 ft2 ft3 ft4 ft5 ft6 ft7 ft8 ft9 ft10
-       fa0 fa1 fa2 fa3 fa4 fa5 fa6 fa7)
+       fa0 fa1 fa2 fa3 fa4 fa5 fa6 fa7
+       v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15
+       v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29 v30 v31)
      '(s2 s3 s4 s5 s6 s7 s8 s9 s10 s11
        fs0 fs1 fs2 fs3 fs4 fs5 fs6 fs7 fs8 fs9 fs10 fs11)
      ;; Nothing. Every register this convention uses for a tagged value is in

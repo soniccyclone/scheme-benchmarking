@@ -7517,3 +7517,45 @@ debt is recorded on qaq.13.2, which creates the first such program. Until then
 this is a guard believed to work rather than one known to.
 
 Suite 8627 / 0 / 63.
+
+## D171 — every vector register is caller-saved, because nothing could keep the other promise
+
+Second child of D169. The question was what the convention says about v0..v31
+across a call, and it had two candidate answers before the tree narrowed it to
+one.
+
+The RISC-V psABI makes all thirty-two vector registers temporaries -- there are no
+callee-saved vector registers -- and that is now what `callconv-rv64` declares.
+Agreeing with the host ABI is worth something at a foreign boundary, but it is not
+why this is the only answer available.
+
+**The reason is that we could not keep the other promise.** D162 established how
+this compiler learns what a call destroys: `callee-first` orders functions so a
+caller is allocated knowing what its callees write, read off each callee's own
+listing. Nothing in that walk knows how to see a vector write. Declaring some v
+register callee-saved would be a guarantee the convention makes and the analysis
+cannot verify, which is worse than the conservative answer -- a caller would keep
+a value in `v3` on the strength of a promise nobody enforces.
+
+**The consequence is a refusal, and that is the design rather than a gap.** With
+every v register caller-saved, a packed value the allocator finds live across a
+call must go to the frame -- and D170 made the rv64 spiller refuse `raw-f64x2`,
+naming the three things it would need. So the compile stops with a diagnostic.
+The rule "a packed value must be dead at every call" was going to be true either
+way; it is now ENFORCED rather than assumed, and it is enforced at the point the
+assumption breaks rather than in a comment.
+
+**And it settles part of qaq.13.2 in advance.** `vtype` and `vl` are caller-saved
+under the same ABI, which the caller-saved list cannot express because it holds
+registers and these are CSRs. The consequence is the useful part: a `vsetvli`
+hoisted out of a loop is NOT valid across a call. The callee may set its own and
+owes us nothing on return. So the cheap placement -- one `vsetvli` per region --
+is only available in regions with no calls in them, and that is a property to
+check rather than hope for.
+
+Four checks. Not inert: removing the declaration fails two of them.
+
+`v0` is declared caller-saved while being absent from the allocatable pool, and
+both are correct. A masked operation writes v0 whether or not anything allocated
+it, so a caller must treat it as destroyed; nothing may be given it. Suite 8631 /
+0 / 63, RISC-V gate green.
