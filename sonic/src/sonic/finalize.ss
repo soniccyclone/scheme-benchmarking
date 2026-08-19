@@ -187,7 +187,25 @@
                        (else x)))))
          listing))
 
+  ;; TO A FIXPOINT, because merging is not idempotent. Two functions identical
+  ;; except that one calls `foo` where the other calls `bar` are NOT merged --
+  ;; external targets compare by name, for the soundness reason above. But if
+  ;; `foo` and `bar` are themselves identical and merged, their callers become
+  ;; identical too, and a second round finds them.
+  ;;
+  ;; fannkuch's reversal is exactly this shape: the two halves of the loop call
+  ;; each other, so neither pair can merge until the other has. One round merged
+  ;; one pair; the rest wait on it.
   (define (merge-identical-functions fns)
+    (let loop ((fns fns) (round 1))
+      (let ((out (merge-identical-once fns)))
+        ;; Terminates: each round that changes anything strictly reduces the
+        ;; function count, and the count is finite.
+        (if (= (length out) (length fns))
+            out
+            (loop out (+ round 1))))))
+
+  (define (merge-identical-once fns)
     (let ((by-shape (make-hashtable equal-hash equal?))
           (rename (make-eq-hashtable)))
       ;; FIRST WINS, in the order finalize produced them, so the choice does not

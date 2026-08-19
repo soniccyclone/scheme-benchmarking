@@ -5780,3 +5780,45 @@ re-reading a table rather than by new data), and **a structural claim inferred
 from reading code instead of running it** (D95, D101, D113, D123). The third kind
 is the most expensive and the easiest to avoid: every one of them was settled in
 under an hour once someone compiled something and counted.
+
+## D130 — merging to a fixpoint, because merging is not idempotent
+
+D121's pass made one pass over the finalized functions. That leaves work on the
+table for a reason worth naming: two functions identical except that one calls
+`foo` where the other calls `bar` are NOT merged, because external targets
+compare by name (the soundness fix in D121). But if `foo` and `bar` are
+themselves identical and get merged, their callers become identical, and a
+second round finds them.
+
+fannkuch's reversal is exactly that shape -- the two halves call each other, so
+neither pair can merge until the other has. Iterating until the function count
+stops falling:
+
+```
+                    pre-merge   D121 (one round)   D130 (fixpoint)
+fannkuch listing      1,092          1,009              955
+blocks                   87             83               79
+```
+
+**137 instructions of code removed in total, 12.5% of the listing**, and the
+`@8.435` and `@1.87` copies are gone. Termination is immediate rather than
+argued: a round that changes anything strictly reduces the function count.
+
+**The cycle result does not clear the bar.** Four layout-pad values: mean
+9,714.0M against D121's 9,800.5M, which is -0.88% at t = 0.70. That is noise by
+any reading. nbody is unaffected -- five runs, mean 944.1M against 943.0M, with
+the minima matching exactly at 942.4M and 942.5M.
+
+**Kept, and the reason is not the measurement.** It is three lines, it is
+strictly more of what D121 already does and was already measured for, it removes
+real duplicate code, and it shows no regression anywhere. But it did not buy
+time, and the ledger should not let the 12.5% code reduction imply otherwise --
+D111 removed 3.2% of fannkuch's executed instructions and made it 3.5% SLOWER, so
+size and time are separate axes here and this moved only the first.
+
+**One process note.** nbody's first three runs read 949.4M, 971.2M and 943.9M,
+and the 971.2M sits far outside the 0.26% band five months of measurements put it
+in. Five more runs put the mean at 944.1M with the minimum matching the
+pre-change minimum to a tenth of a percent. Had I stopped at three, this entry
+would report a 1.25% nbody regression that does not exist -- which is D94's
+lesson arriving a second time by a different road.
