@@ -131,15 +131,67 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
         ca-certificates \
         libelf1 \
-        # NO `linux-perf`, DELIBERATELY, and do not add it back without a
-        # reason that survives D60. Nothing in this tree opens a perf event:
-        # instruction counts and the by-function profile both come from
-        # callgrind, and wall clock needs neither. On this host perf CANNOT work
-        # rootless whatever flags it is given -- kernel.perf_event_paranoid is 4
-        # and CAP_PERFMON is tested against the INITIAL user namespace -- so
-        # shipping the binary would only offer a tool that fails with a bare
-        # EPERM three layers from its cause. The libraries below stay: they are
-        # small and binutils/objdump link several of them.
+        # PERF, AND WHY IT IS HERE AFTER D60 SAID IT COULD NEVER WORK.
+        #
+        # D60 was right about the host and wrong in its conclusion. On the HOST
+        # kernel perf is genuinely unusable: kernel.perf_event_paranoid is 4, and
+        # CAP_PERFMON is tested against the INITIAL user namespace, so no flag and
+        # no amount of rootless privilege reaches it. From that I concluded the
+        # hardware-counter route was closed for good, which does not follow --
+        # `perf_event_paranoid` is a property of A kernel, not of this machine.
+        #
+        # Boot a second kernel under KVM and you are root in ITS init namespace,
+        # where the sysctl is yours to set. /dev/kvm carries an ACL granting the
+        # invoking user rw (no sudo, no group change), and kvm.enable_pmu is Y, so
+        # the guest gets a virtual PMU backed by the real hardware counters.
+        #
+        # This is what callgrind cannot give at any price: a PIPELINE. Instruction
+        # counts between us and gcc -O3 are flat, so milestone 5's remaining gap is
+        # latency and port pressure, which a counting simulator cannot see.
+        #
+        # virtme-ng boots the CURRENT filesystem as the guest root -- no disk
+        # image, no cloud image, no second copy of the toolchain to drift out of
+        # sync with this one. The guest is this container.
+        #
+        # perf still must not be run in the container itself, where it will fail
+        # with a bare EPERM three layers from its cause. harness/vm-perf.sh is the
+        # only entry point and it refuses outside the guest.
+        qemu-system-x86 \
+        virtme-ng \
+        # virtme-ng BUILDS AN INITRAMFS at boot and shells out to busybox to
+        # populate it; without this it refuses with `initramfs is needed, and no
+        # busybox was found`. -static because the initramfs has no libc yet.
+        busybox-static \
+        # Kernel modules ship zstd-compressed, and the initramfs build shells out
+        # to decompress them. Missing, it fails as a wall of `sh: 1: zstd: not
+        # found` and then a socket error that names nothing relevant.
+        zstd \
+        # WHAT virtme-init NEEDS AND A MINIMAL IMAGE DOES NOT HAVE. The guest boots
+        # fine without these; it is init that then falls over, and the message you
+        # get is `Attempted to kill init` rather than the name of anything missing.
+        # `ip` to bring up the console interface, `poweroff` to shut down (without
+        # it init RETURNS, which is what the panic actually is), udev because
+        # virtme-init looks for udevd before settling devices, and kmod to load the
+        # virtio-serial module that carries the command's output back to us.
+        iproute2 \
+        systemd-sysv \
+        udev \
+        kmod \
+        # The guest root IS this container's filesystem. virtiofsd is how it gets
+        # there; the 9p fallback works and is markedly slower, which matters when
+        # the thing being measured is a benchmark.
+        virtiofsd \
+        linux-image-generic \
+        # THE perf BINARY ITSELF, and note the package name: this file used to carry
+        # a comment forbidding `linux-perf` by name. It was right for the host and
+        # wrong for the guest. `linux-tools-generic` ships cpupower and friends but
+        # NOT perf; `linux-perf` is the standalone build, versioned to match the
+        # kernel above, and linux-tools-common carries the /usr/bin/perf dispatcher
+        # that picks a build by `uname -r`.
+        linux-perf \
+        linux-tools-common \
+        # The libraries below predate all of this: they are small and
+        # binutils/objdump link several of them.
         libslang2 \
         libunwind8 \
         libdw1 \

@@ -3411,3 +3411,56 @@ body. Added to the image (LLVM 20.1.8), resolved and verified at build time so a
 missing analyser fails the build instead of producing an empty report. Being
 static it is deterministic, the same property that made callgrind the better
 instrument in D60.
+
+## D85 — the counters, by way of a second kernel; and M5 was misdiagnosed
+
+D60 measured correctly and concluded wrongly. On the host kernel perf is
+unusable and no flag reaches it — `kernel.perf_event_paranoid` is 4, and
+CAP_PERFMON is tested against the INITIAL user namespace, so a rootless
+container cannot hold it however it is started. From that I concluded the
+hardware-counter route was closed for good. It does not follow.
+`perf_event_paranoid` is a property of **a** kernel, not of this machine.
+
+Boot a second kernel under KVM and you are root in *its* init namespace, where
+the sysctl is yours to set. `/dev/kvm` carries an ACL granting the invoking user
+rw, and `kvm.enable_pmu` is `Y`, so the guest's counters are the real hardware
+counters underneath. Nothing on the host changes: no sudo, no group, no sysctl.
+
+`harness/vm-perf.sh` is the entry point. virtme-ng boots THIS CONTAINER'S
+filesystem as the guest root, so there is no second image to drift out of sync —
+the guest is the container. Four things a minimal image lacks had to be added,
+and each failed as `Attempted to kill init` rather than by name: busybox and
+zstd (the initramfs build), `ip` and `poweroff` (without the latter init RETURNS,
+which *is* the panic), and `linux-perf` — the standalone perf build, versioned to
+the kernel, and the very package a comment in the Dockerfile forbade by name.
+That comment was right about the host and wrong about the guest.
+
+**And the first thing it measured overturned the diagnosis.** nbody at N=5e6:
+
+```
+                 cycles    instructions    IPC     branches
+sonic-fma   888,081,464   2,981,677,267   3.36   300,284,364
+ref-native  850,528,398   1,667,502,723   1.96    65,433,871
+```
+
+The cycle ratio is **1.0442**, which independently confirms the wall-clock
+1.0414 from a different instrument entirely. But the rest says the gap is not
+what D79 and every attempt since assumed. We execute **1.79x the instructions**
+at **1.71x the IPC**. At 3.36 we are near the machine's issue width and are not
+stalling — the extra work is already hidden behind superscalar width, and what
+leaks through is the 4.4% that will not fit.
+
+So M5 is an INSTRUCTION-COUNT problem wearing a latency problem's clothes, and
+two sessions of scheduling-flavoured guesses (D84's strength reduction, the
+`lea` liveness idea) were aimed at the wrong thing. The signal to follow is
+**300M branches against C's 65M** — 235 million extra, mispredicted at 0.02%, so
+cheap and perfectly predicted and still occupying issue slots. That is the shape
+of bounds and type checks, and it is the same diagnosis fannkuch already carries
+(2.51x instructions, 1.24x time), which two benchmarks now agree on.
+
+**One defect found in the instrument itself, which is why it is worth recording:**
+`compose run` does not carry the caller's environment, so `EVENTS=... vm-perf.sh`
+arrived unset and perf measured its DEFAULT list while printing a perfectly
+well-formed report. It is forwarded explicitly now. An instrument that quietly
+answers a different question than the one put to it is exactly the failure this
+harness exists to prevent.

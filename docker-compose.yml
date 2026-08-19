@@ -40,6 +40,16 @@ services:
     # made to justify.
     network_mode: none
 
+    # THE HARDWARE COUNTERS, REACHED THROUGH A SECOND KERNEL. perf cannot work
+    # against the host kernel here (paranoid=4, CAP_PERFMON checked against the
+    # initial user namespace). Inside a KVM guest we are root in that kernel's
+    # init namespace and the sysctl is ours. This device node is the whole
+    # requirement -- it carries an ACL granting the invoking user rw, so no
+    # sudo and no group change. Absent it, harness/vm-perf.sh refuses rather
+    # than silently falling back to a measurement that models no pipeline.
+    devices:
+      - /dev/kvm:/dev/kvm
+
     volumes:
       - .:/work
     working_dir: /work/sonic
