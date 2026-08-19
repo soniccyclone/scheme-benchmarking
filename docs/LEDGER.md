@@ -4005,3 +4005,61 @@ into one is unanalysable. That is `qaq.22`.
 the bit-exact oracle, and it removes a genuine gap that will matter the moment
 the upstream conservatism is relaxed. But it bought nothing today and the ledger
 should not imply otherwise.
+
+## D95 — no register is ever saved, so "callee-saved" is a word the codegen does not implement
+
+D94 guessed that the clobber analysis answers "assume everything" for calls into
+loops, because a loop here is a self-tail-calling letrec procedure and the cycle
+rule would then fire on all of them. **That guess was wrong.** Building the call
+graph from the emitted listing:
+
+```
+count-flips        -> loop%2.14@8.373, loop%2.14@8.435
+loop%2.14@8.373    -> (nothing)
+NO CYCLES: the call graph is a DAG
+```
+
+A self-tail-call is emitted as a `jmp`, so it never appears as a call edge, and
+`callee-first` orders the whole program without ever hitting its cycle fallback.
+The analysis had the callee's real clobber set all along. `qaq.22` closes on a
+refutation of its own premise.
+
+**What is actually happening is register pressure, and it is structural.** The
+raw pool is eight registers, `(rcx rdx rsi rdi r10 r11 r13 r14)`. Both callees
+write `rcx rdx rsi rdi r10` — five of the eight — so exactly `r11 r13 r14`
+survive a call, before the call site's own argument and return registers are
+subtracted. At most three raw values can stay in registers across any call in
+this program, and `count-flips` has more than three live, so its flip counter
+lands on the stack and is incremented there.
+
+**And the reason there is no relief is one grep:**
+
+```
+push/pop instructions in the fannkuch binary:  0
+push/pop instructions in the nbody binary:     0
+```
+
+`callconv.ss` defines `callee-saved?`, `callconv-callee-saved`, and a header
+explaining that our callee-saved set is deliberately a subset of the host ABI's
+so values survive a foreign call. **Nothing in codegen ever acts on it.** No
+prologue saves a register, no epilogue restores one, and therefore no register
+survives a call by convention — only by the callee happening not to write it.
+
+This is not incoherent. A whole-program clobber analysis is strictly more precise
+than a save/restore convention: it costs nothing at leaves and tells the truth
+about what each callee really touches. It is what this compiler has, and D94's
+fix made it reach the functions that have parameters, which is nearly all of
+them.
+
+But precision has a floor that convention does not. A caller can only keep a
+value in a register the callee does not write, so as clobber sets union up the
+call graph the survivors thin out — and there is no way to say "this one is mine,
+whatever you do", which is exactly what a saved register is for. The two
+mechanisms are complements, and we have only one of them.
+
+Filed as `qaq.23`: implement the declared convention. A function that wants a
+callee-saved register saves it in its prologue and restores it in its epilogue,
+paying two instructions per call to guarantee survivors that the analysis can
+never produce. The cost lands on functions that USE such a register; the benefit
+lands on every caller above them, and it is largest exactly where we are worst —
+fannkuch, whose hot loop spills a loop counter across a leaf call.
