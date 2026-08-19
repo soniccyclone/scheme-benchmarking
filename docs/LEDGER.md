@@ -6448,3 +6448,40 @@ rather than an inherited default), but the gate does not check the number.
 Six assertions, all passing. That is three times in this session that writing an
 assertion produced one that could not fail, and three times that trying to break
 it was what noticed.
+
+## D147 — the queue is exhausted of work I can do without Nathan
+
+Final state: suite 8613 checks across 61 suites, smoke gate passing, containment
+at seven assertions including the VM path, tree clean, 78 commits unpushed.
+
+Ten beads open, and every one is blocked on something that is not effort:
+
+```
+qaq, 1mp        epics; close when their children do
+qaq.7           M5 -- an accuracy decision (D92, D127, D144)
+qaq.30          unrolling -- 0.17% of nbody against 4.7% of fannkuch (D144)
+qaq.13          RVV lowering -- smallest useful increment is a subsystem (D142)
+qaq.15 .18      instruction-count payoffs, measured not to convert (D120)
+qaq.21 .23 .26  same
+```
+
+`qaq.7` and `qaq.30` were rewritten to lead with the decision (D144), because
+both had accumulated more correction history than answer. `qaq.13`'s description
+had half its premise fixed three days before anyone read it (D142). `qaq.21`'s
+count was stale in its notes and then still stale in its TITLE, fixed here --
+which is the third staleness in two entries and the reason LOOP.md now has a
+"before STARTING anything" section.
+
+**What I would not do next, and why it belongs in the record.** The five P4s are
+real defects with correct diagnoses and no measured path to time; working them
+would produce commits and no result, and D120 says so on each. `qaq.13` is the
+one substantial feature left, and starting a vector subsystem at the end of a
+session that produced three assertions which could not fail, three instrument
+errors in one thread, and four structural claims refuted by looking, would be a
+poor use of the state I am in. The honest move is to stop with the tree green and
+the decisions stated, rather than to keep moving because there is still a queue.
+
+Sixty-four entries, D84 to D147. The compiler is faster by one measured change
+(D121's merge, ~1.3% on fannkuch) and better understood by about twenty; the
+larger result is that this project can now tell the difference between those two
+things, which at D84 it could not.
