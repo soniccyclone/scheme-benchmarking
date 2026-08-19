@@ -8228,3 +8228,58 @@ negation on either target fails it.
 bug I wrote; the useful move after fixing it was not to move on but to ask what
 else had the same shape. Two more, one of them older than the vector work and
 capable of a silently wrong answer.
+
+## D186 — the fourth one, and the pattern is worth naming
+
+Sweeping the tree for D185's shape rather than waiting to trip over it found the
+spill-scratch budget, twice:
+
+```
+(float? (lambda (v) (eq? (class-of v) 'raw-f64)))
+(ints   (filter (lambda (v) (not (float? v))) vs))
+(flts   (filter float? vs))
+```
+
+Spilled operands are charged against two scratch pools, and a value that is not a
+double is charged to the integer one. A `raw-f64x2` would be counted as needing an
+integer scratch and reloaded through `t0` or `rax`.
+
+Both sites now name each side positively and then CHECK that the two cover the
+input:
+
+```
+(unless (= (+ (length ints) (length flts)) (length vs))
+  (error 'finalize-function "a spilled value belongs to no scratch pool" ...))
+```
+
+That check is the part worth copying. Two positive filters need not partition
+their input -- that is precisely their advantage over a negation, which always
+does and is therefore always "complete" and sometimes wrong. Asserting coverage
+turns the gap into an error at the point of use.
+
+It also repairs a third site for free. A few lines further on, `(if (> over-flt 0)
+(float? v) (not (float? v)))` picks which operand may ride in memory, and that
+negation is now sound because everything reaching it is provably one of the two.
+
+**Four instances of one mistake, in one codebase, written by different code at
+different times:**
+
+| | what was negated | what it would have done |
+| --- | --- | --- |
+| D173 | `arch-int-scratch` = scratches that are not float | hand a vector scratch to the integer spill path |
+| D184 | spiller store/reload: not `raw-f64` -> integer `mov` | `mov [rsp], xmm3`; and older, `movsd` truncating a pair |
+| D185 | remat: not `raw-f64` -> integer immediate | `addi v3, zero, imm` |
+| D186 | spill budget: not float -> integer scratch | charge a pair to `t0`/`rax` |
+
+Every one reads correctly while there are two members. Every one becomes wrong
+silently when a third arrives, because a negation cannot express "I do not know
+what this is" -- it answers confidently for a case it has never seen. That is the
+whole hazard, and it is not about registers: it is what a partition written as
+`X` and `not X` does when the domain grows.
+
+The rule this project should keep: **name each member of a partition, and assert
+the members cover the domain.** The assertion is cheap and it is what makes the
+naming worth anything.
+
+Behaviour-preserving, checked as such -- x86-64 nbody image `c56783f9…` before and
+after, identical through all four fixes. Suite 8653 / 0 / 63.

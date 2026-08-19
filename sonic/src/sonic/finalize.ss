@@ -619,6 +619,25 @@
             returns?      ; instr -> #t if control leaves here
             tail-jump?))  ; instr -> #t if it is a jump out of the function
 
+  ;; WHICH SCRATCH POOL A SPILLED VALUE IS CHARGED AGAINST.
+  ;;
+  ;; The spill budget splits operands into the ones needing an integer scratch and
+  ;; the ones needing a float scratch, and it used to do it as `float?` and
+  ;; `(not float?)`. D173, D184 and D185 are three separate bugs from partitions
+  ;; written that way, so this one is positive too: a class the function does not
+  ;; know is neither, and `spill-kind` returns #f for it.
+  ;;
+  ;; #f cannot currently reach the budget -- a `raw-f64x2` is refused by both
+  ;; spillers before it gets here -- so the callers assert rather than handle it.
+  ;; An assertion is the right shape: if a class ever does arrive, being told is
+  ;; the whole ask, and silently charging it to the integer pool is what the
+  ;; negation did.
+  (define (spill-kind cls)
+    (case cls
+      ((tagged raw-word) 'int)
+      ((raw-f64)         'float)
+      (else              #f)))
+
   ;; A PACKED PAIR CANNOT SPILL ON x86-64 EITHER, AND FOR A SHARPER REASON.
   ;;
   ;; The dispatch below is `raw-f64` or everything else. A `raw-f64x2` reaching it
@@ -937,9 +956,16 @@ address register, and a 16-byte frame slot. See LEDGER.md D170."
            (for-each
             (lambda (i)
               (let* ((vs (distinct (apply append (map spilled-in (cdr i)))))
-                     (float? (lambda (v) (eq? (class-of v) 'raw-f64)))
-                     (ints (filter (lambda (v) (not (float? v))) vs))
+                     (float? (lambda (v) (eq? (spill-kind (class-of v)) 'float)))
+                     (int?   (lambda (v) (eq? (spill-kind (class-of v)) 'int)))
+                     (ints (filter int? vs))
                      (flts (filter float? vs))
+                     ;; Positive on both sides, so they need not sum to `vs` by
+                     ;; construction -- which is exactly why it is checked.
+                     (_ (unless (= (+ (length ints) (length flts)) (length vs))
+                          (error 'finalize-function
+                                 "a spilled value belongs to no scratch pool"
+                                 (filter (lambda (v) (not (or (int? v) (float? v)))) vs))))
                      (over (+ (max 0 (- (length ints) (length (spiller-int-scratch sp))))
                               (max 0 (- (length flts) (length (spiller-float-scratch sp)))))))
                 (when (> over 0)
@@ -1149,9 +1175,16 @@ address register, and a 16-byte frame slot. See LEDGER.md D170."
                     '())
               (let* ((memop (spiller-mem-operand sp))
                      (mem-budget (if (and memop (not (has-mem? i))) 1 0))
-                     (float? (lambda (v) (eq? (class-of v) 'raw-f64)))
-                     (ints (filter (lambda (v) (not (float? v))) vs))
+                     (float? (lambda (v) (eq? (spill-kind (class-of v)) 'float)))
+                     (int?   (lambda (v) (eq? (spill-kind (class-of v)) 'int)))
+                     (ints (filter int? vs))
                      (flts (filter float? vs))
+                     ;; Positive on both sides, so they need not sum to `vs` by
+                     ;; construction -- which is exactly why it is checked.
+                     (_ (unless (= (+ (length ints) (length flts)) (length vs))
+                          (error 'finalize-function
+                                 "a spilled value belongs to no scratch pool"
+                                 (filter (lambda (v) (not (or (int? v) (float? v)))) vs))))
                      (over-int0 (max 0 (- (length ints) (length (spiller-int-scratch sp)))))
                      (over-flt0 (max 0 (- (length flts) (length (spiller-float-scratch sp)))))
                      ;; BORROW WHAT THE SCRATCHES CANNOT COVER.
