@@ -1,0 +1,435 @@
+
+[0m
+=== _start ===
+    401000  mov    $0x17,%r15
+    401007  mov    $0x600440,%rax
+    40100e  mov    %rax,0x600000
+    401015  
+    401016  lea    0x593(%rip),%rax        # 0x4015b0
+    40101d  mov    %rax,0x600018
+    401024  
+    401025  mov    %rsp,%rbx
+    401028  mov    (%rbx),%r12
+    40102b  mov    %r15,%r13
+
+=== %cl-loop ===
+    40102e  cmp    $0x0,%r12
+    401032  jle    0x401059
+    401038  sub    $0x1,%r12
+    40103c  mov    0x8(%rbx,%r12,8),%rsi
+    401041  call   0x40114f
+    401046  mov    %rax,%r8
+    401049  mov    %r13,%r9
+    40104c  call   0x4011e3
+    401051  mov    %rax,%r13
+    401054  jmp    0x40102e
+
+=== %cl-done ===
+    401059  mov    %r13,0x600010
+    401060  
+    401061  call   0x401544
+    401066  mov    $0x0,%rdi
+    40106d  mov    $0x3c,%rax
+    401074  syscall
+
+=== %make-flvector ===
+    401076  mov    0x600000,%rax
+    40107d  
+    40107e  cmp    $0x10600430,%rax
+    401085  jg     0x401534
+    40108b  mov    $0x1,%rdx
+    401092  mov    %rdx,(%rax)
+    401095  mov    %rcx,0x8(%rax)
+    401099  mov    %rcx,%rsi
+    40109c  shl    $0x3,%rsi
+    4010a0  add    $0x10,%rsi
+    4010a4  add    %rax,%rsi
+    4010a7  cmp    $0x10600440,%rsi
+    4010ae  jg     0x401534
+    4010b4  mov    %rsi,0x600000
+    4010bb  
+    4010bc  lea    0x10(%rax),%rdi
+    4010c0  mov    $0x0,%rsi
+
+=== %mkfl-loop ===
+    4010c7  cmp    %rcx,%rsi
+    4010ca  jge    0x4010de
+    4010d0  movsd  %xmm0,(%rdi,%rsi,8)
+    4010d5  add    $0x1,%rsi
+    4010d9  jmp    0x4010c7
+
+=== %mkfl-done ===
+    4010de  add    $0x11,%rax
+    4010e2  ret
+
+=== %make-vector ===
+    4010e3  mov    0x600000,%rax
+    4010ea  
+    4010eb  cmp    $0x10600430,%rax
+    4010f2  jg     0x401534
+    4010f8  mov    $0x0,%rdi
+    4010ff  mov    %rdi,(%rax)
+    401102  mov    %rcx,0x8(%rax)
+    401106  mov    %rcx,%rsi
+    401109  shl    $0x3,%rsi
+    40110d  add    $0x10,%rsi
+    401111  add    %rax,%rsi
+    401114  cmp    $0x10600440,%rsi
+    40111b  jg     0x401534
+    401121  mov    %rsi,0x600000
+    401128  
+    401129  lea    0x10(%rax),%rdi
+    40112d  mov    $0x0,%rsi
+
+=== %mkv-loop ===
+    401134  cmp    %rcx,%rsi
+    401137  jge    0x40114a
+    40113d  mov    %rdx,(%rdi,%rsi,8)
+    401141  add    $0x1,%rsi
+    401145  jmp    0x401134
+
+=== %mkv-done ===
+    40114a  add    $0x11,%rax
+    40114e  ret
+
+=== %cstr->string ===
+    40114f  mov    $0x0,%rcx
+
+=== %c2s-len ===
+    401156  movzbq (%rsi,%rcx,1),%rdx
+    40115b  cmp    $0x0,%rdx
+    40115f  je     0x40116e
+    401165  add    $0x1,%rcx
+    401169  jmp    0x401156
+
+=== %c2s-alloc ===
+    40116e  mov    0x600000,%rax
+    401175  
+    401176  cmp    $0x10600430,%rax
+    40117d  jg     0x401534
+    401183  mov    $0x3,%rdi
+    40118a  mov    %rdi,(%rax)
+    40118d  mov    %rcx,0x8(%rax)
+    401191  mov    $0x0,%rdi
+
+=== %c2s-copy ===
+    401198  cmp    %rcx,%rdi
+    40119b  jge    0x4011b3
+    4011a1  movzbq (%rsi,%rdi,1),%rdx
+    4011a6  mov    %dl,0x10(%rax,%rdi,1)
+    4011aa  add    $0x1,%rdi
+    4011ae  jmp    0x401198
+
+=== %c2s-bump ===
+    4011b3  mov    %rcx,%rdi
+    4011b6  add    $0x7,%rdi
+    4011ba  shr    $0x3,%rdi
+    4011be  shl    $0x3,%rdi
+    4011c2  add    $0x10,%rdi
+    4011c6  add    %rax,%rdi
+    4011c9  cmp    $0x10600440,%rdi
+    4011d0  jg     0x401534
+    4011d6  mov    %rdi,0x600000
+    4011dd  
+    4011de  add    $0x11,%rax
+    4011e2  ret
+
+=== %cons ===
+    4011e3  mov    0x600000,%rax
+    4011ea  
+    4011eb  cmp    $0x10600430,%rax
+    4011f2  jg     0x401534
+    4011f8  mov    $0x2,%rsi
+    4011ff  mov    %rsi,(%rax)
+    401202  mov    $0x2,%rsi
+    401209  mov    %rsi,0x8(%rax)
+    40120d  mov    %r8,0x10(%rax)
+    401211  mov    %r9,0x18(%rax)
+    401215  lea    0x20(%rax),%rsi
+    401219  cmp    $0x10600440,%rsi
+    401220  jg     0x401534
+    401226  mov    %rsi,0x600000
+    40122d  
+    40122e  add    $0x11,%rax
+    401232  ret
+
+=== %car ===
+    401233  mov    -0x1(%r8),%rax
+    401237  ret
+
+=== %cdr ===
+    401238  mov    0x7(%r8),%rax
+    40123c  ret
+
+=== %fixnum? ===
+    40123d  mov    %r8,%rax
+    401240  and    $0x7,%rax
+    401244  cmp    $0x0,%rax
+    401248  je     0x401300
+    40124e  jmp    0x401308
+
+=== %null? ===
+    401253  cmp    $0x17,%r8
+    401257  je     0x401300
+    40125d  jmp    0x401308
+
+=== %eq? ===
+    401262  cmp    %r9,%r8
+    401265  je     0x401300
+    40126b  jmp    0x401308
+
+=== %pair? ===
+    401270  mov    %r8,%rax
+    401273  and    $0x7,%rax
+    401277  cmp    $0x1,%rax
+    40127b  jne    0x401308
+    401281  mov    -0x11(%r8),%rax
+    401285  cmp    $0x2,%rax
+    401289  je     0x401300
+    40128f  jmp    0x401308
+
+=== %vector? ===
+    401294  mov    %r8,%rax
+    401297  and    $0x7,%rax
+    40129b  cmp    $0x1,%rax
+    40129f  jne    0x401308
+    4012a5  mov    -0x11(%r8),%rax
+    4012a9  cmp    $0x0,%rax
+    4012ad  je     0x401300
+    4012b3  jmp    0x401308
+
+=== %flvector? ===
+    4012b8  mov    %r8,%rax
+    4012bb  and    $0x7,%rax
+    4012bf  cmp    $0x1,%rax
+    4012c3  jne    0x401308
+    4012c9  mov    -0x11(%r8),%rax
+    4012cd  cmp    $0x1,%rax
+    4012d1  je     0x401300
+    4012d7  jmp    0x401308
+
+=== %flonum? ===
+    4012dc  mov    %r8,%rax
+    4012df  and    $0x7,%rax
+    4012e3  cmp    $0x1,%rax
+    4012e7  jne    0x401308
+    4012ed  mov    -0x11(%r8),%rax
+    4012f1  cmp    $0x5,%rax
+    4012f5  je     0x401300
+    4012fb  jmp    0x401308
+
+=== %pred-true ===
+    401300  mov    $0x1,%rax
+    401307  ret
+
+=== %pred-false ===
+    401308  mov    $0x0,%rax
+    40130f  ret
+
+=== %error ===
+    401310  mov    $0x69,%rdi
+    401317  mov    $0x3c,%rax
+    40131e  syscall
+
+=== %make-vector-tagged ===
+    401320  mov    0x600000,%rax
+    401327  
+    401328  cmp    $0x10600430,%rax
+    40132f  jg     0x401534
+    401335  mov    $0x0,%rdi
+    40133c  mov    %rdi,(%rax)
+    40133f  mov    %rcx,0x8(%rax)
+    401343  mov    %rcx,%rsi
+    401346  shl    $0x3,%rsi
+    40134a  add    $0x10,%rsi
+    40134e  add    %rax,%rsi
+    401351  cmp    $0x10600440,%rsi
+    401358  jg     0x401534
+    40135e  mov    %rsi,0x600000
+    401365  
+    401366  lea    0x10(%rax),%rdi
+    40136a  mov    $0x0,%rsi
+
+=== %mkvt-loop ===
+    401371  cmp    %rcx,%rsi
+    401374  jge    0x401387
+    40137a  mov    %r8,(%rdi,%rsi,8)
+    40137e  add    $0x1,%rsi
+    401382  jmp    0x401371
+
+=== %mkvt-done ===
+    401387  add    $0x11,%rax
+    40138b  ret
+
+=== %fxquotient ===
+    40138c  mov    %rcx,%rax
+    40138f  mov    %rdx,%r11
+    401392  cqto
+    401394  idiv   %r11
+    401397  ret
+
+=== %fxremainder ===
+    401398  mov    %rcx,%rax
+    40139b  mov    %rdx,%r11
+    40139e  cqto
+    4013a0  idiv   %r11
+    4013a3  mov    %rdx,%rax
+    4013a6  ret
+
+=== %fxmodulo ===
+    4013a7  mov    %rcx,%rax
+    4013aa  mov    %rdx,%r11
+    4013ad  cqto
+    4013af  idiv   %r11
+    4013b2  mov    %rdx,%rax
+    4013b5  cmp    $0x0,%rax
+    4013b9  je     0x4013e4
+    4013bf  jl     0x4013d7
+    4013c5  cmp    $0x0,%r11
+    4013c9  jge    0x4013e4
+    4013cf  add    %r11,%rax
+    4013d2  jmp    0x4013e4
+
+=== %fxmod-neg ===
+    4013d7  cmp    $0x0,%r11
+    4013db  jle    0x4013e4
+    4013e1  add    %r11,%rax
+
+=== %fxmod-done ===
+    4013e4  ret
+
+=== %box-flonum ===
+    4013e5  mov    0x600000,%rax
+    4013ec  
+    4013ed  cmp    $0x10600430,%rax
+    4013f4  jg     0x401534
+    4013fa  mov    $0x5,%rdx
+    401401  mov    %rdx,(%rax)
+    401404  mov    $0x1,%rdx
+    40140b  mov    %rdx,0x8(%rax)
+    40140f  movsd  %xmm0,0x10(%rax)
+    401414  mov    %rax,%rsi
+    401417  add    $0x18,%rsi
+    40141b  cmp    $0x10600440,%rsi
+    401422  jg     0x401534
+    401428  mov    %rsi,0x600000
+    40142f  
+    401430  add    $0x11,%rax
+    401434  ret
+
+=== display ===
+    401435  movsd  %xmm0,0x600008
+    40143c  
+    40143e  mov    $0x1,%rdi
+    401445  mov    $0x600008,%rsi
+    40144c  mov    $0x8,%rdx
+    401453  mov    $0x1,%rax
+    40145a  syscall
+    40145c  mov    %r15,%rax
+    40145f  ret
+
+=== newline ===
+    401460  mov    %r15,%rax
+    401463  ret
+
+=== command-line ===
+    401464  mov    0x600010,%rax
+    40146b  
+    40146c  ret
+
+=== length ===
+    40146d  mov    $0x0,%rax
+    401474  mov    %r8,%rsi
+
+=== %len-loop ===
+    401477  cmp    $0x17,%rsi
+    40147b  je     0x40148e
+    401481  add    $0x1,%rax
+    401485  mov    0x7(%rsi),%rsi
+    401489  jmp    0x401477
+
+=== %len-done ===
+    40148e  ret
+
+=== cadr ===
+    40148f  mov    0x7(%r8),%rax
+    401493  mov    -0x1(%rax),%rax
+    401497  ret
+
+=== string->number ===
+    401498  mov    -0x9(%r8),%rcx
+    40149c  mov    $0x0,%rax
+    4014a3  mov    $0x0,%rdi
+
+=== %s2n-loop ===
+    4014aa  cmp    %rcx,%rdi
+    4014ad  jge    0x4014cd
+    4014b3  movzbq -0x1(%r8,%rdi,1),%rdx
+    4014b9  sub    $0x30,%rdx
+    4014bd  imul   $0xa,%rax,%rax
+    4014c1  add    %rdx,%rax
+    4014c4  add    $0x1,%rdi
+    4014c8  jmp    0x4014aa
+
+=== %s2n-done ===
+    4014cd  ret
+
+=== sonic-type-error ===
+    4014ce  mov    %rax,0x600008
+    4014d5  
+    4014d6  mov    $0x2,%rdi
+    4014dd  mov    $0x600008,%rsi
+    4014e4  mov    $0x8,%rdx
+    4014eb  mov    $0x1,%rax
+    4014f2  syscall
+    4014f4  mov    $0x65,%rdi
+    4014fb  mov    $0x3c,%rax
+    401502  syscall
+
+=== sonic-bounds-error ===
+    401504  mov    $0x66,%rdi
+    40150b  mov    $0x3c,%rax
+    401512  syscall
+
+=== sonic-overflow-error ===
+    401514  mov    $0x67,%rdi
+    40151b  mov    $0x3c,%rax
+    401522  syscall
+
+=== sonic-div-error ===
+    401524  mov    $0x67,%rdi
+    40152b  mov    $0x3c,%rax
+    401532  syscall
+
+=== sonic-heap-error ===
+    401534  mov    $0x68,%rdi
+    40153b  mov    $0x3c,%rax
+    401542  syscall
+
+=== main.entry1 ===
+    401544  sub    $0x10,%rsp
+
+=== main.entry1.loop ===
+    401548  mov    $0x4,%r10
+    40154f  mov    $0x7,%r13
+    401556  mov    %r10,%rcx
+    401559  mov    %r13,%rdx
+    40155c  call   0x4010e3
+    401561  mov    %rax,%rbx
+    401564  mov    %rbx,0x600040
+    40156b  
+    40156c  mov    0x600040,%rbx
+    401573  
+    401574  mov    -0x1(%rbx),%r10
+    401578  mov    0x7(%rbx),%r13
+    40157c  mov    %r10,%rcx
+    40157f  mov    %r13,%rdx
+    401582  call   0x40138c
+    401587  mov    %rax,%rcx
+    40158a  jo     0x401514
+    401590  cvtsi2sd %rcx,%xmm4
+    401595  movsd  %xmm4,%xmm0
+    401599  call   0x401435
+    40159e  mov    %rax,%rbx
+    4015a1  add    $0x10,%rsp
+    4015a5  jmp    0x401460
