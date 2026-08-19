@@ -7410,3 +7410,57 @@ applied to a GUARD rather than a measurement: a check that cannot fail is not a
 check, and the only way to know is to make the thing it guards against actually
 happen. Had `cfg_build_all` been committed on the strength of its passing run, it
 would have read as protection while protecting nothing.
+
+## D169 — why RV64 packed lowering is a subsystem and x86-64 was a table
+
+qaq.13 reads as five missing selection rules: `p2add`, `p2sub`, `p2mul`,
+`p2splat` and `p2hi` are x86-64:1 and rv64:0. On x86-64 those rules ARE a table --
+`(cons 'p2add (packed 'vaddpd))`, one line each. The same five on RV64 are not,
+and the reason is architectural rather than an accident of what got written.
+
+**x86-64 needed no new machinery because xmm already is the packed file.**
+target-x86-64.ss says so where the three-lane forms are defined: "the allocator
+hands out a raw-f64 register and finalize spells it `xmm3`, and a ymm of that
+number is the same physical register. The width rides on the MNEMONIC." A packed
+pair is a `raw-f64` value in an existing pool, and `vaddpd` differs from `vaddsd`
+only in the opcode. Nothing else in the compiler has to know.
+
+**On RV64 none of that holds, in three separate ways.**
+
+1. *There is no register to put it in.* `arch-rv64`'s float pool is `ft0..ft8`,
+   `fs0..fs11`, `fa0..fa7` -- the scalar F registers, 64 bits, one double each. A
+   pair does not fit. RVV's `v0..v31` are a distinct file, and `arch` has pools
+   for value, raw, float, structural, scratch and mask, with none for vectors.
+   `reg-class` maps `raw-f64` to `float` and there is no class that reaches a v
+   register. So a packed pair on RV64 needs a storage class and a pool that do
+   not exist, which x86-64 got for free.
+
+2. *Width is CSR state, not an opcode.* `vfadd.vv` computes on whatever `vtype`
+   and `vl` currently say. Getting two-lane f64 means `vsetvli` with SEW=64 and
+   vl=2 in effect AT the instruction, so the width is a property of the machine
+   between two points rather than of the instruction. Every rule in the x86-64
+   table is stateless; none of these can be. That makes placement a real question
+   -- a `vsetvli` before every packed op is an extra instruction each and cannot
+   be wrong, and hoisting one out of a loop is cheaper and needs an argument that
+   nothing between disturbs it, including calls.
+
+3. *The convention says nothing about v registers.* callconv.ss declares
+   caller-saved and callee-saved sets over the registers that exist today. A
+   value living in `v3` across a call is governed by nothing, and the
+   whole-program clobber analysis reads writes it does not know how to see.
+
+**So the honest scope is not five rules.** It is a fourth storage class with its
+pool and `reg-class` entry, spill and reload for it (`vs1r.v`/`vl1r.v`, not
+`fsd`), a `vsetvli` discipline with a placement rule, a convention answer for v
+registers across calls, and only then the five rules -- plus the differential
+oracle, which is the part that actually settles it, since RV64 already runs nbody
+bit-identically to x86-64 (D81) and that agreement is the thing a vector path must
+not break.
+
+The encoder is not the gap. vec-rv64.ss is 635 lines and already does RVV
+encoding, planning and kernel emission, and the smoke gate emits `vsetvli` under
+RVA23 today. What is missing is everything between the IR and it.
+
+Decomposed into children rather than left as one bead, because "add a storage
+class" and "decide where vsetvli goes" fail in different ways and the first is a
+prerequisite for testing the second.
