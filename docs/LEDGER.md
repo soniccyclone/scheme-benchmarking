@@ -6756,3 +6756,44 @@ failure as a cost, D117 corrected the direction, D118 counted, D152 located the
 counts in cold code, and this found the constant. Every step was available at the
 start; what made each visible was measuring one stage further rather than
 reasoning harder about the previous answer.
+
+## D154 — twelve is the knee, and fannkuch's "irreducible" three were not
+
+D153 shipped `ascent-rounds 12` because it was the first value tried and it
+worked. That is not the same as it being right. Sweeping:
+
+```
+rounds    nbody checks   fannkuch checks   wall clock, both compiles
+   4           14              3                  3s
+   6            0              3                  2s
+   8            0              3                  2s
+  12            0              0                  2s
+  20            0              0                  2s
+```
+
+**Twelve is exactly the knee for both benchmarks, and there is no compile-time
+cost at any of these values.** nbody settles at six; fannkuch needs twelve;
+nothing further is gained at twenty.
+
+**And it corrects D118.** That entry counted fannkuch's checks at three with
+unrolling off and six with it on, and concluded "three the analysis cannot
+discharge either way -- the duplicated body carries two copies of each". The
+three were not irreducible. They were four rounds short, the same as nbody's
+fourteen, and at twelve rounds they go too:
+
+```
+nbody:    0 branches to sonic-bounds-error
+fannkuch: 0
+```
+
+**Both benchmarks now emit zero bounds checks**, which neither did at any point
+before tonight -- fannkuch never has, in any configuration recorded in this
+ledger. Suite 8613 checks across 61 suites.
+
+**What the sweep says about the original constant.** Four rounds was chosen with
+a comment justifying it on one example -- "`i < n-bodies` gives [0,5] in three
+rounds" -- and that example is genuinely three rounds. The number was right for
+the case that motivated it and never re-derived for any other. It survived
+because nothing measured what it cost: the checks it failed to discharge were
+attributed to the analysis being unable to reach them, in D118 by me, and the
+constant was never a suspect.
