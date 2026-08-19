@@ -7204,3 +7204,57 @@ instructions stale, which is D94's failure exactly -- a fresh measurement read
 against a figure from before an unrelated change. Corrected in LOOP.md and in
 qaq.26; the older ledger entries keep their numbers, because they were right when
 written, and carry a pointer here.
+
+## D165 — qaq.21's copies are the pin wrapper's price, not missing coalescing
+
+D163 measured 23.6% of fannkuch's hot-path instructions as register-to-register
+copies and moved qaq.21 to P2. Reading the hottest block -- `loop%2.224.loop`,
+34.58% of the profile, nineteen instructions -- says what they are, and it is not
+what D107 diagnosed.
+
+```
+4015ad  mov  %rcx,%rsi         <- copy in
+4015b0  mov  %rdx,%rdi         <- copy in
+4015b3  cmp  %rdi,%rsi
+        ... the body works entirely in rsi/rdi/r10/r11 ...
+4015dd  lea  0x1(%rsi),%r10
+4015e1  lea  -0x1(%rdi),%rsi
+4015e5  mov  %r10,%rcx         <- copy back
+4015e8  mov  %rsi,%rdx         <- copy back
+4015eb  jmp  0x4015ad
+```
+
+Four of the five copies are one thing: the loop variables live in `rcx`/`rdx`,
+the body works in `rsi`/`rdi`, and every iteration shuffles between the two sets.
+**That is a parallel copy at a back edge, not argument setup.**
+
+**Coalescing already exists and is not the missing piece.** `move-hints` in
+regalloc.ss is Chaitin's idea in the form a linear scan can take it -- a
+preference consulted when a register is chosen, taken only when the register is
+genuinely free. It is correct and it fires. It cannot help here.
+
+**The cause is the pin wrapper, and it says so itself.** x86-64 raw-word
+arguments are `(rcx rdx rsi rdi r10 r11)`, so a two-parameter function pins
+parameter 0 to `rcx` and parameter 1 to `rdx`. `allocate-program/precolored*`
+implements a pin by REMOVING the register from every pool and hiding the vreg
+from the scan, so the pin costs that register across the whole function rather
+than across the pinned value's live range. callconv.ss admits this in a comment
+and judges it nearly free, which is right for the case it was written for --
+return placement, at the end of a block, on a register that is usually scratch.
+It is not free for a parameter of a hot loop: `rcx` and `rdx` are unavailable to
+the body for the entire function, so the body cannot work in them, so the back
+edge must copy.
+
+The copies are therefore not a coalescing failure. They are the exact,
+predictable price of expressing a live-range constraint as a whole-function pool
+reduction, and no hint can undo it -- the hinted register is not in the pool to
+be preferred.
+
+**What would fix it** is making precoloring live-range-scoped: the scan holds
+`rcx` for the parameter's interval and hands it back afterwards, so a body vreg
+that starts where the parameter ends can have it, which is the same transfer
+`move-hints` already performs for a dying move source. That is a change inside
+linear scan, not another pass over the listing.
+
+Redirected qaq.21 accordingly. The bead asked to coalesce moves; the moves are a
+symptom, and the pass it names already exists and works.
