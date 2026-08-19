@@ -6654,3 +6654,51 @@ general one about unrolling.
 That is the first time in this investigation that the next step is about the
 compiler rather than about the measuring. Five entries to get there, and the
 whole distance was instrument error.
+
+## D152 — the fourteen checks are all in code that runs a handful of times
+
+D151 said the surviving checks were nameable and that naming them would turn
+`qaq.30` into a compiler question. Naming them turns it into a much simpler one.
+
+With unrolling off, the fourteen bounds checks that reach the image are:
+
+```
+subtract-pairs   4
+loop%12.57       4
+energy-from      6
+```
+
+**None is in `inner%24`, the pairwise force loop.** The source says what those
+three are:
+
+```scheme
+(offset-momentum! vel mass)          ; once, before the loop
+(display (energy pos vel mass))      ; once
+(let loop ((i 0)) (when (fx< i n) (advance! pos vel mass) ...))   ; the work
+(display (energy pos vel mass))      ; once
+```
+
+`energy` runs twice per program and `offset-momentum!` once, against `advance!`
+running N times -- five million in the configuration everything here is measured
+at. So the checks unrolling discharges are in setup and teardown, and the hot
+loop emits none either way.
+
+**That is why nbody's cycles do not move.** D116 measured 0.17%, inside noise,
+and called it neutral without knowing why. This is why: there was never any hot
+code to slow down.
+
+**And it reframes what `qaq.30` asks Nathan for.** The trade is not "0.17% of
+nbody against 4.7% of fannkuch", which is how D118 and D144 put it. It is:
+
+> fourteen bounds checks in nbody's setup and teardown, which run O(1) times,
+> against 4.7% of fannkuch's total runtime.
+
+The nbody side is not a performance cost at all. It is the claim "nbody emits NO
+bounds check at all" -- a statement about what the compiler can prove, which D5
+and D24 make the centre of this project, and which is worth whatever it is worth
+on those grounds rather than on speed.
+
+Recorded on the bead, which now states the trade in those terms. This is the
+fourth reframing of the same decision -- D116 called it safety against speed,
+D117 corrected the direction, D118 counted, and this locates the counts -- and
+each one made the question smaller.
