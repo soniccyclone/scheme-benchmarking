@@ -6973,3 +6973,43 @@ Nathan, one turned out to be a question about the compiler that the compiler
 could answer, and the answer was a constant. The other -- M5's accuracy trade --
 is genuinely his, and D127 sharpened it by showing the milestone as worded cannot
 be settled by measurement at all.
+
+## D160 — the same win on RV64, and a counter that was blind to the target
+
+The `ascent-rounds` change is target-independent by construction -- it runs on
+Lssa, before selection -- but nothing had checked it. Counting traps on both:
+
+```
+                  ascent-rounds 4          ascent-rounds 16
+x86-64      14 bounds, 15 overflow      0 bounds, 1 overflow
+rv64        14 bounds, 15 overflow      0 bounds, 1 overflow
+```
+
+Identical. nbody on RISC-V emits one check in the whole program, from
+twenty-nine, exactly as x86-64 does.
+
+**The first version of that count reported rv64 as zero at BOTH round counts**,
+which would have read as "RV64 already emits none" -- a better result than the
+truth, and false. The two targets name their traps differently:
+
+```
+x86-64   (jge (label sonic-bounds-error))
+rv64     (bgeu idx limit trap-bounds-check)     ; rv64-trap-label
+```
+
+A counter that knows only `sonic-*-error` finds nothing on RV64 at any
+configuration. It was caught by the rule this session keeps arriving at: the
+zero was checked against a configuration known to be nonzero -- `ascent-rounds
+4`, where x86-64 reports twenty-nine -- and RV64 still said zero, which is not a
+result but an instrument.
+
+**This is D132's shape again.** That entry found `merge-identical-functions`
+doing nothing on RV64 because x86-64 writes `(label X)` where RV64 writes a bare
+symbol. Here a measurement was blind to RV64 because x86-64 writes
+`sonic-bounds-error` where RV64 writes `trap-bounds-check`. Both times the
+target difference is a naming convention, both times the x86-64 result was real
+and the RV64 one was absent rather than wrong, and both times nothing failed.
+
+The convention D133 established -- assert on BOTH targets -- exists for the first
+of those. The second suggests it should extend to measurements, not only
+assertions: a number taken on one target is not a number about the compiler.
