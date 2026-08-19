@@ -29,6 +29,11 @@ fi
 pass=0 fail=0
 ok()   { echo "  [PASS] $1"; pass=$((pass + 1)); }
 bad()  { echo "  [FAIL] $1"; fail=$((fail + 1)); }
+# NEITHER, and counted as neither. A prerequisite that is absent is not a limit
+# that works -- the third false pass in the guest assertion below came from
+# treating "it did not run" as "it was contained".
+skipped=0
+skip() { echo "  [SKIP] $1"; skipped=$((skipped + 1)); }
 
 # ---------------------------------------------------------------------------
 echo "1. the limits are present in the cgroup"
@@ -109,6 +114,7 @@ echo "2b. a runaway INSIDE THE GUEST VM dies at the guest's limit"
 # killed. The check then read a working limit as a broken one. `|| exit` is the
 # whole fix; the lesson is that reaching the next line is not evidence the
 # previous one succeeded.
+mkdir -p "$here/build"
 cat > "$here/build/guest-bomb.sh" <<'BOMB'
 python3 -c '
 buf = []
@@ -129,16 +135,28 @@ guest_out=$("$here/tools/container.sh" bash -c '
 guest_rc=$?
 rm -f "$here/build/guest-bomb.sh"
 
+# CONTAINMENT IS SHOWN BY EVIDENCE FROM INSIDE THE GUEST, never by a nonzero
+# exit out here. This branch used to end with `elif [ "$guest_rc" -ne 0 ]` ->
+# PASS, which reads EVERY failure as a success: a missing payload, a `vng` that
+# is not installed, a container that would not start. CI proved it -- `build/`
+# does not exist on a fresh checkout, so `cat >` failed, the guest never ran,
+# and the gate reported "[PASS] guest runaway was contained, exit 1".
+#
+# That is the THIRD false pass in this one assertion; the header above documents
+# the other two. All three have the same shape, which is worth naming: the
+# assertion asked whether something went wrong rather than whether the right
+# thing went right, and something going wrong is the easiest state to arrive in.
 if echo "$guest_out" | grep -qiE "MemoryError|Killed|Out of memory|oom-kill"; then
     ok "guest runaway died inside the guest, at its own 1G limit"
 elif echo "$guest_out" | grep -q "GUEST-SURVIVED"; then
     bad "guest runaway COMPLETED -- the guest has no effective memory limit"
 elif echo "$guest_out" | grep -q "GUEST-BOMB-EXIT="; then
     ok "guest runaway died inside the guest ($(echo "$guest_out" | grep -o 'GUEST-BOMB-EXIT=[0-9]*'))"
-elif [ "$guest_rc" -ne 0 ]; then
-    ok "guest runaway was contained, exit $guest_rc (no guest-side report)"
+elif ! "$here/tools/container.sh" bash -c 'command -v vng >/dev/null 2>&1' 2>/dev/null; then
+    skip "no vng in the image, so the guest limit cannot be tested here"
 else
-    bad "guest runaway result unreadable -- the assertion did not run"
+    bad "guest runaway produced no report from inside the guest (exit $guest_rc); \
+the guest did not run, which is not evidence that its limit works"
 fi
 
 # ---------------------------------------------------------------------------
@@ -168,5 +186,5 @@ rc=$?; elapsed=$(( $(date +%s) - start ))
 
 # ---------------------------------------------------------------------------
 echo
-echo "containment: $pass passed, $fail failed"
+echo "containment: $pass passed, $fail failed, $skipped skipped"
 [ "$fail" -eq 0 ] || exit 1

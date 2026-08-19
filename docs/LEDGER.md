@@ -8444,3 +8444,50 @@ decision about his repository rather than a guard on it.
 Verified a superset before overwriting the tracked file: every id in the old 100
 appears in the new 146, none missing, statuses matching `bd stats` at 135 closed
 and 11 open. Committed and pushed.
+
+## D191 — CI has been red since 2026-08-14, and one of its passes was fake
+
+Pushing 116 commits was worth doing for its own sake; the more useful consequence
+was finding out what happens to them. CI runs on every push and has failed on
+every push in its visible history -- twelve runs back to 2026-08-14. Nothing in
+this project's loop ever looked, and the ledger has 130 entries written in that
+window, none of them aware that the gate was red.
+
+The failing step is the containment gate, and it reports four things:
+
+```
+1.  [FAIL] memory.max is '', expected 8589934592
+1.  [FAIL] pids.max is '', expected 512
+2b. build/guest-bomb.sh: No such file or directory
+2b. [PASS] guest runaway was contained, exit 1 (no guest-side report)
+4.  [FAIL] spinning process returned 1 after 0s, expected 124
+```
+
+**The [PASS] on 2b is the important line.** `build/` does not exist on a fresh
+checkout, so writing the payload failed, so the guest never ran -- and the check
+reported containment. The verdict ended with `elif [ "$guest_rc" -ne 0 ]` -> ok,
+which reads EVERY failure as a success: a missing payload, an uninstalled `vng`, a
+container that would not start.
+
+That is the **third** false pass in this one assertion, and the header above it
+documents the other two -- a payload four levels of quoting deep that never ran,
+and a `GUEST-SURVIVED` echoed after an OOM kill because the shell reached the next
+line. Three bugs, one shape: **the assertion asked whether something went wrong
+instead of whether the right thing went right**, and something going wrong is the
+easiest state in the world to arrive in.
+
+Fixed to require evidence from inside the guest, with `mkdir -p` so the payload
+can be written, and a real SKIP for the case where `vng` is absent -- counted as
+neither passed nor failed, because a missing prerequisite is not a working limit.
+Locally: 7 passed, 0 failed, 0 skipped, unchanged.
+
+**The other two failures are real and unfixed.** The cgroup readback returns empty
+in CI and the ENTRYPOINT's `timeout` returns 1 immediately rather than 124. Both
+are docker-versus-podman differences in an environment this host cannot reproduce
+-- there is no docker here and CLAUDE.md forbids installing one. Filed rather than
+guessed at, because a containment gate patched blind is exactly the thing that
+starts passing without being true.
+
+**The standing lesson is about the loop, not the gate.** An autonomous loop that
+reads `bd ready` and never reads CI is measuring its own opinion. `gh run list` is
+one command.
