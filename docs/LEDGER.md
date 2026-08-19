@@ -3821,3 +3821,61 @@ it wants either an arithmetic permission the project has so far declined on
 accuracy grounds, or the acceptance that a tie against the reference C compiler
 is the result. Both are Nathan's call, not a compiler's, and the measurement is
 now good enough that the question can actually be put to him.
+
+## D92 — the reciprocal question, answered on the axis that binds us
+
+D37 rejected reciprocal approximation and D90 noted the rejection was measured
+somewhere nbody's loop does not run. Two things were wrong with reusing it here,
+and the second is the more interesting.
+
+It ran **packed at 256 bits**, where the divider costs about two cycles a lane;
+the loop emits scalar `vdivsd` at five (D90). And it measured **throughput**,
+deliberately, with four independent chains — but llvm-mca puts the loop at 85.65%
+register dependencies, so the deciding quantity is LATENCY. A form can lose on
+throughput and win on latency; rsqrt+Newton, trading one long divider op for
+several short multiplies, is exactly that shape.
+
+`bench/micro/rsqrt-scalar.c`, scalar, both axes, on the guest counters:
+
+```
+exact  sqrt+div    LATENCY     41.364 cyc/op    exact
+rsqrt+1 Newton     LATENCY     30.262           worst rel err 2.98e-07
+rsqrt+2 Newton     LATENCY     40.727           worst rel err 4.43e-14
+rsqrt+3 Newton     LATENCY     51.185           worst rel err 8.59e-16
+exact  sqrt+div    THROUGHPUT  14.303
+rsqrt+3 Newton     THROUGHPUT  13.404
+```
+
+D37's verdict survives for the form it tested — three Newton steps, which is what
+you need to get within an ulp, is 24% SLOWER on latency and its throughput win is
+7%. But the blanket reading of that entry is wrong: at **two** Newton steps the
+approximation is 1.5% faster on latency (40.727 against 41.364) with a worst
+relative error of 4.4e-14, and at one step it is **27% faster** for 3e-7.
+
+So the honest shape of it is a curve, not a verdict:
+
+- 1 step: 27% latency, error 3e-7. Too coarse for physics; nbody's own answer
+  would move in the fourth significant figure.
+- 2 steps: 1.5% latency, error 4.4e-14. Real but small, and it BREAKS BIT-EXACT
+  cross-agreement — D24's oracle compares eleven implementations bit for bit, and
+  4.4e-14 is not bit-exact by any reading.
+- 3 steps: slower. Rejected, as D37 said.
+
+**Caveat on transferring these numbers.** The latency figure comes from a fully
+serial chain at 41 cycles an operation. nbody achieves 17.8 cycles per
+pair-interaction by overlapping independent pairs, so only the part of the chain
+that is actually critical would benefit — the 0.64 cycles two-step buys on a
+serial chain is an upper bound on what it buys in situ, not a prediction.
+
+**This is where M5 stops being a compiler question.** Every structural lever is
+now closed by measurement: instruction count, branches, unrolling, specializer
+budget (D89), packing the divide (D91), and reciprocal approximation at any step
+count that preserves accuracy (here). The gap is 0.752 cycles per interaction and
+what remains on the table is an accuracy trade the project has twice declined on
+principle — D24 forbids reassociation outright, D80 admitted contraction only as
+a scoped, default-off permission and only because it is bit-reproducible.
+
+A 4.4e-14 error is a different kind of thing from contraction: it is not a
+different rounding of the same computation, it is a different computation. That
+is a decision about what SonicScheme promises, not about what is fast, so it goes
+to Nathan rather than getting taken by a compiler in a loop.
