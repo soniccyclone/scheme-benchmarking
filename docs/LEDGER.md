@@ -7860,3 +7860,50 @@ it is not a small change, and D167's lesson applies to it before anything else:
 the payoff is 10.47% of the profile by D163's measurement, and this project has
 now three times measured instruction-level wins on that benchmark converting to
 nothing.
+
+## D178 — the cycle fixpoint is sound if you verify instead of assume
+
+D177 raised the objection and left it there, which is half an answer. The
+objection is real: allocating a call-graph cycle member with a smaller assumed
+clobber set hands it MORE free registers, so it may write more of them. The
+iteration is therefore not monotone decreasing, and "iterate until it settles" is
+not a proof of anything.
+
+**But the soundness condition is checkable after the fact, and that is enough.**
+
+A caller allocated against an assumption `A` for its callee is correct if the
+callee actually writes some `C` with `C ⊆ A`. That is the whole contract --
+`clobbers-of` returning a superset is conservative and safe, which is exactly why
+`#f` meaning "assume everything" works today. So:
+
+```
+round 1   assume nothing is known (clobbers = #f, the current behaviour)
+          allocate every cycle member, read back what each writes -> C1
+round 2   assume A(f) = C1(f) for every member
+          allocate every member again, read back -> C2
+accept    round 2 IF C2(f) subset-of A(f) for EVERY member; else keep round 1
+```
+
+Round 1 is trivially sound because `A` is the whole register file. Round 2 is
+sound exactly when the check passes, and the check is a subset test over small
+sets. Nothing is assumed to converge: a fixed number of rounds, and a verified
+fallback to an allocation already known good.
+
+The non-monotonicity does not go away -- it just stops mattering, because it is
+detected rather than reasoned around. If a member exploits its new freedom and
+writes a register outside `A`, the check fails and that round is discarded whole.
+Discarding whole is the important part: accepting round 2 for the members that
+passed while keeping round 1 for one that failed would allocate callers against a
+mixture of two assignments, which is the bug this is meant to avoid.
+
+**Cost is one extra allocation of the cycle members only.** D162 measured the
+cycle at 6 of fannkuch's 14 functions and none of nbody's, so it is bounded and
+usually zero.
+
+**What this does NOT establish is that it is worth doing.** The payoff is D163's
+10.47% of profile, on a benchmark where three separate measurements (D89, D111,
+D167) have now found instruction-level wins converting to no time at all. The
+value of this entry is that the soundness question is now closed, so whoever picks
+`qaq.23` up argues about the payoff rather than rediscovering the hazard --
+D177 flagged it precisely because "one more round" optimisations are how a caller
+ends up holding a value in a register its callee has learned to write.
