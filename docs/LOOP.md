@@ -27,6 +27,20 @@ run here" as red rather than as passing. D191's third false pass in one assertio
 came from reading a failure as a success -- the gate asked whether something went
 wrong instead of whether the right thing went right.
 
+**Green as of 2026-08-19, and it means something now.** CI runs the same three
+gates a developer runs and they agree with this machine:
+
+| gate | CI | here |
+| --- | --- | --- |
+| containment | 8 passed, 0 failed | 8 passed, 0 failed |
+| suite | 8653 checks, 0 failures | 8653 checks, 0 failures |
+| RISC-V smoke | bit-exact at 17 digits, nothing above rv64gc | same |
+
+**Check the NUMBERS, not the tick.** For five days the containment gate reported
+passes without executing anything, and the tell was wall clock -- 0.8 seconds for
+work that takes thirty (D193). A gate whose check count drops is a gate that
+stopped running part of itself.
+
 ---
 
 ## Where the project actually stands
