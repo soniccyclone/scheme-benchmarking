@@ -68,7 +68,15 @@ trap 'rm -f "$script"' EXIT
     # option and prints its usage instead of setting anything.
     echo 'echo -1 > /proc/sys/kernel/perf_event_paranoid'
     echo 'cd /work || exit 1'
-    printf 'exec perf stat -e %s -- %s\n' "$EVENTS" "$*"
+    # THE WORKLOAD'S STDOUT GOES TO /dev/null, DELIBERATELY. sonic's runtime
+    # writes RAW DOUBLES to stdout (see runtime.ss and the note in
+    # docker-compose.yml about not allocating a tty). In the guest that stream
+    # shares the virtio serial console with perf's report, and the raw bytes
+    # garble the channel -- fannkuch came back with NO counters at all and no
+    # error, which reads exactly like a failed run. perf writes its report to
+    # stderr, so discarding stdout costs nothing here: this harness is asked for
+    # counters, never for the program's answer. Correctness is the suite's job.
+    printf 'exec perf stat -e %s -- %s >/dev/null\n' "$EVENTS" "$*"
 } > "$script"
 chmod +x "$script"
 

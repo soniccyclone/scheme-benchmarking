@@ -3879,3 +3879,71 @@ A 4.4e-14 error is a different kind of thing from contraction: it is not a
 different rounding of the same computation, it is a different computation. That
 is a decision about what SonicScheme promises, not about what is fast, so it goes
 to Nathan rather than getting taken by a compiler in a loop.
+
+## D93 — hoisting the globals buys one cycle in 3847; and fannkuch is the other benchmark
+
+**Stage two of `qaq.17` refuted before it was written.** The plan was to hoist
+loop-invariant pointer-valued global loads out of the hot loop, on the theory
+that a five-cycle load at the head of each iteration sits on the dependency chain
+that D90 says binds us. Simulated by deleting those three loads from the
+extracted loop body and re-running the static model:
+
+```
+             Total Cycles   Block RThroughput   Register Deps
+base              3847            28.0             85.65%
+hoisted           3846            28.0             88.12%
+```
+
+One cycle in 3847. They are loop-invariant with constant addresses that hit L1
+and issue early, so they were never ON the chain — they sit beside it. `qaq.17`
+closes: stage one shipped (`gconst.ss`, D88), stage two is measured worthless.
+That is three plans now killed by cheap pre-verification rather than by a wasted
+implementation — D84's strength reduction by the test suite, `qaq.20` by
+`objdump`, this by llvm-mca.
+
+**And a harness defect worth its own paragraph.** fannkuch came back from the
+guest with no counters and no error, which reads exactly like a failed run. The
+cause: sonic's runtime writes RAW DOUBLES to stdout, that stream shares the
+guest's virtio serial console with perf's report, and the raw bytes garble the
+channel. `vm-perf.sh` now discards the workload's stdout — perf writes to stderr,
+and this harness is asked for counters, never for the program's answer. Fourth
+instrument defect in three sessions, and the same shape as the others: it did not
+fail, it answered wrong.
+
+**fannkuch, measured on the counters for the first time (n=11):**
+
+```
+              cycles         instructions      branches       misses    IPC
+fk (sonic)  9,871,805,287  27,632,610,299  5,704,172,840  143,656,453  2.80
+fkref (gcc) 8,461,136,855  11,144,811,729  2,211,433,606  170,978,195  1.32
+```
+
+**This benchmark is not nbody and must not be reasoned about as if it were.**
+D89 established that nbody's surplus instructions are free — we removed 465M and
+got slower. Here the arithmetic runs the other way: at our own IPC of 2.80,
+gcc's 11.1B instructions would take 3.97B cycles against its actual 8.46B. We
+are 1.167x behind on cycles while carrying 2.48x the instructions, so on THIS
+benchmark instruction count is the lever, and D89's conclusion does not transfer.
+
+Note also that gcc takes MORE branch misses than we do — 171M against 144M, a
+7.7% rate against our 2.5%. fannkuch's branches are genuinely unpredictable
+(permutation reversal), and we are not losing on prediction.
+
+**What the instructions are.** The specializer is not the answer here either: at
+budget 4 and 8 it ADDS instructions (27.6B -> 29.7B -> 30.1B) and cycles with
+them, because fannkuch's trip counts are data-dependent and no guard folds. The
+static listing says where to look instead — 1103 instructions, of which:
+
+```
+  register-to-register moves   130
+  reloads from the stack        20
+  spills to the stack           11
+  check traps referenced         3
+```
+
+Checks are already elided; spill traffic is modest. But **130 reg-to-reg moves,
+11.8% of the listing**, is a coalescing gap — the C reference has one stack spill
+in the whole program. Filed as `qaq.21`, and it is the first optimisation in
+several entries whose payoff is not ruled out in advance: fannkuch converts
+instructions to time, and this is the largest identified block of instructions
+that does no arithmetic.
