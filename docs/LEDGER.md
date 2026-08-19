@@ -5037,3 +5037,58 @@ control flow, or cut mispredicts directly.
 bought time**: D97's frame reuse, D106's clobber sets, D111's branch inversion.
 D112 says why -- they were all aimed at the 75% that is not the bottleneck, and
 one of them disturbed the 25% that is.
+
+## D113 — where fannkuch's 2.4x actually is, and it is not the inner loop
+
+D112 set the target at a 23% instruction cut and called it a representation
+question. Making that concrete meant reading both inner loops rather than
+theorising about tagging.
+
+**Ours is near-optimal for what it is.** The reversal, unrolled by two:
+
+```
+mov  0x600050,%rbx           the array pointer, once per two swaps
+mov  -0x1(%rbx,%rsi,8),%r10  load a[i]
+mov  -0x1(%rbx,%rdi,8),%r11  load a[j]
+mov  %r11,-0x1(%rbx,%rsi,8)  store
+mov  %r10,-0x1(%rbx,%rdi,8)  store
+lea  0x1(%rsi),%r10          i++
+lea  -0x1(%rdi),%rsi         j--
+cmp  %rsi,%r10
+jge  ...
+```
+
+About eight instructions per swap: two loads, two stores, two index updates, a
+compare and a branch. There is no tagging in it, no check, no boxing. It is what
+a C compiler would emit for the same loop over 64-bit elements.
+
+**And gcc's is scalar too.** Its `main` is 71 `mov`, 18 `lea`, 13 `cmp`, 12
+`jle`, and **four** vector instructions. The 6.82% of its profile in
+`__memmove_avx512_unaligned_erms` is libc's memcpy for the array copy, not the
+flip. So the 2.4x is not vectorisation, and it is not the flip loop.
+
+**Two differences are visible and neither is about Scheme.**
+
+`ref.c` declares `static int perm[N]` -- **32-bit elements**. Our `(make-vector 7
+0)` is a vector of tagged words, eight bytes each. Every load, store and address
+computation in the flip moves twice the bytes, and 11 `movslq` in gcc's main are
+the sign-extensions it pays instead. That is a data-representation choice the
+benchmark makes, not an optimisation we are missing.
+
+`gcc` emits six `push` and six `pop` in `main`: it uses callee-saved registers to
+hold the array pointer and loop state across calls. We emit **zero** push or pop
+in the entire binary (D95), so ours reloads `0x600050` inside the loop. D102
+weakened that finding by showing the clobber analysis already identifies
+survivors -- and it does, but only for callees it can see, and only as many as
+happen to be untouched.
+
+**What this closes.** "Where does 2.4x come from" has been an open assumption
+since D93 and the answer is not the one the phrase "Scheme overhead" suggests.
+The inner loop carries no interpretive cost at all. The gap is element width and
+register discipline, and the first of those is not ours to change without
+changing what the benchmark measures.
+
+That makes `qaq.7`'s framing worth revisiting for fannkuch the way D80 revisited
+it for nbody: comparing a 64-bit-word Scheme against a 32-bit-int C on an
+array-shuffling benchmark measures the word size as much as the compiler. It is
+not a reason to stop, and it IS a reason not to read 2.4x as a compiler deficit.
