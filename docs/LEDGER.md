@@ -5902,3 +5902,44 @@ x86-64 numbers in D121 and D130 were real. A pass that silently does nothing on
 half the targets is invisible to every check this project runs, because all of
 them ask whether the output is correct and none asks whether the pass did
 anything.
+
+## D133 — an assertion that a pass did something, validated by breaking it
+
+D132 ended by naming a class: a pass that silently does nothing is invisible to
+every check here, because all of them ask whether the output is CORRECT and none
+asks whether the pass did ANYTHING. `unroll-test.ss` already had one of these --
+"nbody's loops are reached at all: the pass is not inert" -- so the idea is in
+the project; the merge pass simply did not have it.
+
+It does now, and the form is worth copying:
+
+```
+no two emitted functions are identical under label renaming (x86-64)
+no two emitted functions are identical under label renaming (rv64)
+```
+
+That is a property of the OUTPUT, so it needs no instrumentation and cannot be
+satisfied by a pass that ran and did nothing. Both targets, because the bug was
+on one of them.
+
+**The canonical form in the test is written out independently rather than
+imported.** Sharing `canonical-listing` would share its bugs -- and the bug it
+had was exactly a shape it failed to canonicalise, which a shared implementation
+would have agreed with. An oracle that reuses the implementation it checks is
+not an oracle.
+
+**Validated by breaking it.** Reverting only the bare-symbol case in
+`canonical-listing` and re-running:
+
+```
+ok    no two emitted functions are identical under renaming (x86-64)
+FAIL  no two emitted functions are identical under renaming (rv64)
+      duplicates: ((inner%24.197 inner%24.1445.377))
+```
+
+It fails on the right target, passes on the other, and names the pair. D126
+ended by saying an instrument must be checked against a configuration with a
+known answer before its results are believed; this is the first thing written
+since that followed the instruction.
+
+Suite 8600 checks, 0 failures, 60 suites.

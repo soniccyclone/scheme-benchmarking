@@ -16,7 +16,7 @@
 ;;; defined twice`, which is the mild symptom; merging two functions that do
 ;;; different things is the severe one.
 
-(import (chezscheme) (sonic finalize))
+(import (chezscheme) (sonic finalize) (sonic driver) (sonic pipeline))
 
 (define checks 0)
 (define failures 0)
@@ -118,6 +118,64 @@
                      (list (fn 'a a-body)
                            (fn 'c '(c.loop (sub rax rcx))))))
              '(a c)))
+
+;; --- THE PASS IS NOT INERT, ON EITHER TARGET -------------------------------
+;;
+;; D132: the pass shipped in the driver rather than behind a target case and did
+;; nothing at all on RV64 for two entries' worth of work, because x86-64 names a
+;; branch target `(label X)` and RV64 names it as a bare symbol. Nothing failed
+;; and no measurement looked wrong -- every check this project runs asks whether
+;; the OUTPUT is correct and none asked whether the pass did anything.
+;;
+;; The assertion below is on the output and needs no instrumentation: after the
+;; pass, no two emitted functions may be identical under label renaming. An
+;; inert pass leaves duplicates and fails it.
+;;
+;; The canonical form here is written out INDEPENDENTLY rather than imported,
+;; deliberately. Sharing `canonical-listing` would share its bugs -- and the bug
+;; it had was precisely a shape it did not canonicalise, which a shared
+;; implementation would agree with and this one does not.
+
+(define (canon listing)
+  (let ((own (let ((t (make-eq-hashtable)))
+               (for-each (lambda (i) (when (symbol? i) (hashtable-set! t i #t))) listing)
+               t))
+        (m (make-eq-hashtable)) (n 0))
+    (define (lab x)
+      (if (hashtable-ref own x #f)
+          (or (hashtable-ref m x #f)
+              (begin (set! n (+ n 1)) (hashtable-set! m x n) n))
+          x))
+    (let walk ((x listing))
+      (cond ((and (symbol? x) (hashtable-ref own x #f)) (lab x))
+            ((pair? x) (cons (walk (car x)) (walk (cdr x))))
+            (else x)))))
+
+(define (duplicate-pairs fs)
+  (let loop ((fs fs) (acc '()))
+    (if (null? fs)
+        (reverse acc)
+        (let ((a (car fs)))
+          (loop (cdr fs)
+                (fold-left (lambda (acc b)
+                             (if (equal? (canon (finalized-listing a))
+                                         (canon (finalized-listing b)))
+                                 (cons (list (finalized-name a) (finalized-name b)) acc)
+                                 acc))
+                           acc (cdr fs)))))))
+
+(define nb "../bench/nbody/config-sonic.sps")
+
+(for-each
+ (lambda (target)
+   (let* ((c (compile-sonic nb nbody-externs target))
+          (dups (duplicate-pairs (compiled-functions c))))
+     (ck! (string-append "no two emitted functions are identical under renaming ("
+                         (symbol->string target) ")")
+          (null? dups))
+     (unless (null? dups)
+       (display "       duplicates: ") (write dups) (newline))))
+ '(x86-64 rv64))
 
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
