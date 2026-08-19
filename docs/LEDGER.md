@@ -3525,3 +3525,62 @@ Likewise: two benchmarks are not a language comparison. nbody is float-heavy and
 latency-shaped; fannkuch is integer and instruction-shaped. They disagree about
 where our cost is by a factor of two, which is the whole reason both are measured
 rather than one of them generalised.
+
+## D87 — top-level bindings are reloaded from memory, so no loop bound is ever a constant
+
+Chasing D85's 235M excess branches into the disassembly found something larger
+underneath them. The nbody inner loop, per iteration:
+
+```
+cmp    %rcx,%rdi          the loop bound, in a REGISTER
+mov    0x600068,%rbx      reload the `pos` vector pointer
+movsd  0x600048,%xmm3     reload a float constant
+mov    0x600050,%r8       reload another global
+```
+
+`(define n-bodies 5)` is a top-level constant and the loop is `(fx< i n-bodies)`,
+yet the emitted compare is register-to-register rather than `cmp $5`. Every
+top-level `define` is treated as a mutable global and re-read from memory at each
+use — **43 such load sites in the binary**, three of them inside the innermost
+loop body.
+
+**The bindings are provably immutable.** There is not one `set!` anywhere in the
+nbody source; only vector CONTENTS mutate, which is a different thing. A binding
+never assigned can have its value propagated even when the object it points at is
+mutated freely — the pointer is constant, the payload is not.
+
+Two costs follow, and the second is the larger:
+
+1. The loads themselves. Three per inner iteration is ~150M instructions at
+   N=5e6, against a 2981M total.
+2. **No trip count is ever known**, so nothing can unroll. gcc knows the pair
+   loop runs ten times and flattens it; we cannot, because `n-bodies` is a
+   memory read. That is where the 4.6x branch gap comes from, and it explains
+   why the branch count is identical between `sonic` and `sonic-fma` (300.30M vs
+   300.29M) — FMA fuses arithmetic and never touches control flow.
+
+**And it settles a negative result that was previously ambiguous.** `sonic-u4`
+(specialize-growth-budget 4) was recorded as "not faster, ratio 1.0023, CI
+[0.8708, 1.1030], no detected difference" — an interval so wide it could not have
+detected anything. The counters are deterministic and say it is plainly WORSE:
+
+```
+             cycles          instructions      branches
+sonic       944,578,011     3,321,777,221    300,300,659
+sonic-u4    962,629,114     3,421,829,230    320,310,242
+sonic-fma   888,938,247     2,981,705,377    300,288,952
+ref-native  850,331,012     1,667,515,815     65,436,003
+```
+
+More cycles, 3.0% more instructions, 6.7% MORE branches. Growing the specializer
+budget without a known trip count duplicates work rather than removing control
+flow. The lesson is not "unrolling does not help here" but "unrolling cannot
+happen until the bound is a constant", which is D87's actual subject.
+
+**Method note.** The first version of this measurement reported branches three
+orders of magnitude too low. `awk /branches/` matched the COMMENT on the
+branch-misses line — `# 0.02% of all branches` — so the column silently carried
+branch-misses instead. Match the event field, never the annotated text. This is
+the third instrument defect in two sessions (D72's IFS, D85's unforwarded EVENTS)
+and they share one shape: a parser that finds something plausible rather than
+nothing.

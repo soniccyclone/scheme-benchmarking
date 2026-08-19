@@ -64,7 +64,12 @@ gcc -O3 takes `-ffp-contract=fast` by default. See the `sonic-fma` configuration
 
 That is not idle advice: raising the unroller's growth budget was tried and
 measured, unrolls hard (902 instructions to 1734, packed functions 5 to 17), and
-is NOT faster — ratio 1.0023, CI [0.8708, 1.1030]. It is kept as the `sonic-u4`
+is definitively WORSE, by counters (D87): 962.6M cycles, 3421.8M instructions
+and 320.3M branches against sonic's 944.6M / 3321.8M / 300.3M. The old wall-clock
+reading — ratio 1.0023, CI [0.8708, 1.1030], "no detected difference" — had an
+interval too wide to detect anything. Growing the specializer budget without a
+known trip count duplicates work instead of removing control flow. It is kept as
+the `sonic-u4`
 configuration so the negative result stays measurable.
 
 fannkuch stands at roughly 1.2x behind gcc (D57), and instructions retired are
