@@ -13,7 +13,7 @@
 (library (sonic regs)
   (export make-arch arch? arch-name arch-value arch-raw arch-float arch-structural
           arch-mask mask-count
-          arch-vector vector-count
+          arch-vector vector-count arch-vector-scratch
           arch-register-for arch-float-scratch arch-int-scratch float-register?
           arch-scratch
           arch-x86-64 arch-rv64 arch-by-name
@@ -96,8 +96,12 @@
   ;; same reason: the mask is a fixed register, not a pool to allocate from.
   (define (vectors-for target)
     (case target
+      ;; v31 is held out as the SCRATCH, the way ft11 is held out of the float
+      ;; pool. p2hi and p2pack (D172) are each two instructions with a vector
+      ;; temporary between them, and a selection rule cannot invent a vreg --
+      ;; nothing would have put it in the storage-class table.
       ((rv64) '(v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15
-                v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29 v30 v31))
+                v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29 v30))
       (else '())))
 
 
@@ -228,7 +232,10 @@
       ;; t0, t1 also serve as address temporaries: RV64 has no indexed
       ;; addressing, so (load v raw-f64 base idx) is slli/add/fld and the shift
       ;; needs a home.
-      '(t0 t1 t2 ft9 ft10 ft11)))
+      ;;
+      ;; v31 joins them for the vector file: D172's p2hi and p2pack are each a
+      ;; pair of instructions with a vector temporary in between.
+      '(t0 t1 t2 ft9 ft10 ft11 v31)))
 
   (define (arch-by-name n)
     (case n
@@ -263,11 +270,36 @@
   (define (float-register? a r)
     (and (or (memq r (arch-float a)) (memq r (arch-float-scratch a))) #t))
 
-  (define (arch-float-scratch a)
-    (filter (lambda (r) (float-scratch-name? (arch-name a) r)) (arch-scratch a)))
+  ;; WHICH FILE A SCRATCH BELONGS TO, SAID POSITIVELY.
+  ;;
+  ;; `arch-int-scratch` used to be "the scratches that are not float", which is
+  ;; correct exactly while there are two register files and stops being correct
+  ;; silently. RV64 now has three (D170), and a vector scratch added under the
+  ;; old definition would have been handed to the spiller as an INTEGER scratch
+  ;; -- `spiller-rv64` takes `(arch-int-scratch arch-rv64)` -- and reloaded a
+  ;; spilled word into a vector register. That assembles.
+  ;;
+  ;; So each scratch names its file and each accessor asks for its own. A file
+  ;; nobody has taught this function about answers #f and appears in no list,
+  ;; which is the safe direction: a scratch that goes missing breaks loudly at
+  ;; the point of use, where one in the wrong file does not.
+  (define (scratch-file target r)
+    (case target
+      ((x86-64) (cond ((memq r '(xmm14 xmm15)) 'float)
+                      ((memq r '(rax)) 'int)
+                      (else #f)))
+      ((rv64)   (cond ((memq r '(ft9 ft10 ft11)) 'float)
+                      ((memq r '(v31)) 'vector)
+                      ((memq r '(t0 t1 t2)) 'int)
+                      (else #f)))
+      (else #f)))
 
-  (define (arch-int-scratch a)
-    (filter (lambda (r) (not (float-scratch-name? (arch-name a) r))) (arch-scratch a)))
+  (define (scratches-in-file a f)
+    (filter (lambda (r) (eq? (scratch-file (arch-name a) r) f)) (arch-scratch a)))
+
+  (define (arch-float-scratch a)  (scratches-in-file a 'float))
+  (define (arch-int-scratch a)    (scratches-in-file a 'int))
+  (define (arch-vector-scratch a) (scratches-in-file a 'vector))
 
   ;; Named per target rather than inferred: `xmm15` and `ft11` are float by
   ;; their ABI names, and inferring that from a spelling is the kind of rule

@@ -7609,3 +7609,58 @@ Still missing before a packed program runs on RV64: the selection rules
 themselves, and the `vsetvli` placement they need -- D171 already narrowed that,
 since `vtype` and `vl` are caller-saved and a hoisted `vsetvli` is therefore not
 valid across a call. Suite 8631 / 0 / 63.
+
+## D173 — a scratch register defined by negation, and the third file it would have broken
+
+Adding a vector scratch for D172's two-instruction sequences turned up a
+definition that was correct for exactly as long as there were two register files.
+
+```
+(define (arch-int-scratch a)
+  (filter (lambda (r) (not (float-scratch-name? (arch-name a) r))) (arch-scratch a)))
+```
+
+"Integer" meant NOT FLOAT. With a third file that is false, and false in the
+dangerous direction: `spiller-rv64` takes `(arch-int-scratch arch-rv64)` for the
+registers it reloads spilled words through, so a `v31` added to the scratch list
+would have been handed to it as an integer scratch and used to reload a 64-bit
+word into a vector register. That assembles, and D170 is the entry about how long
+a wrong answer of that shape can hide.
+
+Nothing had gone wrong yet. The bug would have arrived with the next line of the
+work in progress, which is the only reason it was found by reading rather than by
+a wrong answer in a benchmark.
+
+Replaced with a positive classification -- each scratch names its file and each
+accessor asks for its own:
+
+```
+x86-64   int=(rax)       float=(xmm14 xmm15)   vector=()
+rv64     int=(t0 t1 t2)  float=(ft9 ft10 ft11) vector=(v31)
+```
+
+Both existing partitions come out identical, which is the check that matters: this
+is meant to be a change of definition and not of behaviour. A file the function
+has not been taught about answers `#f` and lands in no list at all -- the safe
+direction, because a scratch that goes missing fails loudly where the point of use
+is, while one in the wrong file does not fail at all.
+
+**Why a scratch and not a vreg.** `p2hi` is `vslidedown.vi` then `vfmv.f.s`, and
+`p2pack` is `vfmv.v.f` then `vfslide1down.vf`; each has a vector temporary between
+its two instructions. A selection rule cannot invent a vreg for it -- nothing
+would have put that name in the storage-class table, and the allocator dies on
+"vreg has no storage class". Scratch registers are how every other target rule in
+this tree solves that, so `v31` comes out of the allocatable pool the way `ft11`
+comes out of the float pool. The vector pool is thirty registers now, not
+thirty-one.
+
+**And a v register must be RECOGNISED or the allocator eats it.** `physical?` is
+`(and (symbol? r) (reg-class arch r) #t)`, so a literal register name a rule emits
+is skipped only if `reg-class` answers something for it. `reg-class` tries the
+scratch list first, so `v31` answers `scratch` and is skipped. Had it been added
+anywhere the class walk does not look, the allocator would have treated `v31` as a
+virtual register -- and the failure would have been the confusing one D169's
+neighbourhood already documents, "vreg has no storage class", pointing at a
+register name.
+
+Suite 8635 / 0 / 63.

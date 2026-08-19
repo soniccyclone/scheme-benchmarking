@@ -155,6 +155,23 @@
     (ck! "nothing spilled: the vector file is thirty-one deep"
          (null? (alloc-result-spills res)))))
 
+(ck! "the scratch files are named POSITIVELY, so a third file does not fall
+       into the integer one -- the spiller takes arch-int-scratch and would
+       have reloaded a spilled word into a vector register"
+     (and (equal? (arch-int-scratch arch-rv64) '(t0 t1 t2))
+          (equal? (arch-float-scratch arch-rv64) '(ft9 ft10 ft11))
+          (equal? (arch-vector-scratch arch-rv64) '(v31))))
+(ck! "and x86-64's partition is untouched by that change"
+     (and (equal? (arch-int-scratch arch-x86-64) '(rax))
+          (equal? (arch-float-scratch arch-x86-64) '(xmm14 xmm15))
+          (null? (arch-vector-scratch arch-x86-64))))
+(ck! "the vector scratch is held OUT of the allocatable pool, the way ft11 is"
+     (and (not (memq 'v31 (arch-vector arch-rv64)))
+          (eq? (reg-class arch-rv64 'v31) 'scratch)
+          (= (vector-count arch-rv64) 30)))
+(ck! "a packed pair may not be allocated to the scratch"
+     (not (assignment-ok? arch-rv64 'raw-f64x2 'v31)))
+
 (ck! "the vector file is disjoint from every other pool on rv64"
      (let ([v (arch-vector arch-rv64)])
        (not (exists (lambda (x)
