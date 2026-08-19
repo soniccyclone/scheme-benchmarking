@@ -7907,3 +7907,44 @@ value of this entry is that the soundness question is now closed, so whoever pic
 `qaq.23` up argues about the payoff rather than rediscovering the hazard --
 D177 flagged it precisely because "one more round" optimisations are how a caller
 ends up holding a value in a register its callee has learned to write.
+
+## D179 — the ceiling on qaq.23, measured without building it
+
+D178 made the cycle fixpoint sound. Before implementing it, the question worth
+asking is how much it could possibly buy, and that can be measured without
+writing it.
+
+Force `clobbers-of` to answer `'()` -- "this callee writes nothing" -- for the
+cycle members it currently answers `#f` for. That is unsound to EXECUTE and exact
+to COUNT: it is the best case no real analysis can beat, because a real clobber
+set is never empty.
+
+```
+                today (#f)   best case ('())
+next.loop           12             5
+step.loop            9             3
+total               21             8
+```
+
+**Thirteen spill instructions, and that is the ceiling.** Not twenty-one: about
+38% of the spill traffic in those two functions is genuine register pressure that
+better clobber information cannot touch. A sound version -- D178's verified
+fixpoint, using each member's ACTUAL writes rather than the empty set -- gets
+strictly less than thirteen.
+
+Against that: D163 measured `next.loop` and `step.loop` at 10.47% of the profile
+between them, and D89, D111 and D167 have each measured instruction-level wins on
+these benchmarks converting to no wall clock at all -- the last of them
+deliberately constructed to break that pattern and failing to.
+
+**So the recommendation on qaq.23 is to close it.** Not because the mechanism is
+wrong -- D162 diagnosed it correctly and D178 makes the repair sound -- but
+because the payoff is now bounded above by thirteen instructions on a benchmark
+that has refused three times to pay for instructions. The bead has been open on a
+premise that changed twice (D95 filed it, D102 refuted that, D162 replaced it) and
+its ceiling has never been measured until now. It has been.
+
+The technique is worth more than the result here: an unsound probe is a legitimate
+instrument when the question is "how much is there", as long as nothing executes
+what it produces. It cost one compile and it replaced an argument about mechanisms
+with a number.
