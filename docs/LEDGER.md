@@ -4468,3 +4468,69 @@ implementations avoided by reading the artifact first; one implementation shippe
 (D97) that was found the same way. The pattern is not that plans are usually
 wrong — it is that a plan and its evidence cost about the same, so there is no
 reason to spend the plan first.
+
+## D103 — every spill in fannkuch comes from one missing table
+
+`qaq.27` asked which of three explanations makes `count-flips` spill while `r11`
+sits free. None of them. Instrumenting the allocator's two spill paths and
+compiling fannkuch:
+
+```
+spills caused by bad=ALL:      21
+spills from any other cause:    0
+```
+
+**Every spill in the program**, and each one reports a FULL pool with the whole
+register file marked destroyed. So the pool was never the constraint and the
+eviction asymmetry I was about to fix was not the problem either.
+
+`across` answers with the whole file for an unknown callee, a runtime routine, or
+a recursive cycle. A second probe named which:
+
+```
+20  caller=next          callee=display
+16  caller=next          callee=newline
+ 6  caller=main.entry1   callee=%make-vector
+```
+
+Only runtime routines. `next` calls `display`, so every interval in `next` that
+spans that call is told all twelve allocatable registers are gone, and four of
+its five live variables -- `checksum`, `maxflips`, `sign`, `r` -- go to the stack.
+
+**What those routines actually write:**
+
+```
+display        4 registers   (rax rdx rsi rdi)
+newline        1 register    (rax)
+%make-vector   3 registers   (rsi rdi rax)
+```
+
+`newline` writes ONE register and is charged with twelve. Even the crude union
+over the ENTIRE runtime leaves `r10` and `r14` untouched in the raw pool, so
+anything at all is better than what is there now.
+
+**The information exists and nothing reads it.** `runtime-listing` is exported,
+`listing-writes` already computes exactly this for compiled functions, and
+`finalize-program*` seeds its `clobbers` table for every function it finalizes.
+The runtime is simply never entered into that table, so `hashtable-ref` misses and
+every caller falls back to "everything" -- the same shape as D94's discovery that
+the analysis was skipped for functions with pins, and the same shape again as
+D95's "callee-saved is declared and never implemented". Three times now the work
+was done and the wiring was missing.
+
+**Not implemented here, deliberately.** The routines are hand-written assembly
+with internal branches, so a sound clobber set needs a reachability walk from the
+entry label -- fallthrough and jump targets, stopping at `ret` -- and the failure
+direction is asymmetric: an UNDER-approximation is a wrong-code bug that keeps a
+value in a register the callee overwrites, and no oracle in this tree is
+guaranteed to catch it. The walk must therefore fall back to "everything" on
+anything it does not understand: an indirect jump, an unrecognised instruction
+shape, a jump out of the routine. That is a careful hour, not a rushed one, and
+this session has already put two latent wrong-code bugs into this compiler's
+history (D99, D100) by moving fast in adjacent code. `qaq.28` carries the design.
+
+**Sizing, since it decides the priority.** All 21 fannkuch spills, plus their
+reloads, plus the register pressure they cause elsewhere. The spilled values in
+`next` are loop variables of a function that is 4.30% of the sampled profile, and
+fannkuch is dispatch-limited (D101), so removed instructions convert to time here
+in a way they demonstrably do not on nbody.
