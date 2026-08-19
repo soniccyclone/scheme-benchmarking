@@ -154,6 +154,15 @@
                    (cond ((and (pair? x) (eq? (car x) 'label) (symbol? (cadr x)))
                           (list 'label (lab (cadr x))))
                          ((pair? x) (cons (walk (car x)) (walk (cdr x))))
+                         ;; A BARE SYMBOL OPERAND, which is how RV64 names a
+                         ;; branch target: `(bne s10 zero L.then275)`. x86-64
+                         ;; wraps it as `(label X)` and only that form was
+                         ;; handled, so two rv64 functions identical under
+                         ;; renaming compared as different and the pass did
+                         ;; nothing on that target at all. Filtering on `own`
+                         ;; is what makes this safe -- a register name like
+                         ;; `s10` is not a label this listing defines.
+                         ((and (symbol? x) (hashtable-ref own x #f)) (lab x))
                          (else x)))))
            listing)))
 
@@ -175,6 +184,11 @@
                         (cond ((and (pair? x) (eq? (car x) 'label) (symbol? (cadr x)))
                                (note (cadr x)))
                               ((pair? x) (walk (car x)) (walk (cdr x)))
+                              ;; Same bare-symbol case as `canonical-listing`,
+                              ;; and it MUST match: the two walks define the
+                              ;; positional correspondence between a dropped
+                              ;; function's labels and the survivor's.
+                              ((and (symbol? x) (hashtable-ref own x #f)) (note x))
                               (else #f)))))
                 listing)
       (reverse acc)))
@@ -187,6 +201,10 @@
                  (cond ((and (pair? x) (eq? (car x) 'label) (symbol? (cadr x)))
                         (list 'label (or (hashtable-ref m (cadr x) #f) (cadr x))))
                        ((pair? x) (cons (walk (car x)) (walk (cdr x))))
+                       ;; The rename map contains only labels, so a symbol
+                       ;; absent from it -- a register, an opcode -- is left
+                       ;; alone by construction.
+                       ((symbol? x) (or (hashtable-ref m x #f) x))
                        (else x)))))
          listing))
 

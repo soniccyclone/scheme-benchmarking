@@ -5860,3 +5860,45 @@ Nine assertions, including the soundness property in two forms (a differing
 `call` target and a differing `jmp` target), redirection of both a dropped
 function's internal label and its own name, and the fixpoint -- two callers that
 become identical only after their callees merge.
+
+## D132 — the merge pass was inert on RV64, and the reason is one operand form
+
+D121's merge shipped untargeted, in the driver rather than behind a target case,
+so it was assumed to work on both. It did not work on RV64 at all.
+
+nbody compiled for rv64 has the same duplicate pair x86 has -- `inner%24.197` and
+`inner%24.5.377`, 219 instructions each. Comparing them line by line: **six
+differences, all of them label names, and zero non-label differences.** They are
+identical under renaming, which is exactly what the pass is for, and it left
+them alone.
+
+**x86-64 names a branch target as `(label X)`. RV64 names it as a bare symbol:**
+
+```
+(bne s10 zero L.then275)
+```
+
+`canonical-listing` rewrote only the `(label X)` form, so those operands compared
+by name, so every rv64 function pair differed, so nothing ever merged on that
+target. The pass reported success and did nothing -- the same shape as D107's
+hint that never fired and D124's counter that measured history.
+
+Fixed in all three walks -- canonicalisation, label collection and renaming --
+which must agree, since two of them define the positional correspondence between
+a dropped function's labels and the survivor's. A bare symbol is treated as a
+label reference exactly when the listing DEFINES it, which is what keeps a
+register name like `s10` from being rewritten.
+
+```
+rv64 functions   17 -> 16
+```
+
+nbody's energies are still bit-identical to the x86-64 build's, which is the
+assertion that matters here and the one D81 established. Suite 8598/0/60.
+
+**Worth naming: this was found by asking whether a shipped optimisation applies
+to the other target.** Nothing failed, no measurement looked wrong, and the
+x86-64 numbers in D121 and D130 were real. A pass that silently does nothing on
+half the targets is invisible to every check this project runs, because all of
+them ask whether the output is correct and none asks whether the pass did
+anything.
