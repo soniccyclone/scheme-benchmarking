@@ -4534,3 +4534,71 @@ reloads, plus the register pressure they cause elsewhere. The spilled values in
 `next` are loop variables of a function that is 4.30% of the sampled profile, and
 fannkuch is dispatch-limited (D101), so removed instructions convert to time here
 in a way they demonstrably do not on nbody.
+
+## D104 — the missing table, filled in correctly, makes fannkuch slower
+
+D103 diagnosed every fannkuch spill to one cause and filed `qaq.28`. It is
+implemented, measured, and reverted.
+
+**The analysis works.** `runtime-clobbers` walks a runtime routine from its entry
+label as a worklist over instruction indices — following fallthrough and both
+edges of every branch, resolving nested calls recursively, visiting each
+instruction once so a loop terminates without a fixpoint — and refuses, returning
+#f for "assume everything", on anything it does not positively understand.
+
+```
+display        (rdi rsi rdx r11 rcx rax)
+newline        (rax)
+%make-vector   (r11 rcx rdi rax rsi)
+%cons          (rdi r11 rcx rsi rax)
+cadr           (rax)
+```
+
+None writes `r10`, `r13`, `r14` or any of the value pool, so a runtime call goes
+from destroying twelve registers to destroying five.
+
+**Two hazards it caught that a simpler walk would not.** `syscall` writes `rax`
+and also `rcx` and `r11`, which the CPU overwrites with rip and rflags; a first
+version reading only destination operands reported `display` as writing four
+registers and would have let a caller keep a value in `rcx` across a `write`.
+And `%cons` branches to `sonic-heap-error`, which exits rather than returning, so
+the walk falls out of the listing — treated as a terminating path, which
+over-approximates and is the safe direction.
+
+**And it makes things worse.**
+
+```
+                    before          after
+fannkuch spills         11             10
+next.loop stack refs    37             32
+fannkuch instructions  27,033,942,394  27,034,2xx,xxx    unchanged
+fannkuch cycles        9,798.7M mean   9,975.7M mean     +1.8%
+nbody                  unchanged       unchanged
+```
+
+Four runs each, ranges not overlapping, so by D94's rule the regression is real
+rather than noise. The spills it removed are real too — `next.loop` genuinely
+lost five stack references — and the dynamic instruction count did not move at
+all, which says that code is not hot.
+
+**So a change whose only executed difference is nil costs 1.8% of cycles.** The
+most likely explanation is code layout: the listing lost five instructions, which
+shifts every later address and changes alignment and branch-predictor indexing
+throughout. That is a real cost for this binary and an arbitrary one — the same
+change on a different day's code might gain 1.8%. I cannot demonstrate it, and
+the project's rule is that the measurement stands, so this is reverted rather
+than argued with.
+
+**What would settle it**, recorded on `qaq.28` rather than guessed at: measure
+with the layout effect controlled, by padding the listing back to its original
+length, or by measuring several unrelated benchmarks where a layout shift is
+independent noise but a spill reduction is not. Until then the honest statement
+is that filling the table is CORRECT, removes real spills, changes no executed
+instruction, and measured slower once.
+
+**A note on what this cost.** D103 sized this as the highest-value item open — all
+21 spills, in the benchmark where instructions convert to time. The sizing was
+right about the mechanism and wrong about the outcome, which no amount of reading
+the artifact beforehand would have caught: the effect that dominated is one the
+listing cannot show. Pre-verification has killed three bad plans this session
+(D91, D93, D102) and could not have killed this one.
