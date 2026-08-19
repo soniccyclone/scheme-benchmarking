@@ -59,7 +59,10 @@
           make-spiller spiller? spiller-target
           spiller-x86-64 spiller-rv64 spiller-for
           finalized? finalized-name finalized-listing
-          merge-identical-functions
+          ;; `make-finalized` is exported for merge-identical-functions' test,
+          ;; which needs to build listings directly rather than compile a
+          ;; program that happens to contain the shapes it is about.
+          make-finalized merge-identical-functions
           finalized-frame finalized-spills)
   (import (chezscheme)
           (sonic regs)
@@ -207,7 +210,16 @@
 
   (define (merge-identical-once fns)
     (let ((by-shape (make-hashtable equal-hash equal?))
-          (rename (make-eq-hashtable)))
+          (rename (make-eq-hashtable))
+          ;; DROPPED FUNCTIONS ARE TRACKED BY NAME, SEPARATELY FROM THE LABEL
+          ;; RENAMING. The first version filtered on whether a function's NAME
+          ;; appeared in the rename map, which holds LABELS -- and that worked
+          ;; only because every function this compiler emits also defines a
+          ;; label of its own name. On a listing where it does not, the
+          ;; duplicate was rewritten to the survivor's labels and then KEPT,
+          ;; defining those labels twice. Found by the pass's own test, not by a
+          ;; program.
+          (dropped (make-eq-hashtable)))
       ;; FIRST WINS, in the order finalize produced them, so the choice does not
       ;; depend on hashing.
       (for-each
@@ -215,16 +227,18 @@
          (let* ((k (canonical-listing (finalized-listing f)))
                 (keep (hashtable-ref by-shape k #f)))
            (if keep
-               ;; Positional correspondence, as argued above.
-               (for-each (lambda (from to) (hashtable-set! rename from to))
-                         (listing-labels (finalized-listing f))
-                         (listing-labels (finalized-listing keep)))
+               (begin
+                 (hashtable-set! dropped (finalized-name f) #t)
+                 ;; Positional correspondence, as argued above.
+                 (for-each (lambda (from to) (hashtable-set! rename from to))
+                           (listing-labels (finalized-listing f))
+                           (listing-labels (finalized-listing keep))))
                (hashtable-set! by-shape k f))))
        fns)
-      (if (zero? (hashtable-size rename))
+      (if (zero? (hashtable-size dropped))
           fns
           (let ((kept (filter (lambda (f)
-                                (not (hashtable-ref rename (finalized-name f) #f)))
+                                (not (hashtable-ref dropped (finalized-name f) #f)))
                               fns)))
             (map (lambda (f)
                    (make-finalized (finalized-name f)

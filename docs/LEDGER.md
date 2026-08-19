@@ -5822,3 +5822,41 @@ in. Five more runs put the mean at 944.1M with the minimum matching the
 pre-change minimum to a tenth of a percent. Had I stopped at three, this entry
 would report a 1.25% nbody regression that does not exist -- which is D94's
 lesson arriving a second time by a different road.
+
+## D131 — a test for the merge pass, which found a bug the programs could not
+
+`merge-identical-functions` (D121, D130) shipped with no test of its own. The
+suite covered it only sideways -- through the `inner%` count in `unroll-test.ss`
+and the bit-exact oracles -- and the property it most needed pinned was the one
+whose absence was a bug: external targets must compare by NAME, or two functions
+calling different functions merge.
+
+Writing that test found a different bug, and one no program in this tree could
+have exposed:
+
+```
+returned 2 functions: (a b)
+  a: (a.loop (mov rax rcx) ...)
+  b: (a.loop (mov rax rcx) ...)     <- rewritten, and NOT dropped
+```
+
+The filter dropped a function whose NAME appeared in the rename map -- and that
+map holds LABELS. It worked only because every function `finalize-function`
+emits also defines a label of its own name, so the name is in the map by
+coincidence of naming rather than by construction. Given a listing where that is
+not true, the duplicate is rewritten to the survivor's labels and then kept,
+defining those labels twice. Dropped functions are now tracked by name in their
+own table.
+
+**Both halves of that are worth stating.** The bug was real and latent: no
+program reached it, and none would until something emitted a function whose name
+is not among its labels. And the FIXTURE was wrong twice for the same reason in
+reverse -- my first listings omitted the function-name label, so the fixpoint
+case failed against a pass that works. A fixture that does not match what the
+compiler emits tests a shape the compiler never produces, which is how a test
+can fail against correct code and pass against incorrect code in the same hour.
+
+Nine assertions, including the soundness property in two forms (a differing
+`call` target and a differing `jmp` target), redirection of both a dropped
+function's internal label and its own name, and the fixpoint -- two callers that
+become identical only after their callees merge.
