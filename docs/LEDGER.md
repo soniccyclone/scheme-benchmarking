@@ -7258,3 +7258,45 @@ linear scan, not another pass over the listing.
 
 Redirected qaq.21 accordingly. The bead asked to coalesce moves; the moves are a
 symptom, and the pass it names already exists and works.
+
+## D166 — the nbody harness could not rebuild, and measured the old binary instead
+
+Trying to A/B an allocator change on nbody produced 696.00 instructions/step both
+with the change and without it, to the digit. The change was real and the number
+was not: `harness/compile.sh sonic` had been failing on this host, and nothing
+downstream cares.
+
+```
+Exception in open-input-file: failed for
+  /home/nathan/.../bench/nbody/config-sonic.sps: no such file or directory
+```
+
+Each `cfg_compile_*` writes a small Chez script and then runs it inside the
+container, because every Chez invocation in this tree does. The script's PATH was
+translated for that hop -- `/work/build/nbody/sonic-build.ss` -- and its CONTENTS
+were not, so the script asked for a host path that does not exist in the
+container. Six configurations, all of them ours.
+
+**The failure is loud and the consequence is silent, which is the whole problem.**
+`bench.sh` and `measure.sh` do not compile; they run whatever binary is on disk.
+A failed compile therefore leaves the PREVIOUS binary in place and they measure
+that, reporting a number that looks entirely normal. `build/nbody/sonic` was
+fifty-one minutes old and predated the change under test.
+
+That is D94 -- "compared a fannkuch binary built before `gconst` against a listing
+compiled after it" -- except that D94 was a mistake someone made once, and this
+was the default behaviour of the harness. `measure-fannkuch.sh` is not affected;
+it compiles on every run and says "building at n=11..." while it does, which is
+why the fannkuch figures in D167 are trustworthy and the first nbody figures this
+session were not. I quoted a 4.6% nbody improvement off the stale binary before
+catching it; it was withdrawn.
+
+Fixed by giving the generated scripts container paths (`CBENCH`/`CBUILD`), which
+are correct on both sides of the hop since the repo mounts at `/work` and `ROOT`
+is `/work` inside. `$BUILD` still names where the script is WRITTEN.
+
+**The remaining hazard is not fixed.** A harness that runs a binary it did not
+build can always measure a stale one. `disasm-sonic.sh` solved this properly by
+refusing to accept a binary at all -- it compiles, and there is no way to pass it
+one. `bench.sh` and `measure.sh` take a configuration name and could do the same.
+Filed.

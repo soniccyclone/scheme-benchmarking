@@ -16,6 +16,28 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH="$ROOT/bench/nbody"
 BUILD="$ROOT/build/nbody"
 
+# THE DRIVER SCRIPT IS WRITTEN HERE AND READ THERE.
+#
+# Each cfg_compile_* writes a little Chez script and then runs it -- but the
+# running happens INSIDE the container, because every Chez invocation in this
+# tree does (the hard rule in CLAUDE.md). The file's PATH was translated for
+# that hop and its CONTENTS were not, so a script written on the host asked for
+# /home/<user>/.../bench/nbody/config-sonic.sps, which does not exist there, and
+# every host-side `compile.sh sonic` died on it.
+#
+# It failed loudly and then did not matter, which is the dangerous part: nothing
+# downstream rebuilds. `bench.sh` and `measure.sh` run whatever binary is on
+# disk, so a failed compile leaves the PREVIOUS one in place and they measure
+# that instead -- silently, and with a number that looks entirely normal. That
+# is D94 exactly, wired in as the default behaviour rather than as a mistake
+# someone has to make.
+#
+# The repo is mounted at /work, and inside the container ROOT is /work, so these
+# are correct on both sides of the hop. Use them for anything that appears
+# INSIDE a generated script; keep $BUILD for the path the script is written to.
+CBENCH="/work/bench/nbody"
+CBUILD="/work/build/nbody"
+
 CONFIGS="sonic sonic-fma sonic-u4 sonic-pad4 c-scalar c-native chez-1 racket-1 chez-2a racket-2a chez-2b racket-2b chez-2c chez-4-safe chez-4 racket-4 sbcl-5 ecl-9 clisp-9 ada-8-checked ada-8-named ada-8-all"
 
 mkdir -p "$BUILD"
@@ -37,7 +59,7 @@ cfg_compile_sonic() {
     local drv="$BUILD/sonic-build.ss"
     cat > "$drv" <<EOF
 (import (chezscheme) (sonic driver) (sonic pipeline))
-(compile-sonic-to-file "$BENCH/config-sonic.sps" nbody-externs "$BUILD/sonic")
+(compile-sonic-to-file "$CBENCH/config-sonic.sps" nbody-externs "$CBUILD/sonic")
 EOF
     . "$ROOT/tools/container.sh"
     if sonic_in_container; then
@@ -79,7 +101,7 @@ cfg_compile_sonic_u4() {
     cat > "$drv" <<EOF
 (import (chezscheme) (sonic driver) (sonic pipeline) (sonic specialize))
 (parameterize ((specialize-growth-budget 4))
-  (compile-sonic-to-file "$BENCH/config-sonic.sps" nbody-externs "$BUILD/sonic-u4"))
+  (compile-sonic-to-file "$CBENCH/config-sonic.sps" nbody-externs "$CBUILD/sonic-u4"))
 EOF
     . "$ROOT/tools/container.sh"
     if sonic_in_container; then
@@ -121,7 +143,7 @@ cfg_compile_sonic_fma() {
     local drv="$BUILD/sonic-fma-build.ss"
     cat > "$drv" <<EOF
 (import (chezscheme) (sonic driver) (sonic pipeline))
-(compile-sonic-to-file "$BENCH/config-sonic-fma.sps" nbody-externs "$BUILD/sonic-fma")
+(compile-sonic-to-file "$CBENCH/config-sonic-fma.sps" nbody-externs "$CBUILD/sonic-fma")
 EOF
     . "$ROOT/tools/container.sh"
     if sonic_in_container; then
@@ -160,7 +182,7 @@ cfg_compile_sonic_rv64() {
     local drv="$BUILD/sonic-rv64-build.ss"
     cat > "$drv" <<EOF
 (import (chezscheme) (sonic driver) (sonic pipeline))
-(compile-sonic-to-file "$BENCH/config-sonic.sps" nbody-externs "$BUILD/sonic-rv64" 'rv64)
+(compile-sonic-to-file "$CBENCH/config-sonic.sps" nbody-externs "$CBUILD/sonic-rv64" 'rv64)
 EOF
     . "$ROOT/tools/container.sh"
     if sonic_in_container; then
@@ -185,7 +207,7 @@ cfg_compile_sonic_rv64_fma() {
     local drv="$BUILD/sonic-rv64-fma-build.ss"
     cat > "$drv" <<EOF
 (import (chezscheme) (sonic driver) (sonic pipeline))
-(compile-sonic-to-file "$BENCH/config-sonic-fma.sps" nbody-externs "$BUILD/sonic-rv64-fma" 'rv64)
+(compile-sonic-to-file "$CBENCH/config-sonic-fma.sps" nbody-externs "$CBUILD/sonic-rv64-fma" 'rv64)
 EOF
     . "$ROOT/tools/container.sh"
     if sonic_in_container; then
@@ -226,7 +248,7 @@ cfg_compile_sonic_pad4() {
     cat > "$drv" <<EOF
 (import (chezscheme) (sonic driver) (sonic pipeline) (sonic slp))
 (parameterize ((four-lane-packing? #t))
-  (compile-sonic-to-file "$BENCH/config-sonic-pad4.sps" nbody-externs "$BUILD/sonic-pad4"))
+  (compile-sonic-to-file "$CBENCH/config-sonic-pad4.sps" nbody-externs "$CBUILD/sonic-pad4"))
 EOF
     . "$ROOT/tools/container.sh"
     if sonic_in_container; then
