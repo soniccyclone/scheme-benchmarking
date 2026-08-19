@@ -5459,3 +5459,39 @@ instruction sequence. The assertion's intent -- the loop is not lost and not
 duplicated beyond the distinct bodies that exist -- is unchanged and still
 checked, and the bounds-check assertions pin the other half: nbody still emits
 none, so the merge did not cost the elision it was designed to preserve.
+
+## D122 — merging captured a quarter of the unrolling cost; the decision survives
+
+D121 merged the duplicate functions and gained 1.27%. If that had captured what
+disabling `unroll-program` gains, `qaq.30`'s trade would have dissolved. It did
+not. Both arms with merging active, three layout-pad values each:
+
+```
+unroll ON    9,703.7  9,854.3  9,780.0   mean 9,779.3M
+unroll OFF   9,357.5  9,440.9  9,151.3   mean 9,316.6M     -4.73%
+```
+
+Ranges do not overlap. So of the 5.6% D116 measured, merging recovered about
+1.3% and **4.7% remains**.
+
+**The reason is that merging changes the code and not the control flow.** Two
+identical functions become one, so the image is 83 instructions smaller and
+carries four fewer sets of branch targets -- that is the 1.3%. But the unrolled
+loop still calls the body twice per iteration; it now calls ONE function twice
+instead of two functions once. The dynamic branch count is unchanged, and the
+dynamic branch count is what a 25.2% front-end stall is made of (D112).
+
+**So `qaq.30` stands, with a smaller number.** Keeping `unroll-program` on buys
+nbody's "emits NO bounds check at all" -- worth 0.17% of nbody's time -- and now
+costs 4.7% of fannkuch's rather than 5.6%. Still Nathan's call, and still the
+same shape of call.
+
+**And it says what a real re-roll would have to do.** D121 is not one: it
+deduplicates the copies without re-rolling the loop that runs them. An actual
+re-roll would have to restore the loop's back edge and trip count, turning two
+calls per iteration back into one -- which is the loop-structure recovery D116
+worried about and D121 sidestepped. That is where the remaining 4.7% is, and
+nothing in the tree can do it today.
+
+`qaq.29` closes: the four functions were mergeable, they are merged, and the
+measurement of what that bought is here rather than assumed.
