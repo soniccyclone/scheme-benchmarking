@@ -753,6 +753,17 @@ Kept because they are implementation hazards, not trivia.
 - **Guessing filenames is not a search surface.** It failed every time. Enumerate the directory via the Wayback CDX index instead.
 - **Four search surfaces, not one**: per-paper web search, CDX directory enumeration, OpenAlex by DOI (the only way to learn a paywalled-looking ACM paper is open), and archive.org scanned periodicals.
 
+## The D-numbered record
+
+Everything below is one decision per entry, appended in order, newest last. The
+D number is the index -- entries are never reordered or edited away, and a
+decision later reversed keeps its entry with the reversal attached.
+
+The run starts at D41 because this file was split out of the plan documents
+(`623f1f7`); D1-D40 are the decisions those plans already carried and were not
+renumbered into here. Citations to them by number -- D24's fp-contract default,
+D29's heap layout -- refer to that earlier record, not to a gap in this one.
+
 ## D41 -- fannkuch's gap is an unroller, and the note that said "inlining" was wrong
 
 qaq.13 closed with a pointer: after check elimination "the remaining gap is call
@@ -3464,3 +3475,53 @@ arrived unset and perf measured its DEFAULT list while printing a perfectly
 well-formed report. It is forwarded explicitly now. An instrument that quietly
 answers a different question than the one put to it is exactly the failure this
 harness exists to prevent.
+
+## D86 — the standing, in one place, and what we have never measured
+
+Scattered across a session's worth of tool output is not saved. The numbers
+below are the current measured standing; anything not here was not measured.
+
+**nbody** — slope N=1e6 to 2e6, 40 reps, bootstrap CI, baseline `c-native`:
+
+```
+config      ns/step   ratio vs c-native            verdict
+c-native      57.66   (baseline)
+sonic-fma     60.05   1.0414  [0.9645, 1.1062]     no detected difference
+c-scalar      62.70   1.0874  [0.9953, 1.1649]     no detected difference
+sonic         63.25   1.0969  [1.0217, 1.1721]     real
+```
+
+`sonic-fma`'s interval spans 1.0: against `gcc -O3 -march=native` it is a
+statistical TIE, not a loss and not a win. Plain `sonic` is genuinely behind.
+`sonic-fma` also sits ahead of plain `gcc -O3` on the point estimate, with the
+same caveat that the intervals overlap.
+
+**fannkuch** — n=11, answers checked against the oracle before timing:
+
+```
+c-native   2734.3 ms min   2758.0 median
+sonic      3391.6 ms min   3409.2 median     1.24x
+c-native   10,992,262,566 instructions
+sonic      27,615,514,456 instructions       2.51x
+```
+
+2.51x the instructions for 1.24x the time — the same instruction-count story
+D85's counters tell about nbody, arrived at independently.
+
+**RISC-V** — nbody compiles, runs, and answers bit-identically to x86-64 at every
+N, at 2.09x the instruction count (D83). No RVV lowering exists (`qaq.13`).
+
+**WHAT WE HAVE NEVER MEASURED, stated so nobody infers otherwise.** There is no
+Rust in this project — no config, no binary, rustc is not in the container, and
+not one number has ever been taken. "Tied with `gcc -O3 -march=native` on nbody"
+invites "so we beat Rust", which does not follow from anything measured here.
+rustc is an LLVM front end and on a tight float loop idiomatic Rust lands near C,
+so a Rust column would probably be close on nbody and ahead of us on fannkuch —
+but that is an inference from a proxy and belongs nowhere near a results table.
+Adding the config is cheap if the question ever needs an answer rather than a
+guess.
+
+Likewise: two benchmarks are not a language comparison. nbody is float-heavy and
+latency-shaped; fannkuch is integer and instruction-shaped. They disagree about
+where our cost is by a factor of two, which is the whole reason both are measured
+rather than one of them generalised.

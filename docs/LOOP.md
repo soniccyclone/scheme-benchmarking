@@ -79,24 +79,52 @@ opposite of nbody's diagnosis (D37).
 NEITHER is a decision — both are work that needs something this session could not
 supply.
 
-### `qaq.7` — Milestone 5, at 1.053x
+### `qaq.7` — Milestone 5, at 1.041x and NOT separated from C
 
-Measured symmetrically (contracted against contracted, D80): sonic-fma 60.16
-ns/step against c-native 57.12, 40 reps, CI excluding 1.0.
+Measured symmetrically (contracted against contracted, D80), 40 reps, baseline
+c-native:
 
-**Blocked on a MEASUREMENT gap, not a missing optimisation.** sonic-fma issues
-30% FEWER float operations than c-native — 197 against 281 — and is still
-slower, with zero spill slots in the hot pair-force loops. So it is an IPC or
-dependency-chain difference, and this project cannot attribute it:
+| config | ns/step | ratio vs c-native | verdict |
+| --- | --- | --- | --- |
+| c-native (`gcc -O3 -march=native`) | 57.66 | (baseline) | |
+| sonic-fma | 60.05 | 1.0414, CI [0.9645, 1.1062] | **no detected difference** |
+| c-scalar (`gcc -O3`) | 62.70 | 1.0874, CI [0.9953, 1.1649] | no detected difference |
+| sonic | 63.25 | 1.0969, CI [1.0217, 1.1721] | **real** |
 
-- c-native is uncountable by both instruments (EVEX; valgrind has no decoder,
-  qemu's TCG no AVX-512), so there is no per-function comparison against it
-- `perf` is denied rootless on this host (D58/D60)
-- callgrind models no pipeline, so it cannot answer "why is this slower"
+Read the intervals, not the point estimates. Plain `sonic` is genuinely behind C.
+`sonic-fma` is NOT — its interval spans 1.0, so against `gcc -O3 -march=native`
+it is a statistical tie. An earlier version of this section said the CI excluded
+1.0; that was true of a different comparison and is not true of this one.
 
-Do not fill this with a theory. I tried one — register pressure — and the
-per-function breakdown refuted it in one command: the spills are all in
-`join.10`, which carries no float arithmetic at all.
+**NO LONGER BLOCKED ON MEASUREMENT.** `harness/vm-perf.sh` gives hardware
+counters through a KVM guest — `perf_event_paranoid` is a property of A kernel,
+so booting a second one where we are root settles it, with nothing on the host
+changed (D85).
+
+**AND THE DIAGNOSIS THIS SECTION USED TO CARRY WAS WRONG.** It said IPC or a
+dependency chain. The counters say the opposite — nbody at N=5e6:
+
+```
+                 cycles    instructions    IPC     branches
+sonic-fma   888,081,464   2,981,677,267   3.36   300,284,364
+ref-native  850,528,398   1,667,502,723   1.96    65,433,871
+```
+
+Cycle ratio 1.0442, confirming the wall clock from an independent instrument. We
+run **1.79x the instructions at 1.71x the IPC**. At 3.36 we are near issue width
+and are not stalling; the extra work is already hidden behind superscalar width
+and the 4.4% is what will not fit. M5 is an INSTRUCTION-COUNT problem wearing a
+latency problem's clothes.
+
+Follow the branches: **300M against C's 65M**, mispredicted at 0.02% — cheap,
+perfectly predicted, still occupying issue slots. That is the shape of bounds and
+type checks. fannkuch agrees from the other direction (2.51x instructions for
+1.24x time), so two benchmarks now tell one story. Filed as `qaq.16`.
+
+Do not fill this with a theory. Two have been refuted here already: register
+pressure (the per-function breakdown put every spill in `join.10`, which carries
+no float arithmetic at all) and latency (the counters above). Measure first —
+the instrument exists now.
 
 ### `qaq.13` — Milestone 4 on RV64 (reparented under E5, where it belongs)
 
