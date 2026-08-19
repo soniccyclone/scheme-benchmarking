@@ -5285,3 +5285,44 @@ building to get the proof without the duplication.
 its conclusion was not. I read "checks come back when unrolling is off" as a cost
 without noticing that the same column was already faster. Re-reading a table I
 had written an hour earlier was the whole of it.
+
+## D118 — the check counts, at last measured rather than inferred
+
+D116 said turning unrolling off is a trade against check elision. D117 corrected
+the framing and said the checks come back but cost nothing. Both were reasoning
+from a test FAILING, which says only that some check appeared. Counting them:
+
+```
+                    nbody    fannkuch
+unroll OFF            14         3      branches to sonic-bounds-error
+unroll ON              0         6
+```
+
+**On fannkuch, unrolling DOUBLES the checks.** There are three the analysis cannot
+discharge either way, and the duplicated body carries two copies of each. So for
+that benchmark, disabling unrolling gives fewer checks, 13% smaller code, and
+5.6% fewer cycles. There is no trade in it at all -- D116 and D117 both described
+one because both assumed the failing test meant fannkuch had gained checks, and
+it had lost them.
+
+**On nbody, unrolling is what elision needs.** Fourteen bounds branches without
+it, zero with. The comment on that test says why: the indices are `3i+k` against a
+length proved at allocation, and the analysis gets there only with the duplicated
+induction step in front of it. That elision is worth 6.7% of nbody's instructions
+and **0.17% of its cycles** -- inside the noise, because D89 established nbody's
+spare instructions are free.
+
+**So the decision is one line.** Keeping `unroll-program` on by default buys
+"nbody emits NO bounds check at all", which is worth 0.17% of nbody's time, and
+costs 5.6% of fannkuch's. Everything else in D116 and D117 -- the safety framing,
+the "checks are nearly free" argument, the claim that the elision is not worth its
+transformation -- was reasoning toward this from incomplete counts.
+
+**Three entries to get one table.** D116 measured the cycles and read a test
+failure as a cost. D117 re-read the table and corrected the direction. D118
+counted the checks and found the fannkuch half backwards in both. The measurement
+that settled it -- compile twice, count branches to one label -- was available
+throughout and takes under a minute. The lesson is not that the earlier entries
+were careless with their numbers; their numbers were right. It is that all three
+described a mechanism no one had counted, and a count would have replaced the
+argument each time.
