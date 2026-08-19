@@ -8036,3 +8036,58 @@ fifth place.
 
 Validated by disabling the refusal: two checks fail, the three that assert what
 must keep working do not. Suite 8649 / 0 / 63.
+
+## D182 — one register file, two storage classes, two free lists
+
+Wiring the V permission through far enough to compile something exposed a
+wrong-code bug that D170 introduced and D175 then reasoned past. It was latent
+while nothing used the new storage class, and it went live the moment slp.ss did.
+
+`allocate/scan*` kept its free pool KEYED BY STORAGE CLASS:
+
+```
+(for-each (lambda (sc) (hashtable-set! free sc (pool-for arch sc)))
+          '(tagged raw-word raw-f64 raw-f64x2))
+```
+
+On x86-64 `pool-for` answers the same xmm list for `raw-f64` and `raw-f64x2` --
+that is the whole point of `packed-class` (D175), because there an xmm holds a
+double or a pair. So the allocator held **two independent free lists of the same
+registers**, and handed one xmm to a scalar and a packed pair that were live at
+the same time.
+
+**D175 asserted this change would be transparent on x86-64 and it was not.** The
+entry said "x86-64 is unchanged and measurably so", resting on the fact that
+nothing emitted `raw-f64x2` yet. That was true and it was not the claim that
+mattered: what needed checking was what happens when something does.
+
+Caught by comparing the emitted image. Reclassifying slp's packed temporaries
+changed the x86-64 nbody binary from `c56783f9…` to `09ead647…`, which for a
+change that is supposed to map to the same pool is the tell. The suite then
+failed on the RV64/x86-64 bit-identical oracle -- and the interesting part is
+WHICH side broke. RV64 was untouched with the permission off; the x86-64 side had
+become wrong, and the cross-target oracle caught a single-target bug.
+
+Fixed by keying the free pool on the REGISTER FILE, which is what a free list has
+always been about:
+
+```
+reg-file-for x86-64 raw-f64    -> float
+reg-file-for x86-64 raw-f64x2  -> float     one list
+reg-file-for rv64   raw-f64    -> float
+reg-file-for rv64   raw-f64x2  -> vector    two lists
+```
+
+With that in place the reclassification is transparent: the x86-64 image comes
+back `c56783f9…`, identical to the build before any of this. That equality is the
+real evidence -- not that the suite passes, but that a change which should move
+nothing moved nothing.
+
+Guarded by a test whose fixture had to be fixed once. The first version asserted
+that no scalar and no packed value shared a register, which linear scan is
+entitled to do after one of them dies, so it failed against correct code. The
+version that survives makes a packed value live ACROSS a scalar's whole live
+range and asserts only that those two differ. Not inert: keying by class again
+fails it.
+
+Suite 8651 / 0 / 63.

@@ -14,6 +14,7 @@
   (export make-arch arch? arch-name arch-value arch-raw arch-float arch-structural
           arch-mask mask-count
           arch-vector vector-count arch-vector-scratch packed-class
+          reg-file-for
           arch-register-for arch-float-scratch arch-int-scratch float-register?
           arch-scratch
           arch-x86-64 arch-rv64 arch-by-name
@@ -317,6 +318,22 @@
   ;; is a change in one place.
   (define (packed-class a)
     (if (null? (arch-vector a)) 'float 'vector))
+
+  ;; WHICH REGISTER FILE A STORAGE CLASS DRAWS FROM.
+  ;;
+  ;; Not the same question as the storage class itself, and conflating them is a
+  ;; wrong-code bug rather than an infelicity. `raw-f64` and `raw-f64x2` are two
+  ;; classes over ONE file on x86-64 -- an xmm holds a double or a pair -- so an
+  ;; allocator keeping a free list per CLASS keeps two independent lists of the
+  ;; same registers and hands the same xmm to a scalar and a pair. The free list
+  ;; belongs to the file.
+  (define (reg-file-for a sc)
+    (case sc
+      ((tagged)    'value)
+      ((raw-word)  'raw)
+      ((raw-f64)   'float)
+      ((raw-f64x2) (packed-class a))
+      (else (error 'reg-file-for "unknown storage class" sc))))
 
   ;; Which class does this physical register belong to?
   (define (reg-class a r)

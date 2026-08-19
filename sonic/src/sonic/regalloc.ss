@@ -625,9 +625,16 @@
            [assign (make-eq-hashtable)]
            [spills '()]
            ;; free pools, one per storage class, kept disjoint by construction
-           [free (make-eq-hashtable)])
-      (for-each (lambda (sc) (hashtable-set! free sc (pool-for arch sc)))
-                '(tagged raw-word raw-f64 raw-f64x2))
+           ;; KEYED BY REGISTER FILE, NOT BY STORAGE CLASS. Two classes can draw
+           ;; from one file -- `raw-f64` and `raw-f64x2` both mean an xmm on
+           ;; x86-64 -- and a free list per class would then be two lists of the
+           ;; same registers, handing one xmm to a scalar and a pair at once.
+           [free (make-eq-hashtable)]
+           [fl (lambda (sc) (reg-file-for arch sc))])
+      (for-each (lambda (f p) (hashtable-set! free f p))
+                '(value raw float vector)
+                (list (arch-value arch) (arch-raw arch)
+                      (arch-float arch) (arch-vector arch)))
       (let scan ([is ivals] [active '()])
         (if (null? is)
             (make-alloc-result arch assign (reverse spills))
@@ -646,7 +653,7 @@
                                 [dsc (hashtable-ref classes dv #f)]
                                 [dr (hashtable-ref assign dv #f)])
                            (when dr
-                             (hashtable-set! free dsc (cons dr (hashtable-ref free dsc '()))))
+                             (hashtable-set! free (fl dsc) (cons dr (hashtable-ref free (fl dsc) '()))))
                            (expire (cdr as) keep))]
                         [else (expire (cdr as) (cons (car as) keep))]))])
                 (cond
@@ -665,7 +672,7 @@
                  [(pinned-reg v)
                   => (lambda (pr)
                        (hashtable-set! assign v pr)
-                       (hashtable-set! free sc (remq pr (hashtable-ref free sc '())))
+                       (hashtable-set! free (fl sc) (remq pr (hashtable-ref free (fl sc) '())))
                        (scan (cdr is) (cons iv still-active)))]
                  [(crosses-call? iv)
                     ;; A REGISTER THE CALLEE DOES NOT WRITE, or the frame.
@@ -691,7 +698,7 @@
                     ;; still destroy, so there is nothing to win by it; if no
                     ;; surviving register is free, the frame is the answer.
                     (let* ([bad (across iv)]
-                           [pool (hashtable-ref free sc '())]
+                           [pool (hashtable-ref free (fl sc) '())]
                            [safe (filter (lambda (r) (not (memq r bad))) pool)])
                       (if (null? safe)
                           (begin
@@ -700,10 +707,10 @@
                           (let ([r (car safe)])
                             (check-assignment! arch sc r)
                             (hashtable-set! assign v r)
-                            (hashtable-set! free sc (remq r pool))
+                            (hashtable-set! free (fl sc) (remq r pool))
                             (scan (cdr is) (cons iv still-active)))))]
                  [else
-                  (let ([pool (hashtable-ref free sc '())])
+                  (let ([pool (hashtable-ref free (fl sc) '())])
                   (if (null? pool)
                       ;; SPILL. Poletto & Sarkar spill the active interval with
                       ;; the FURTHEST endpoint, which may be this one or one
@@ -790,6 +797,6 @@
                         ;; THE assertion. Not a warning.
                         (check-assignment! arch sc r)
                         (hashtable-set! assign v r)
-                        (hashtable-set! free sc (remq r pool))
+                        (hashtable-set! free (fl sc) (remq r pool))
                         (scan (cdr is) (cons iv rest)))))])))))))
   )

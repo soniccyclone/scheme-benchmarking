@@ -1,5 +1,11 @@
 (import (chezscheme) (sonic regs) (sonic regalloc))
 
+(define (remove-duplicates-eq xs)
+  (let loop ([xs xs] [acc '()])
+    (cond [(null? xs) (reverse acc)]
+          [(memq (car xs) acc) (loop (cdr xs) acc)]
+          [else (loop (cdr xs) (cons (car xs) acc))])))
+
 (define failures 0) (define checks 0)
 (define (ck! name ok)
   (set! checks (+ checks 1))
@@ -177,6 +183,36 @@
           (= (vector-count arch-rv64) 30)))
 (ck! "a packed pair may not be allocated to the scratch"
      (not (assignment-ok? arch-rv64 'raw-f64x2 'v31)))
+
+(ck! "two storage classes over ONE file share a free list, or the allocator
+       hands the same xmm to a scalar and a pair -- the free pool is keyed by
+       FILE, not by class"
+     (and (eq? (reg-file-for arch-x86-64 'raw-f64) 'float)
+          (eq? (reg-file-for arch-x86-64 'raw-f64x2) 'float)
+          (eq? (reg-file-for arch-rv64 'raw-f64) 'float)
+          (eq? (reg-file-for arch-rv64 'raw-f64x2) 'vector)))
+
+;; The bug this guards is not hypothetical: with a free list per CLASS, an
+;; x86-64 program using both classes got two independent lists of the same xmm
+;; registers. It surfaced as the RV64/x86-64 bit-identical oracle failing,
+;; because the x86-64 side had become wrong (D182).
+(let* (;; `w` is packed and live from its definition to the last instruction;
+       ;; `s` is a scalar defined and read inside that span. They are live at the
+       ;; same time and draw from the same xmm file, which is the pair a free
+       ;; list per CLASS gave the same register to.
+       [prog '((entry (block ((p2add w raw-f64x2 u v)
+                              (mul s raw-f64 a b)
+                              (p2splat z raw-f64x2 s)
+                              (p2mul x raw-f64x2 w z))
+                             (ret x))))]
+       [cls (make-eq-hashtable)])
+  (for-each (lambda (v) (hashtable-set! cls v 'raw-f64x2)) '(u v w x z))
+  (for-each (lambda (v) (hashtable-set! cls v 'raw-f64)) '(a b s))
+  (let* ([m (alloc-result-map (allocate-program arch-x86-64 prog cls))]
+         [rw (hashtable-ref m 'w #f)] [rs (hashtable-ref m 's #f)])
+    (ck! "on x86-64 a scalar and a packed pair that are live at the same time do
+       not share a register, though they share the file"
+         (and rw rs (not (eq? rw rs))))))
 
 (ck! "the vector file is disjoint from every other pool on rv64"
      (let ([v (arch-vector arch-rv64)])

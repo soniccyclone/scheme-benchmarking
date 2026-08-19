@@ -758,7 +758,7 @@
         (or (hashtable-ref name (pack-lo p) #f)
             (let ((v (fresh (pack-lo p))))
               (hashtable-set! name (pack-lo p) v)
-              (hashtable-set! classes v 'raw-f64)
+              (hashtable-set! classes v 'raw-f64x2)
               v)))
 
       (define (emit-at! k is)
@@ -812,9 +812,9 @@
               (or (hashtable-ref splat key #f)
                   (let ((s (fresh v)))
                     (hashtable-set! splat key s)
-                    (hashtable-set! classes s 'raw-f64)
+                    (hashtable-set! classes s 'raw-f64x2)
                     (set! pending
-                          (cons (list (if (= lanes 2) 'p2splat 'p3splat) s 'raw-f64 v)
+                          (cons (list (if (= lanes 2) 'p2splat 'p3splat) s 'raw-f64x2 v)
                                 pending))
                     s)))))))
 
@@ -865,7 +865,7 @@
                    ;; into a 256-bit register costs two instructions to save
                    ;; two, so `narrow!` sends a triple back to a pair before it
                    ;; can get here.
-                   ((gather) (list 'p2pack (pack-name p) 'raw-f64 (car p) (cadr p)))
+                   ((gather) (list 'p2pack (pack-name p) 'raw-f64x2 (car p) (cadr p)))
                    ((load)
                     (let ((f (load-form i)))
                       ;; THE WIDTH COMES FROM THE PACK, exactly as `arith-name`
@@ -882,9 +882,9 @@
                       ;; forwards cost 7.6 cycles each -- 495 of a 495-cycle
                       ;; regression, measured. See vec-x86-64.ss's four-lane row.
                       (list (width-name lanes 'load)
-                            (pack-name p) 'raw-f64 (caddr f) (car f) (cadr f))))
+                            (pack-name p) 'raw-f64x2 (caddr f) (car f) (cadr f))))
                    ((op)
-                    (list (arith-name lanes (car i)) (pack-name p) 'raw-f64
+                    (list (arith-name lanes (car i)) (pack-name p) 'raw-f64x2
                           (operand (cadddr i) lanes)
                           (operand (car (cddddr i)) lanes)))
                    (else #f))))
@@ -902,7 +902,7 @@
                (f (store-form i)))
           (for-each (lambda (kk) (hashtable-set! drop kk #t)) sp)
           (set! pending '())
-          (let ((instr (list (width-name lanes 'store) (cadr i) 'raw-f64
+          (let ((instr (list (width-name lanes 'store) (cadr i) 'raw-f64x2
                              (caddr f) (car f) (cadr f)
                              (operand (cadddr f) lanes))))
             (slp-stats-instructions-set!

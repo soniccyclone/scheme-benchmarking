@@ -61,6 +61,7 @@
           image-header-size image-target image-code image-constants
           image-metadata image-metadata-entries image-frame-slots
           resolve-labels encode-instruction instruction-size
+          rv64-vector-permitted?
           gcmeta-target-for constants->bytevector
           write-bytevector-to-file)
   (import (chezscheme)
@@ -69,6 +70,7 @@
           (prefix (sonic encode-x86-64) x86:)
           (prefix (sonic vec-x86-64) vx:)
           (prefix (sonic encode-rv64) rv:)
+          (prefix (sonic vec-rv64) rvv:)
           (sonic elfexec))
 
   ;; --- targets --------------------------------------------------------------
@@ -209,6 +211,33 @@
         (vx:vec-encode-instr i)
         (x86:encode-instr i)))
 
+  ;; MAY THIS BUILD USE THE V EXTENSION? DEFAULT NO.
+  ;;
+  ;; x86-64 above needs no such question: `x86-encode` always tries the vector
+  ;; encoder first and falls back, because VEX is inside the floor this project
+  ;; targets. V is NOT inside RV64's floor. encode-rv64.ss refuses a vector
+  ;; mnemonic for exactly that reason -- "a rv64gc part cannot execute it" -- and
+  ;; harness/smoke-riscv.sh asserts the same thing from the other side.
+  ;;
+  ;; So it is a PERMISSION, in the shape D24 established for FP contraction:
+  ;; named, off by default, and turning it on is a statement about what hardware
+  ;; the output is FOR rather than a flag that makes things faster. With it off,
+  ;; not one byte changes and the floor assertion still holds. With it on,
+  ;; instructions vec-rv64.ss claims go to the vector encoder and everything else
+  ;; falls through to the scalar one -- precisely what `x86-encode` does, so this
+  ;; is the same mechanism rather than a second one.
+  ;;
+  ;; This does NOT settle qaq.13.4. It is the switch that makes the question
+  ;; answerable by measurement: with it on, the differential oracle can run and
+  ;; say whether the RV64 packed path computes the right numbers.
+  (define rv64-vector-permitted? (make-parameter #f))
+
+  (define (rv64-encode i)
+    (if (and (rv64-vector-permitted?) (pair? i) (symbol? (car i))
+             (rvv:rvv-supports? (car i)))
+        (rvv:rvv-encode-instr i)
+        (rv:encode-instr i)))
+
   (define (instruction-size target i)
     (case (check-target 'instruction-size target)
       ((x86-64) (length (x86-encode (x86-blank i))))
@@ -217,7 +246,7 @@
   (define (encode-instruction target i)
     (case (check-target 'encode-instruction target)
       ((x86-64) (x86-encode i))
-      ((rv64)   (rv:encode-instr i))))
+      ((rv64)   (rv64-encode i))))
 
   ;; RV64 branch and jump targets are the last operand and are relative to the
   ;; instruction itself; x86-64 displacements are relative to the END of the

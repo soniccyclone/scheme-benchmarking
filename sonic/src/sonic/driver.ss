@@ -187,7 +187,20 @@
                ;; the right default for a target with no packed lowering. When
                ;; RV64 grows one -- RVV, or pairs -- this becomes a capability
                ;; question rather than a target name.
-               ((sprog slp-st) (if (eq? target 'rv64)
+               ;; A CAPABILITY QUESTION NOW, NOT A TARGET NAME.
+               ;;
+               ;; This used to read `(eq? target 'rv64)` and the comment beside
+               ;; it said the test should become a capability one when RV64 grew
+               ;; a packed lowering. It has: D170 through D176 built the storage
+               ;; class, the convention, the encodings and all nine selection
+               ;; rules. What it has not grown is the right to EXECUTE them --
+               ;; V is outside the rv64gc floor -- so the question is whether
+               ;; this build is permitted the extension, which is exactly what
+               ;; `rv64-vector-permitted?` answers.
+               ;;
+               ;; Default is off, so this line behaves as it always did.
+               ((sprog slp-st) (if (and (eq? target 'rv64)
+                                        (not (rv64-vector-permitted?)))
                                    (values dprog #f)
                                    (slp-program dprog classes)))
                ((prog contract-st) (contract-program sprog)))
