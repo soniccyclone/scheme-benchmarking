@@ -4862,3 +4862,61 @@ written on `qaq.26` as the thing to check rather than as the answer.
 The way to check it is to print the Lmach definition and uses of the vreg that
 receives `rcx`, not to read more assembly -- the information that would settle it
 has been erased by the time the listing exists.
+
+## D110 — the three dead stores, explained: two mechanisms, neither a liveness bug
+
+D109 said the answer was in the Lmach and not in the assembly, and to go print
+it. Printing `count-flips`:
+
+```
+BLOCK count-flips
+  (const t.364 raw-word 0)
+  (gref g.18 tagged %g-perm)
+  (load-at k%7.365 raw-word 0 g.18 #f)
+  (cmp-eq t.367 raw-word k%7.365 t.364)
+  T (branch-if t.367 L.then27 L.else28)
+BLOCK L.else28
+  (const t.18.422 raw-word 0)
+  (call t.423 raw-word loop%2.14@8.373 k%7.370)
+  (const t.424 raw-word 1)
+  (add-imm t.425 raw-word 1 f%6.363)
+  (chk overflow-check checked 0 f%6.363 t.424 t.425)
+  ...
+  (cmp-eq t.21.429 raw-word k%7.427 t.18.422)
+```
+
+Every constant has a real use at this level, so DCE was right to keep all of
+them, and the loop-carried-phi guess in D109 was wrong. The stores are dead in the
+EMITTED code for two different reasons.
+
+**One: `chk` names an operand the emitted check does not read.** `(chk
+overflow-check checked 0 f%6.363 t.424 t.425)` carries the constant `1` as an
+operand describing what was added. A checked add emits `add` then `jo`, and `jo`
+reads the FLAGS -- it never touches the register holding 1. So `t.424` is live
+through the IR and dead in the machine code, and both `mov $0x1,%r14` stores come
+from this.
+
+**Two: a folded constant at the end of a run keeps its materialisation.**
+`t.364`'s only use is `cmp-eq`, which `fold-immediates` rewrites to `cmp
+$0x0,%rdx` -- and the emitted code shows exactly that. The pass deletes the
+materialisation only when a later REDEFINITION proves it dead, and `t.364` is
+redefined in a different block. `peephole-runs` flushes its run at every label,
+so the redefinition is never in view and the store stays. That is the
+`mov $0x0,%rcx`.
+
+**Nothing removes either, and the reason is pass order.** `dce-program` runs
+before selection, where all three constants are genuinely used. `peephole` runs
+after, and its only removal rule is `drop-dead-copies` -- copies, not constants.
+So folding CREATES dead code that no later pass looks for. There is no liveness
+bug here and no wrong answer anywhere; there is a gap between two correct passes.
+
+**Two fixes, and they are not the same size.** The `chk` operand is a
+representation question -- whether a check needs to name a value the emitted
+instruction cannot read -- and touching it reaches D5's check vocabulary, which
+the whole project rests on. The folded-constant case is a dead-store pass over the
+finalized listing with liveness across blocks, which is the same machinery
+`dce.ss` already has for Lmach, applied one stage later.
+
+Worth 3 of 24 instructions in a block that is 18.22% of fannkuch's profile, on a
+benchmark measured dispatch-limited (D101). Recorded on `qaq.26` with both
+mechanisms named, so whoever takes it chooses between them knowingly.
