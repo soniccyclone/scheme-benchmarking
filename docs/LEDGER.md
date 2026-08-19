@@ -5356,3 +5356,50 @@ methodology entries (D94's noise floor, D105's 4.97% alignment sensitivity) exis
 because I measured wrongly first and had to correct the record; they are in
 LOOP.md now so the next session starts where this one ended rather than where it
 began.
+
+## D120 — auditing the queue against the bottlenecks, and finding most of it aimed elsewhere
+
+D112 established what each benchmark is limited by, and D111 established what
+that implies. Applying both to the open queue rather than to one bead at a time:
+
+```
+fannkuch   25.2% of cycles front-end stalled on mispredicts (D112)
+           removing 863M instructions and 861M branches cost 3.5% wall clock (D111)
+nbody      85.65% register dependencies (D90)
+           removing 465M instructions cost 18M cycles (D89)
+```
+
+**Instruction count does not convert to time on either benchmark.** Five open
+beads had payoffs stated purely in instructions:
+
+- `qaq.15` EFLAGS liveness, to make `lea` legal -- 6 collapsible pairs
+- `qaq.18` a dead materialisation in nbody's loop header
+- `qaq.21` 130 register-to-register moves, 86 coalescable
+- `qaq.23` callee-saved registers, to reduce spills
+- `qaq.26` three dead constant stores in fannkuch's hottest block
+
+Each is real, each is correctly diagnosed, and none has a demonstrated path to
+time. All five moved to P4 with the audit recorded on them, so a later session
+reads the caveat before spending on the work rather than after.
+
+**Two beads do target a measured bottleneck**, and it is worth being explicit
+about why they are different in kind:
+
+- `qaq.29` -- the four duplicated reversal functions. Merging them removes branch
+  TARGETS, which is what the front end is stalling on, not just instructions.
+- `qaq.30` -- unroll only where it discharges checks. The same mechanism, and it
+  is not a prediction: 5.6% is measured, layout-swept, ranges non-overlapping.
+
+**What nothing in the queue targets.** nbody's 85.65% is a dependency chain
+through `sqrt` and `divide`; D92 measured the only known lever (reciprocal
+approximation) as a loss on the latency axis at every Newton step count that
+preserves accuracy. fannkuch's 25.2% is mispredict recovery on data-dependent
+permutation branches. Neither has an open bead, because after D84-D118 neither
+has a candidate that survives measurement.
+
+That is the honest standing: **both benchmarks are at or near the limit of what
+this compiler can reach without an accuracy trade (`qaq.7`) or a policy change
+(`qaq.30`)**, and the remaining engineering work is worth doing for its own sake
+rather than for a number. Saying so in the ledger is cheaper than a future
+session rediscovering it one bead at a time, which is what D102, D107 and D108
+each cost.
