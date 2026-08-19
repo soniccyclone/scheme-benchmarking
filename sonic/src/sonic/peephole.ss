@@ -603,13 +603,36 @@
                        (if (and all (pair? rest))
                            (loop rewritten out)
                            (loop rewritten (cons (car is) out)))))))
-                  ;; A BARRIER KEEPS THE MATERIALISATION. `leaves-block?` says
-                  ;; why in its own header: a `call` reads argument registers
-                  ;; that appear nowhere in its operands, so `mentions?` returns
-                  ;; false for it and this scan walked straight past. Folding
-                  ;; USES past a barrier stays sound -- the immediate is the
-                  ;; value -- so this clears `all` and keeps scanning.
-                  ((leaves-block? (car rest)) (scan (cdr rest) folds #f))
+                  ;; A BARRIER ENDS THE RUN. `leaves-block?` says why in its
+                  ;; own header: a `call` reads argument registers that appear
+                  ;; nowhere in its operands, so `mentions?` returns false for it
+                  ;; and this scan walked straight past.
+                  ;;
+                  ;; It also WRITES a register that appears nowhere in its
+                  ;; operands -- the return register -- and `redefines?` only
+                  ;; knows mov/movsd/movzx/lea/cvtsi2sd, so a call never counted
+                  ;; as a redefinition either. In nbody:
+                  ;;
+                  ;;     mov  rax, 5
+                  ;;     call %make-flvector      ; returns the vector IN RAX
+                  ;;     mov  rbx, rax            ; the RESULT, not the 5
+                  ;;
+                  ;; folding that use gives `mov rbx, 5` and stores the integer 5
+                  ;; where a heap pointer belongs. A latent wrong-code bug: it
+                  ;; needs a constant whose register is also a call's return
+                  ;; register and is read after the call, which nothing folded
+                  ;; today happens to hit. Making a plain copy foldable hits it
+                  ;; immediately and segfaults.
+                  ;;
+                  ;; So the run STOPS here -- uses before the barrier still fold,
+                  ;; nothing after it does, and the materialisation is kept.
+                  ((leaves-block? (car rest))
+                   (cond
+                    ((zero? folds) (loop (cdr is) (cons (car is) out)))
+                    (else
+                     (peephole-stats-fused-set!
+                      stats (+ 1 (peephole-stats-fused stats)))
+                     (loop (fold-run (cdr is) r k) (cons (car is) out)))))
                   ((foldable-use? (car rest) r) (scan (cdr rest) (+ folds 1) all))
                   ((mentions? (cdr (car rest)) r) (scan (cdr rest) folds #f))
                   (else (scan (cdr rest) folds all)))))))
@@ -620,7 +643,10 @@
     (let walk ((is is) (out '()))
       (cond
        ((null? is) (reverse out))
-       ((redefines? (car is) r) (append (reverse out) is))
+       ;; The same barrier as the scan: past a call, `r` may hold that call's
+       ;; return value rather than the constant.
+       ((or (redefines? (car is) r) (leaves-block? (car is)))
+        (append (reverse out) is))
        ((foldable-use? (car is) r) (walk (cdr is) (cons (fold-use (car is) k) out)))
        (else (walk (cdr is) (cons (car is) out))))))
 

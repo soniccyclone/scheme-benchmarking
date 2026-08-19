@@ -4223,3 +4223,66 @@ not a result to build on, and the ledger should not let a later reader infer tha
 frame handling has more left in it. The remaining fannkuch gap is 2.46x the
 instructions of C, and D93's census says the largest identified block doing no
 arithmetic is still the 130 register-to-register moves (`qaq.21`).
+
+## D99 — a latent wrong-code bug in constant folding, found by an optimisation that was then reverted
+
+D93's census said fannkuch's largest block of instructions doing no arithmetic is
+its 130 register-to-register moves. Characterising them found a specific shape:
+**21 sites materialise a constant into one register and copy it to another**,
+
+```
+mov  rdi, 1
+mov  rcx, rdi        <-- `mov rcx, 1` is the whole instruction
+```
+
+concentrated in blocks that are ~31% of the sampled profile. `peephole.ss`
+already folds constants into arithmetic uses; `foldable-use?` simply requires the
+consumer to be `imul` or one of `(add sub and or cmp)`. A plain copy has exactly
+the right shape.
+
+**Enabling it segfaulted nbody, and the reason was not the new rule.**
+
+```
+401594  mov  rax, 5
+4015c0  call %make-flvector      ; RETURNS THE VECTOR IN RAX
+4015c5  mov  rbx, rax            ; the call's RESULT, not the 5
+```
+
+Folding that copy gives `mov rbx, 5` and stores the integer 5 where a heap
+pointer belongs. The fault is in the scan, not the rule: `redefines?` recognises
+only `mov movsd movzx lea cvtsi2sd`, so a `call` never counts as writing anything
+-- and `leaves-block?`, which exists three hundred lines above and whose header
+says "a `call` is here because it reads argument registers that appear nowhere in
+its operands", was never consulted by `fold-immediates`. A call both READS and
+WRITES registers that appear in none of its operands, and the pass modelled
+neither.
+
+**This is a real latent bug and it is now fixed.** It needs a constant whose
+register is also a call's return register and is read after the call. Nothing
+among today's folded consumers happens to produce that, which is why the suite
+was green; making a copy foldable produces it immediately. The run now stops at a
+barrier in BOTH the scan and `fold-run` -- uses before it still fold, nothing
+after it does, and the materialisation is kept. Costs nothing measurable:
+fannkuch 27,034,212,993 instructions and nbody 3,321,767,924, unchanged.
+
+**The optimisation itself is reverted, and I could not explain why.** On the
+corrected base the copy fold still fails, now on fannkuch's oracle rather than
+nbody's. Two candidate mechanisms were checked and BOTH refuted:
+
+- `redefines?` is a whitelist, so `add`/`sub`/`imul` writing a register would go
+  unnoticed and a later fold would use a stale constant. Searched for the shape
+  -- a constant, then an unrecognised definition of that register, then a copy
+  out of it -- and there are **zero** such sites in fannkuch.
+- folding across a basic-block join would be unsound. `peephole-runs` already
+  flushes the run at every label, so it cannot happen.
+
+So the mechanism is a third thing I have not identified, and guessing a fourth
+time is not the way to find it. The rule is out of the tree; `qaq.25` carries the
+reproduction, the 21-site payoff estimate, and both refuted hypotheses so the
+next attempt starts from what is already excluded rather than from scratch.
+
+**Worth saying plainly:** the optimisation is not in and its value is unproven,
+but the trip paid for itself. A wrong-code bug that survives in a compiler until
+some unrelated change happens to reach it is exactly the kind this project's
+oracles exist to catch, and this one was caught by making it reachable rather
+than by reasoning about it.
