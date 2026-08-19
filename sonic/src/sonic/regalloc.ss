@@ -371,6 +371,7 @@
       ((tagged)   (arch-value arch))
       ((raw-word) (arch-raw arch))
       ((raw-f64)  (arch-float arch))
+      ((raw-f64x2) (arch-vector arch))
       (else (error 'pool-for "unknown storage class" sc))))
 
   ;; A PHYSICAL register name in an operand slot is not a vreg, and the
@@ -622,7 +623,7 @@
            ;; free pools, one per storage class, kept disjoint by construction
            [free (make-eq-hashtable)])
       (for-each (lambda (sc) (hashtable-set! free sc (pool-for arch sc)))
-                '(tagged raw-word raw-f64))
+                '(tagged raw-word raw-f64 raw-f64x2))
       (let scan ([is ivals] [active '()])
         (if (null? is)
             (make-alloc-result arch assign (reverse spills))

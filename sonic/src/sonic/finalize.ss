@@ -658,12 +658,42 @@
                       (pair? (cadr i))
                       (eq? (car (cadr i)) 'label)))))
 
+  ;; A PACKED PAIR CANNOT SPILL ON RV64 YET, AND SAYS SO.
+  ;;
+  ;; The dispatch below is `raw-f64` or everything else, so a `raw-f64x2` would
+  ;; take the integer path and emit `sd v3, sp, off` -- a 64-bit integer store
+  ;; naming a vector register. That assembles into something, and what it is is
+  ;; not the value. Three things are missing and none is a one-liner:
+  ;;
+  ;;   - the instructions. `vs1r.v`/`vl1r.v` are the whole-register forms, and
+  ;;     they are the right ones precisely because they do not consult `vtype`;
+  ;;     a spill path that depends on CSR state breaks when the state changes.
+  ;;   - an address. Those forms take `(rs1)` and no displacement, so a slot at
+  ;;     `sp+off` needs `addi t0, sp, off` first. Every other spill here folds
+  ;;     the displacement into the instruction.
+  ;;   - a slot size. A v register is VLEN bits, 16 bytes at VLEN=128, and the
+  ;;     frame hands out 8. A pair written into an 8-byte slot runs into its
+  ;;     neighbour.
+  ;;
+  ;; Refusing is not a placeholder for the sake of one. The allocator has 31 v
+  ;; registers and this only fires under real pressure, so the silent version
+  ;; would be a wrong answer appearing the first time a program got big enough --
+  ;; which is the worst time to find out and the hardest to attribute.
+  (define (rv64-no-vector-spill! sc)
+    (when (eq? sc 'raw-f64x2)
+      (error 'spiller-rv64
+             "a packed pair cannot spill on rv64 yet: needs vs1r.v/vl1r.v, an
+address register, and a 16-byte frame slot. See LEDGER.md D170."
+             sc)))
+
   (define spiller-rv64
     (make-spiller
      'rv64
      (lambda (reg off sc)
+       (rv64-no-vector-spill! sc)
        (if (eq? sc 'raw-f64) `((fld ,reg sp ,off)) `((ld ,reg sp ,off))))
      (lambda (off reg sc)
+       (rv64-no-vector-spill! sc)
        (if (eq? sc 'raw-f64) `((fsd ,reg sp ,off)) `((sd ,reg sp ,off))))
      (lambda (bytes) (if (zero? bytes) '() `((addi sp sp ,(- bytes)))))
      (lambda (bytes) (if (zero? bytes) '() `((addi sp sp ,bytes))))

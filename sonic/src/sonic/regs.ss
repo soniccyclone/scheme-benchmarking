@@ -13,6 +13,7 @@
 (library (sonic regs)
   (export make-arch arch? arch-name arch-value arch-raw arch-float arch-structural
           arch-mask mask-count
+          arch-vector vector-count
           arch-register-for arch-float-scratch arch-int-scratch float-register?
           arch-scratch
           arch-x86-64 arch-rv64 arch-by-name
@@ -58,7 +59,7 @@
   ;; An allocator that handed out k0 would silently emit an unmasked
   ;; instruction, which computes every lane including the padding one.
   (define-record-type (arch make-arch* arch?)
-    (fields name value raw float structural scratch mask))
+    (fields name value raw float structural scratch mask vector))
 
   ;; Six arguments was the shape before the mask file existed, and the callers
   ;; that use it build a NARROWED arch -- the same partition minus the
@@ -70,14 +71,34 @@
   ;; and be visible.
   (define make-arch
     (case-lambda
-      ((n v r f st sc) (make-arch* n v r f st sc (masks-for n)))
-      ((n v r f st sc mk) (make-arch* n v r f st sc mk))))
+      ((n v r f st sc) (make-arch* n v r f st sc (masks-for n) (vectors-for n)))
+      ((n v r f st sc mk) (make-arch* n v r f st sc mk (vectors-for n)))))
 
   ;; k1..k7. k0 is deliberately absent -- see the note above.
   (define (masks-for target)
     (case target
       ((x86-64) '(k1 k2 k3 k4 k5 k6 k7))
       (else '())))            ; RV64's vector extension masks in v0, not a file
+
+  ;; THE VECTOR FILE, WHICH ONLY RV64 HAS AS A SEPARATE THING.
+  ;;
+  ;; x86-64 gets an empty list rather than its xmm registers, and that is the
+  ;; whole asymmetry D169 is about. There a packed pair IS a `raw-f64` value:
+  ;; the same physical register holds one double or two and the width rides on
+  ;; the mnemonic, so packed lowering needed no class of its own. RVV's v
+  ;; registers are a distinct file that no storage class could previously reach,
+  ;; so a packed pair on RV64 has nowhere to live until this exists.
+  ;;
+  ;; v0 IS ABSENT AND THAT IS NOT AN OFF-BY-ONE. RVV addresses the mask register
+  ;; as v0 specifically -- `vop.vv vd, vs2, vs1, v0.t` names it in the encoding
+  ;; rather than selecting it -- so any masked operation destroys whatever a
+  ;; value allocated there was holding. `masks-for` returns '() for rv64 for the
+  ;; same reason: the mask is a fixed register, not a pool to allocate from.
+  (define (vectors-for target)
+    (case target
+      ((rv64) '(v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15
+                v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29 v30 v31))
+      (else '())))
 
 
 
@@ -219,6 +240,7 @@
   (define (raw-count a)   (length (arch-raw a)))
   (define (float-count a) (length (arch-float a)))
   (define (mask-count a)  (length (arch-mask a)))
+  (define (vector-count a) (length (arch-vector a)))
 
   ;; The register holding a structural role: `nil`, `current-thread`,
   ;; `current-cpu`, `frame`, `stack`. Selection needs `nil` by name -- the empty
@@ -263,6 +285,7 @@
           ((memq r (arch-raw a)) 'raw)
           ((memq r (arch-float a)) 'float)
           ((memq r (arch-mask a)) 'mask)
+          ((memq r (arch-vector a)) 'vector)
           ((assq r (arch-structural a)) 'structural)
           (else #f)))
 
@@ -284,6 +307,10 @@
         ((tagged)   (eq? cls 'value))
         ((raw-word) (eq? cls 'raw))
         ((raw-f64)  (eq? cls 'float))
+        ;; A packed pair reaches the vector file and nothing else. Not `float`:
+        ;; on RV64 an f register is 64 bits and holds one double, so a pair
+        ;; placed there would be half a value with no diagnostic.
+        ((raw-f64x2) (eq? cls 'vector))
         (else #f))))
 
   (define (check-assignment! a sc r)
@@ -292,6 +319,13 @@
              (case sc
                ((tagged)
                 "a tagged value outside the value class is a root the collector will never find")
+               ((raw-f64x2)
+                ;; Not a collector question at all, which is why it gets its own
+                ;; line rather than the raw message: a packed pair outside the
+                ;; vector file is a WIDTH error. An f register is 64 bits, so the
+                ;; second lane simply is not there, and the program computes a
+                ;; wrong number rather than corrupting anything.
+                "a packed pair outside the vector file loses its second lane")
                (else
                 "a raw value inside the value class makes the collector scavenge a non-pointer"))
              (arch-name a) sc r (reg-class a r)))

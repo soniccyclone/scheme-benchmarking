@@ -111,6 +111,58 @@
      (and (assignment-ok? arch-rv64 'raw-f64 'ft0)
           (not (assignment-ok? arch-rv64 'raw-f64 't0))))
 
+;; --- the vector file, which only RV64 has separately ----------------------
+;;
+;; D169: on x86-64 a packed pair IS a raw-f64 -- one xmm holds a double or two
+;; and the width rides on the mnemonic -- so it needs no class of its own. RVV's
+;; v registers are a distinct file, and an f register is 64 bits, so a pair put
+;; there would be half a value with no diagnostic.
+(ck! "rv64 has a vector file and x86-64 does not, which is the asymmetry"
+     (and (positive? (vector-count arch-rv64))
+          (zero? (vector-count arch-x86-64))))
+(ck! "a packed pair goes to a vector register"
+     (assignment-ok? arch-rv64 'raw-f64x2 'v1))
+(ck! "a packed pair may NOT go to a float register: an f register is 64 bits
+       and would hold half of it"
+     (not (assignment-ok? arch-rv64 'raw-f64x2 'ft0)))
+(ck! "and a scalar double may not go to a vector register either"
+     (not (assignment-ok? arch-rv64 'raw-f64 'v1)))
+(ck! "v0 is NOT allocatable: RVV names it as the mask in the encoding itself,
+       so a value there is destroyed by any masked operation"
+     (and (not (memq 'v0 (arch-vector arch-rv64)))
+          (not (assignment-ok? arch-rv64 'raw-f64x2 'v0))))
+(ck! "a v register reads as physical, so the allocator skips it rather than
+       treating the name as a vreg"
+     (and (physical? arch-rv64 'v1)
+          (eq? (reg-class arch-rv64 'v1) 'vector)))
+(let* ([prog '((entry (block ((p2add w raw-f64x2 u v)
+                             (p2mul x raw-f64x2 w w)
+                             (add n raw-word i i))
+                            (ret x))))]
+       [cls (make-eq-hashtable)])
+  (for-each (lambda (v) (hashtable-set! cls v 'raw-f64x2)) '(u v w x))
+  (for-each (lambda (v) (hashtable-set! cls v 'raw-word)) '(i n))
+  (let* ([res (allocate-program arch-rv64 prog cls)]
+         [m (alloc-result-map res)]
+         [vr (lambda (s) (hashtable-ref m s #f))])
+    (ck! "a packed vreg is allocated to the vector file, end to end"
+         (for-all (lambda (s) (eq? (reg-class arch-rv64 (vr s)) 'vector))
+                  '(u v w x)))
+    (ck! "and the raw-word vregs beside it still go to raw registers, so the
+       new class did not disturb the partition"
+         (for-all (lambda (s) (eq? (reg-class arch-rv64 (vr s)) 'raw))
+                  '(i n)))
+    (ck! "nothing spilled: the vector file is thirty-one deep"
+         (null? (alloc-result-spills res)))))
+
+(ck! "the vector file is disjoint from every other pool on rv64"
+     (let ([v (arch-vector arch-rv64)])
+       (not (exists (lambda (x)
+                      (or (memq x (arch-value arch-rv64))
+                          (memq x (arch-raw arch-rv64))
+                          (memq x (arch-float arch-rv64))))
+                    v))))
+
 (set! checks (+ checks 1))
 (let ([caught #f])
   (guard (e (#t (set! caught #t))) (check-assignment! arch-rv64 'tagged 't0))

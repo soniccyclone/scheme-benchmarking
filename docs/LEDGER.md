@@ -7464,3 +7464,56 @@ RVA23 today. What is missing is everything between the IR and it.
 Decomposed into children rather than left as one bead, because "add a storage
 class" and "decide where vsetvli goes" fail in different ways and the first is a
 prerequisite for testing the second.
+
+## D170 — a vector storage class for RV64, and the one place it refuses
+
+First child of D169's decomposition. RV64 now has a fourth storage class,
+`raw-f64x2`, and a register file for it.
+
+```
+vectors-for rv64  ->  v1 .. v31        (31 registers)
+vectors-for x86-64 -> ()               (the asymmetry, on purpose)
+reg-class          ->  'vector
+assignment-ok?     ->  raw-f64x2 reaches 'vector and nothing else
+pool-for           ->  arch-vector
+```
+
+Added the way `mask` was: an eighth field on `arch` derived from the target NAME
+inside `make-arch`, so the narrowing constructor in callconv.ss and every other
+call site keep working untouched. x86-64 gets `'()` rather than its xmm registers
+because there a packed pair IS a `raw-f64` -- D169.
+
+**v0 is absent and that is not an off-by-one.** RVV names the mask register as v0
+in the encoding itself rather than selecting it, so any masked operation destroys
+whatever a value allocated there held. `masks-for` returns `'()` for rv64 for the
+same reason: on this target the mask is a fixed register, not a pool.
+
+Ten checks, and they discriminate: pointing `pool-for` at the float pool instead
+fails with `a packed pair outside the vector file loses its second lane`. That
+message is its own case rather than the catch-all, because it is not a collector
+question -- a pair in a 64-bit f register loses a lane and computes a wrong
+number, corrupting nothing.
+
+**The spiller refuses rather than miscompiling.** Its dispatch is `raw-f64` or
+everything else, so a `raw-f64x2` took the integer path and would have emitted
+`sd v3, sp, off` -- a 64-bit integer store naming a vector register, which
+assembles into something that is not the value. Three things are missing:
+`vs1r.v`/`vl1r.v` (the whole-register forms, right precisely because they do not
+consult `vtype` -- a spill path that depends on CSR state breaks when the state
+changes); an address register, since those forms take `(rs1)` with no
+displacement while every other spill here folds it in; and a 16-byte frame slot,
+where the frame hands out 8.
+
+It errors with all three named. This matters more than it looks: 31 registers
+means the silent version fires only under real pressure, so the wrong answer
+would first appear when a program got big enough -- the worst time to find it and
+the hardest to attribute.
+
+**What is NOT established: the refusal has never been watched failing.** D133 and
+D146 say an assertion is not finished until it has, and this one cannot be reached
+today -- `slp-program` is gated off for rv64 and no `p2*` selection rules exist
+there, so no `raw-f64x2` vreg reaches the spiller through any public path. The
+debt is recorded on qaq.13.2, which creates the first such program. Until then
+this is a guard believed to work rather than one known to.
+
+Suite 8627 / 0 / 63.
