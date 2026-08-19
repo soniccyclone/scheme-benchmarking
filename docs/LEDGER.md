@@ -7068,3 +7068,49 @@ across blocks rather than within one -- unblocks all three. None of them is wort
 building it alone, and D120 already measured all three payoffs as instructions
 that do not convert to time on either benchmark. Recorded so that if the analysis
 is ever built for a reason that DOES pay, these three come along free.
+
+## D162 — where the clobber analysis actually degrades, and it is not where D95 said
+
+qaq.23 wants callee-saved registers. D95 justified it with the fannkuch flip
+counter spilling across a call; D102 refuted that (it crosses in r13, and the
+analysis already proves r11/r13/r14 survive). The bead stayed open on a claim
+nobody had tested: that the analysis degrades for "unknown callees and deep call
+graphs". It does degrade, in one named place, and it is measurable.
+
+`callee-first` orders functions so a caller is allocated knowing what its callees
+write. When no candidate has all its callees resolved, the remainder is a CYCLE
+and every member is emitted with NO clobber information -- so every call to one
+assumes the entire register file is destroyed. Instrumenting that branch:
+
+```
+fannkuch   6 of 14 unresolved: (main.entry1 join.133 join.129 next step main)
+nbody      never fires -- no cycle at all
+```
+
+The static consequence, counting rsp-relative moves per function:
+
+```
+next.loop   12
+step.loop    9
+count-flips.loop   0
+```
+
+All the spill traffic in the program is in two functions, and both are cycle
+members. The hottest block has none, which is D102 holding. So the cost of the
+missing clobber information is 21 spill/reload instructions, concentrated
+exactly where the analysis gave up.
+
+**The silence for nbody is real, and was checked.** D160's rule is that a zero
+gets validated before it is reported. Here the instrument printed nothing at all
+for nbody, which is the shape of a probe that never ran. It is not: `callee-first`
+opens with `(if (null? left) (reverse out) ...)`, so the normal exit returns
+before reaching the cycle branch, and only a genuine cycle prints. Confirmed by
+reading the code that produces the silence rather than by trusting it.
+
+**What this does not establish.** 21 instructions is a static count, and D120 is
+emphatic that instruction counts do not convert to time on this benchmark. A
+spill is a load and a store, not an ALU op, so the D89/D111 result does not
+transfer automatically -- but neither does the opposite. Whether `next.loop` is
+hot enough for its 12 spills to matter is unmeasured; `MODE=record
+harness/vm-perf.sh` on fannkuch answers it, and qaq.23 should not be scheduled
+before it does.
