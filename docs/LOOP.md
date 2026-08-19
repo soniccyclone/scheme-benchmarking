@@ -288,6 +288,30 @@ needs rewording rather than an instrument.
 
 ---
 
+## Before STARTING anything: re-read the bead against the tree
+
+A bead's claims are measurements, and measurements go stale three ways here --
+the program changes, the machine drifts (D127), and the instrument was wrong
+(D124, D126). A bead written before the work around it will contain numbers that
+no longer hold and instructions that no longer apply.
+
+Two found in one evening, both by acting on the bead rather than reviewing it:
+
+- **`qaq.13` prescribed finishing a gap that had been closed three days earlier**
+  -- "the RV64 target does not yet run nbody at all" -- fixed by D81, asserted in
+  the suite, and still the first half of the bead's plan (D142).
+- **`qaq.21` counted 130 register-to-register moves**; there are 118, because a
+  pass added since removed the duplicate functions carrying twelve of them
+  (D143).
+
+Neither was wrong when written. So: **before starting a bead, check its numbers
+against a fresh build and its plan against what has landed since.** It costs one
+compile. Acting on a stale prescription costs a session -- D123's, D124's and
+D125's prescriptions were each withdrawn by the next entry, and each had been
+written into a bead where the next reader would have followed it.
+
+---
+
 ## Before closing ANYTHING
 
 ```
