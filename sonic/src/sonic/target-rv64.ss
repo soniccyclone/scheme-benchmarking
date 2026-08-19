@@ -614,8 +614,36 @@
         (error 'rv64-selector "a packed pair op expects two sources" mn srcs))
       `(,@(setvl2) (,mn ,dst ,(car srcs) ,(cadr srcs)))))
 
+  ;; `vle64.v vd, (rs1)` and `vse64.v vs3, (rs1)` take a base register and NO
+  ;; displacement -- unlike every scalar access on this target, which folds the
+  ;; tag adjustment and the element offset into a 12-bit immediate. So both have
+  ;; to be added INTO the address register first, and the packed memory ops cost
+  ;; one instruction more than the scalar ones for that reason alone.
+  (define (packed-address who t d base idx)
+    (append (address-into t base idx 'raw-f64)
+            (let ((n (offset-disp who d)))
+              (if (zero? n) '() `((addi ,t ,t ,n))))))
+
   (define rv64-rules
     (list
+     (cons 'p2load
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 3)
+               (error 'rv64-selector
+                      "p2load expects (p2load dst sc d base index)" srcs))
+             (let ((t (rv64-addr-scratch)))
+               `(,@(packed-address 'rv64-selector t (car srcs) (cadr srcs) (caddr srcs))
+                 ,@(setvl2)
+                 (vle64.v ,dst ,t)))))
+     (cons 'p2store
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 4)
+               (error 'rv64-selector
+                      "p2store expects (p2store <unused> sc d base index value)" srcs))
+             (let ((t (rv64-addr-scratch)))
+               `(,@(packed-address 'rv64-selector t (car srcs) (cadr srcs) (caddr srcs))
+                 ,@(setvl2)
+                 (vse64.v ,(cadddr srcs) ,t)))))
      (cons 'p2add (packed2 'vfadd.vv))
      (cons 'p2sub (packed2 'vfsub.vv))
      (cons 'p2mul (packed2 'vfmul.vv))

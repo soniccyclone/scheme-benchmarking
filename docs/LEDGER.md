@@ -7762,3 +7762,54 @@ and the differential oracle against x86-64 runs. That oracle is the whole
 argument -- a wrong `vl` or a reversed `vfsub` produces a wrong NUMBER, not a
 crash, so until nbody on RV64 agrees with x86-64 bit-for-bit as it does today
 (D81), none of D172, D174 or this entry is evidence of anything but shape.
+
+## D176 — the RV64 packed path is blocked by the ISA floor, not by missing rules
+
+Removing driver.ss's rv64 slp gate to see what happened produced two errors, in
+order, and the second one is the answer to qaq.13.2.
+
+**First: `p2store` had no rule.** slp emits NINE two-lane operations, not the
+seven a grep for `p2` finds -- `p2load` and `p2store` are built by `width-name`,
+which constructs the symbol from the lane count at run time, so they appear in no
+source text to search for. Added both. They cost one instruction more than their
+scalar counterparts because `vle64.v vd, (rs1)` takes no displacement, while every
+scalar access on this target folds the tag adjustment and the element offset into
+a 12-bit immediate; on the vector side both have to be added into the address
+register first.
+
+Worth recording that the three- and four-lane paths are not a gap here:
+`three-lane-packs?` is hard-coded `#f` in slp.ss and `four-lane-packing?` is a
+parameter defaulting `#f`, so two lanes is all this pass emits today. That matters
+because a three-lane pack on RVV would need `LMUL=2`, and LMUL greater than one
+allocates REGISTER GROUPS with an alignment rule -- `v2, v4, ...` -- which this
+allocator does not model. The cheap path and the expensive one are further apart
+on RVV than they are on x86-64.
+
+**Second, and this is the real finding:**
+
+```
+Exception in encode-instr: this instruction is above the rv64gc floor and a
+rv64gc part cannot execute it; the base selector must not emit it
+  ((vsetivli V) (vsetivli zero 2 (e64 m1 ta ma)))
+```
+
+Every rule works. The selection is right, the encodings are byte-verified, the
+storage class and convention are in place -- and the compiler refuses the result
+on purpose, because the baseline encoder guarantees that what it emits runs on an
+rv64gc part and V is above that floor. The smoke gate asserts the same thing from
+the other side: *"SonicScheme emits RV64 binutils reads back, nothing above
+rv64gc"*, and it passes today.
+
+**So the remaining question is not an implementation task, it is a capability
+decision, and it is not mine to make.** Turning packed arithmetic on for RV64
+changes what hardware our output runs on. That is the same class of decision as
+D59, which stopped requiring AVX-512 of every binary, and driver.ss's own gate
+comment predicted it: *"When RV64 grows one -- RVV, or pairs -- this becomes a
+capability question rather than a target name."* It is now exactly that question.
+
+The gate is restored and the rules are left in place, selectable and tested but
+unreachable, which is the honest state: nothing regressed, nothing is claimed to
+work end to end, and the work that remains is a decision plus the routing that
+follows from it. Suite 8644 / 0 / 63.
+
+Filed for Nathan as qaq.13.4 with the three options and what each costs.
