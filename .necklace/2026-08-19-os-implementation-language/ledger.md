@@ -149,3 +149,39 @@ the systems work as extending an existing vocabulary rather than inventing one.
   object-scoped matches how driver code is usually written. **For Nathan.**
 - Whether the GC is permitted to run in kernel context at all, which decides
   whether the collector needs a pause bound or simply a prohibition.
+
+## Probes 5-7 — which pass folds the volatile read, and one wrong answer on the way
+
+The CUJ needs to name the passes that must honour `volatile`, so "CSE probably"
+is not good enough.
+
+**Probe 5** counted loads at each stage: 4 at `lmach/pre-cse`, 4 after addrfold,
+2 after DCE. Read alone that says DCE folds them, which is wrong.
+
+**Probe 6** ran `cse-program` on the captured pre-CSE program and printed the
+block before and after. It reported the `add` already reading one value BEFORE
+CSE, so I concluded the fold was upstream of Lmach entirely.
+
+**That was an instrument error.** `cse-program` mutates its input, and I printed
+both snapshots after calling it -- so "BEFORE" was showing the post-CSE state.
+Same species as D126 in docs/LEDGER.md, and the same lesson: a snapshot taken
+after the transform is not a snapshot of the input.
+
+**Probe 7** avoids it by observing the live pipeline at each stage rather than
+re-running a pass:
+
+```
+lmach/pre-cse   add ... t.5 t.7     two distinct values
+lmach           add ... t.5 t.5     one value
+lmach/dce       (the dead load is gone)
+```
+
+So the sequence is: **CSE rewrites the second use to the first value; DCE then
+reaps the load nobody reads.** Both have to honour volatile, and for different
+reasons -- CSE must not rewrite the use, and DCE must not delete a volatile load
+even when its result is unused, because a read whose value is discarded is how
+you clear an interrupt on real hardware.
+
+`addrfold` and the peephole did not participate here, but both move or rewrite
+memory operands and neither was exercised by this one shape. The CUJ names all
+four and expects the tests to tell us which actually needed it.
