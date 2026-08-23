@@ -301,3 +301,52 @@ decide this in advance.
 ### What is left for Nathan
 
 Nothing in spec.md. Every open question is struck.
+
+## Bead 2xc — the implementation corrected the design, and I reverted rather than shipped it
+
+The CUJ said `volatile` is a control on the memory primitives, in `check-names`
+beside `fp-contract`. I implemented that, followed it through five rounds of
+consequences, and the codebase refused it in a way worth recording.
+
+**What was built and worked.** `volatile` added to `check-names` and to the four
+memory primitives; tests written first and red; both selectors given a rule
+emitting nothing, since it is a compile-time prohibition rather than a runtime
+check. Adding the control immediately tripped `x86-64-selector: no rule for this
+check`, which is D5's "a control is refused rather than dropped" catching it at
+the first opportunity -- the mechanism working exactly as designed.
+
+**Where it broke, and it is not a detail.** `default-controls` gives every control
+the value `checked`, and `checked` is the CONSERVATIVE value of every control in
+this compiler: emit the bounds check, do not contract, do not move the access. For
+volatile, conservative means "treat as hardware", so the honest default makes
+every vector access in every program unoptimisable.
+
+Defaulting it to `unchecked` instead -- which is what I did -- makes it the only
+control that is off by default, and that broke things in five separate places:
+
+- `veclegal`'s `branch-checks`, which already excludes `fp-contract` by name
+- `elide-unchecked`, which counts policy suppressions and began counting every
+  memory access in the program
+- `lower-stats-unchecked`, the same, one layer down
+- policy-test's "a program with no policy form keeps every check"
+- and every fixture pinning a primcall's exact control list, across four files
+
+**The fifth one is the argument.** policy-test asserts *"including fp-contract on
+every flonum operation, per D24"* -- so `fp-contract`, the entry I was modelling
+on, defaults to `checked` like everything else. The convention is uniform and I
+was proposing the one exception to it.
+
+Five tests independently saying "check-names means checks" is the codebase
+answering the design question. `declare-distinct` is the precedent that fits: the
+comment in lang.ss records that it needed *its own production* rather than a slot
+in the existing vocabulary, for exactly this reason -- it asserts something about
+an object rather than suppressing a check.
+
+**So volatile needs its own carrier, not a slot in `check-names`.** That is a
+larger change than the CUJ assumed and it is the right one. Reverted to green
+(8653 checks, 0 failures) rather than shipping a half-integrated design that
+would have needed a sixth exclusion in the next counter nobody has found yet.
+
+The probes behind the design still stand: the fold is real (probe 1), CSE rewrites
+and DCE reaps (probe 7), and object-scoped is required because a region cannot
+express a driver copying a register into RAM (probe 8). Only the carrier changes.
