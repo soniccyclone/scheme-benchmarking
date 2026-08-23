@@ -28,6 +28,8 @@ Test column names the file and the claim rather than a camel-case function.
 
 **Done when:** the tests above pass. All must be red when created.
 
+**Beads:** scheme-benchmarking-4f0
+
 ---
 
 ## CUJ-02: Driver author expresses volatility at all
@@ -49,6 +51,8 @@ Test column names the file and the claim rather than a camel-case function.
 | `expand-test.ss`: "a volatile setting on a primitive that has no such control is refused" | `volatile` applied where it means nothing | expansion errors rather than silently ignoring it | D5's rule that a control is refused rather than dropped |
 
 **Done when:** the tests above pass. All must be red when created.
+
+**Beads:** scheme-benchmarking-2xc
 
 ---
 
@@ -72,6 +76,8 @@ Test column names the file and the claim rather than a camel-case function.
 
 **Done when:** the tests above pass. All must be red when created.
 
+**Beads:** scheme-benchmarking-0wr
+
 ---
 
 ## CUJ-04: Kernel author writes a program in a language that has records and exceptions
@@ -94,6 +100,8 @@ Test column names the file and the claim rather than a camel-case function.
 
 **Done when:** the tests above pass. All must be red when created.
 
+**Beads:** scheme-benchmarking-9yp
+
 ---
 
 ## CUJ-05: Kernel author proves a path allocates nothing
@@ -114,6 +122,8 @@ Test column names the file and the claim rather than a camel-case function.
 | `escape-test.ss`: "the check follows calls, not just the immediate body" | marked procedure calling an allocating one | refused | otherwise the guarantee stops at the first call |
 
 **Done when:** the tests above pass. All must be red when created.
+
+**Beads:** scheme-benchmarking-5em
 
 ---
 
@@ -138,6 +148,8 @@ Test column names the file and the claim rather than a camel-case function.
 
 **Depends on:** CUJ-05
 
+**Beads:** scheme-benchmarking-w7q
+
 ---
 
 ## CUJ-07: Kernel author boots an image on bare metal
@@ -160,6 +172,8 @@ Test column names the file and the claim rather than a camel-case function.
 
 **Done when:** the tests above pass. All must be red when created.
 
+**Beads:** scheme-benchmarking-4qp
+
 ---
 
 ## CUJ-08: Compiler maintainer sees the correctness evidence survive every addition
@@ -180,6 +194,8 @@ Test column names the file and the claim rather than a camel-case function.
 | `prims-test.ss`: "the primitive inventory is generated from the compiler, not maintained by hand" | `prim-names` plus the runtime routines | the documented surface equals the compiler's | REPL: three greps disagreed with each other and with the compiler |
 
 **Done when:** the tests above pass. All must be red when created.
+
+**Beads:** scheme-benchmarking-pcn
 
 ---
 
@@ -202,6 +218,8 @@ Test column names the file and the claim rather than a camel-case function.
 
 **Done when:** the tests above pass. All must be red when created.
 
+**Beads:** scheme-benchmarking-nw4
+
 ---
 
 ## CUJ-10: Editor user reads SonicScheme with its annotations visible
@@ -222,6 +240,8 @@ Test column names the file and the claim rather than a camel-case function.
 | `editor/emacs`: "a check-suppression control is visually distinct from a check name" | `[bounds-check unchecked]` | suppression is distinguishable at a glance | D5 made suppression an explicit permission; it should look like one |
 
 **Done when:** the tests above pass. All must be red when created.
+
+**Beads:** scheme-benchmarking-iw8
 
 ---
 
