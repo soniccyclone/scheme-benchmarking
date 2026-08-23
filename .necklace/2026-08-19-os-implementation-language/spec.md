@@ -66,8 +66,16 @@ better instructions.
 **Fix the miscompile first, as a control rather than a concept.** Add `volatile` to the memory
 primitives' control list and teach the passes that may move or delete a load — common-subexpression
 elimination, address folding, the peephole, the interval domain — to refuse when it is set. This is
-the same shape as `fp-contract` and the check suppressions, so it inherits their spelling, their
-scoping and their tests. It is first because it constrains passes that already exist and are already
+the same shape as `fp-contract` and the check suppressions, so it inherits their spelling and their
+tests.
+
+**Attach it to the object, not to a region.** `declare-distinct` is already C99's `restrict` here — a
+premise attached to names and scoped to a body — so object-scoped annotation is a mechanism this
+compiler has rather than one it needs. A region cannot express the ordinary driver case: copying a
+device register into RAM is one expression touching four memory locations, of which exactly one may
+be volatile, and the device read cannot be enclosed without its own address computation. Marking the
+object leaves the other three optimisable. Unlike `declare-distinct`, a wrong annotation here costs
+only speed: volatile removes permission and never grants it, so it cannot miscompile. It is first because it constrains passes that already exist and are already
 tested, which is the expensive kind of change, and because every driver written before it is written
 against a compiler that silently drops reads.
 
@@ -94,6 +102,5 @@ the annotation vocabulary, which is already stable.
 | Question | Why it cannot be settled by reading or running |
 | --- | --- |
 | Full `call/cc` or escape-only continuations? | Full first-class continuations interact with the calling convention, D97/D98 frame reuse and GC metadata, and cost the kernel something at every call. What the OS needs is a design intention, not a fact about the code. |
-| Is `volatile` region-scoped, like `policy`, or attached to an object, like C's `volatile T*`? | Region-scoped is far cheaper given the existing control machinery; object-scoped matches how driver code is conventionally written. The choice is about how the OS will be written, which does not exist yet. |
 | May the collector run in kernel context at all? | Decides whether the GC needs a bounded worst-case pause or a hard prohibition with allocation-free proofs on those paths. It is a policy about the OS's design, not a measurable property. |
 | Does the OS need a numeric tower, or are fixnums and flonums enough? | Bignums cost allocation on arithmetic, which conflicts with allocation-free kernel paths. Whether any kernel code needs them is a question about the OS. |

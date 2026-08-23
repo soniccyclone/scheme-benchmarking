@@ -44,14 +44,11 @@ Test column names the file and the claim rather than a camel-case function.
 | Test | Input | Assertion | Informed by |
 | --- | --- | --- | --- |
 | `lang-test.ss`: "the memory primitives declare a volatile control" | `prim-table` entries for vector and flvector access | each carries `volatile` alongside its existing controls | REPL: `prim-table` is `(name arity control...)`, e.g. `(fxquotient 2 div-check overflow-check)` |
-| `policy-test.ss`: "volatile is settable in a lexically scoped region and nests" | nested `policy` regions setting it on then off | the inner setting wins and the outer is restored on exit | `fp-contract` proves the scoping path end to end (D24) |
+| `alias-test.ss`: "accesses through a marked object are volatile and accesses through others are not" | one expression reading a marked object and writing an unmarked one | the read keeps its control, the write does not | REPL probe 8: that expression emits four memory accesses, only one of which may be volatile |
+| `alias-test.ss`: "the mark follows the object into a called procedure" | marked object passed as an argument | accesses inside the callee are volatile | `declare-distinct` runs out at the procedure boundary; this must not |
 | `expand-test.ss`: "a volatile setting on a primitive that has no such control is refused" | `volatile` applied where it means nothing | expansion errors rather than silently ignoring it | D5's rule that a control is refused rather than dropped |
 
 **Done when:** the tests above pass. All must be red when created.
-
-**Blocked:** spec.md — is volatile region-scoped like `policy`, or attached to an object like C's
-`volatile T*`? The tests above assume region-scoped; the object-scoped answer changes this CUJ and
-CUJ-01's spelling but not their assertions.
 
 ---
 
