@@ -185,3 +185,52 @@ you clear an interrupt on real hardware.
 `addrfold` and the peephole did not participate here, but both move or rewrite
 memory operands and neither was exercised by this one shape. The CUJ names all
 four and expects the tests to tell us which actually needed it.
+
+## Probe 8 — the volatile scoping question, answered rather than asked
+
+Nathan, on the spec's open questions: this one sounds answerable by more probing,
+and it was. He is right on both counts -- I listed it in a closing paragraph
+instead of asking, and necklace-spec's own rule says a question naming an existing
+mechanism is factual and gets resolved rather than handed over. `policy` and
+`declare-distinct` are both mechanisms in this tree.
+
+**What I had missed: object-scoped annotation already exists here.**
+`(declare-distinct (a b) body)` is C99's `restrict` -- a premise attached to
+NAMES, scoped to a body, flowing to the alias analysis. So the choice was never
+"invent one or the other". Both shapes are already built.
+
+**The deciding shape** is a driver copying from a device register into RAM, which
+is one expression touching two objects with different volatility
+(`repl/08-mixed-access.sps`):
+
+```
+(vector-set! buf i (vector-ref dev 0))
+
+4015c7  mov 0x600048,%rbx              dev's global cell
+4015cf  mov -0x1(%rbx),%rdx            the device read      MUST be volatile
+4015d3  mov 0x600040,%rbx              buf's global cell
+4015db  mov %rdx,-0x1(%rbx,%rcx,8)     the RAM write        must NOT be
+```
+
+Four memory accesses from one source expression. A region-scoped `volatile`
+marks all four: it would make the two compiler-internal global-cell loads
+volatile, which is exactly the global hoisting D93 measured as worth having, and
+the RAM store as well.
+
+**And no smaller region helps.** The device read cannot be enclosed without its
+own address computation, because they are the same expression. So region-scoping
+does not merely cost performance -- it CANNOT express the case, which is a
+different and stronger objection.
+
+**Answer: object-scoped, on `declare-distinct`'s template.** Mark the object;
+accesses through it are volatile and nothing else is. It reuses a mechanism that
+exists, is already understood as a programmer-supplied premise, and already
+reaches the analysis that decides what may move.
+
+One difference from `declare-distinct` worth carrying into the design: that one is
+a premise the compiler cannot check and violating it miscompiles silently.
+Volatile is the opposite -- it only ever REMOVES permission, so a wrong volatile
+annotation costs speed and cannot cost correctness. That asymmetry means it does
+not need the same care in its scoping rules.
+
+The open question is struck from spec.md and CUJ-02 is unblocked.
