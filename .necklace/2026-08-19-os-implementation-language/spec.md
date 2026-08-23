@@ -57,6 +57,12 @@ better instructions.
   nothing on RV64 for entries at a time because only one target was exercised.
 - **Nothing runs on the host.** Every Chez invocation and every emitted binary runs in the container
   (CLAUDE.md), and that predates a 31 GB OOM incident.
+- **A fixnum cannot hold a 64-bit hardware value.** 3 tag bits leave 61 value bits, so a page-table
+  entry with the NX bit set does not fit. Fixed-width integer types are required rather than
+  preferred, and a numeric tower does not substitute because bignums allocate.
+- **Every collector pause is already bounded by the nursery, and there is no major collection.**
+  `gc-reserve-ok?` refuses to begin unless old space can absorb the worst case, so a collection never
+  half-completes. The cost that is unbounded is old-space growth, not latency.
 - **The annotation mechanism already exists.** `prim-table` declares per-primitive named controls that
   ride through every pass and take values from lexically scoped `policy` regions; `fp-contract` proves
   the path end to end. New semantics should extend this rather than introduce a second mechanism.
@@ -80,9 +86,16 @@ tested, which is the expensive kind of change, and because every driver written 
 against a compiler that silently drops reads.
 
 **Grow the language in the order a kernel needs it, not in R7RS order.** Records, bit manipulation and
-fixed-width integers come before continuations, because a page table needs the first three and no
-kernel needs `call/cc` to boot. Each addition carries its own differential test against the existing
-oracle.
+fixed-width integers come first, because a page-table entry needs all three and does not fit in a
+fixnum at all. Each addition carries its own differential test against the existing oracle.
+
+**Continuations are not a choice between full and escape-only.** `gcmeta` is PC-total — every byte
+offset in every function has a stack map — which is precisely what capturing a stack requires, and
+stronger than the safepoint tables most implementations settle for. Full capture is therefore
+implementable on machinery that exists and costs nothing at call sites; what it costs is an
+allocation at capture. Escape continuations allocate nothing and work everywhere, including interrupt
+handlers. The allocation-free mark decides which is available where, so this needs no global
+decision.
 
 **Separate the freestanding target from the hosted one.** The Linux-syscall runtime keeps working and
 keeps being what the benchmarks measure; a second runtime provides what a kernel provides. Both ISAs
@@ -96,11 +109,3 @@ those conclusions transfer, and worst-case GC pause matters more than throughput
 
 **Editor support last and small.** It is genuinely independent of everything above, and it needs only
 the annotation vocabulary, which is already stable.
-
-## Open questions
-
-| Question | Why it cannot be settled by reading or running |
-| --- | --- |
-| Full `call/cc` or escape-only continuations? | Full first-class continuations interact with the calling convention, D97/D98 frame reuse and GC metadata, and cost the kernel something at every call. What the OS needs is a design intention, not a fact about the code. |
-| May the collector run in kernel context at all? | Decides whether the GC needs a bounded worst-case pause or a hard prohibition with allocation-free proofs on those paths. It is a policy about the OS's design, not a measurable property. |
-| Does the OS need a numeric tower, or are fixnums and flonums enough? | Bignums cost allocation on arithmetic, which conflicts with allocation-free kernel paths. Whether any kernel code needs them is a question about the OS. |
