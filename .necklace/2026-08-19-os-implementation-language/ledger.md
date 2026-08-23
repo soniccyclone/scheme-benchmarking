@@ -234,3 +234,70 @@ annotation costs speed and cannot cost correctness. That asymmetry means it does
 not need the same care in its scoping rules.
 
 The open question is struck from spec.md and CUJ-02 is unblocked.
+
+## Probes 9-11 — the remaining three questions, answered by probing
+
+Nathan: don't ask, probe -- that is what the skill says. It does, and I had left
+three questions in the document that reading and running settle.
+
+### Probe 9 — a fixnum cannot hold a 64-bit hardware value
+
+`repl/09-fixnum-width.ss`. 3 tag bits, 61 value bits, 64 word bits.
+
+```
+range: -1152921504606846976 .. 1152921504606846975
+PTE 0xFFFFFFFFFFFFF003 fits?           #f
+48-bit phys addr 0xFFFFFFFFF000 fits?  #t
+32-bit MMIO word 0xFFFFFFFF fits?      #t
+```
+
+A 64-bit page-table entry does not fit: the NX bit is bit 63. **This settles the
+numeric-tower question by making it the wrong question.** A tower would represent
+the value, but bignums allocate, and probe 4 plus CUJ-05 make allocation-free
+paths the requirement for kernel code. Fixed-width `u64` is required and the tower
+is separate, optional, and non-blocking.
+
+### Probe 10 — the collector's pause is already bounded, and by a tunable
+
+Read off `gc.ss`'s own reservation logic rather than guessed:
+
+- `gc-worst-case` is the whole mutator-usable nursery -- a minor collection copies
+  at most that.
+- `gc-reserve-ok?` refuses to START unless old space can absorb the worst case, so
+  "there is no state in which it has half-copied the heap and run out."
+- Cheney needs no auxiliary storage; the to-space is the work queue.
+- There is no major collection. No `collect-old`, no full collection, nothing in
+  the exports. Old space grows monotonically and exhaustion surfaces as a
+  catchable condition.
+
+**So the collector may run in kernel context, and its pause is a number you
+choose** -- size the nursery to the interrupt-latency budget. The real cost is not
+latency at all: it is that old space is never reclaimed, so long-lived kernel code
+either avoids promotion or accepts monotonic growth. That is a much more useful
+thing to have found than the question I was going to ask.
+
+### Probe 11 — full call/cc costs nothing at call sites, and my spec said otherwise
+
+`gcmeta.ss` is **PC-total**: "every byte offset in every function has a defined
+answer to 'which stack slots hold tagged values here'", a step function rather
+than a safepoint table, at O(calling-convention transitions) in space.
+
+That is exactly what capturing a stack precisely needs, and it is stronger than
+what most implementations have -- capture is possible at ANY PC, not only at
+safepoints. So:
+
+- Full `call/cc` is implementable on machinery that already exists.
+- It costs **nothing at call sites**. My spec.md claim that it "costs the kernel
+  something at every call" was wrong; capture is O(depth) at capture time.
+- Capture allocates, being a copy of the stack, so it is unavailable exactly where
+  CUJ-05's allocation-free mark applies.
+
+**So it was never a choice between full and escape-only.** Escape continuations
+need no allocation and work everywhere including interrupt handlers; full capture
+works wherever allocation is allowed. The allocation-free mark already decides
+which is available where, so the OS does not choose globally and nobody has to
+decide this in advance.
+
+### What is left for Nathan
+
+Nothing in spec.md. Every open question is struck.
