@@ -9135,3 +9135,66 @@ to pursue it. The largest open thing in this tree is not in the tracker at all: 
 was a claim about one machine. That is fixed and the loop now checks, but the
 lesson generalises past this project -- **an autonomous loop that reads only the
 tracker it maintains is grading its own work.**
+
+## D207 — the kernel fixture, and the two gaps nobody had written down
+
+`bench/kernel/` now holds four programs a kernel author would actually write: a
+16550 UART driver for qemu `virt`, an Sv39 page-table walk, an SPSC ring buffer,
+and the two interrupt shapes optimisation gets wrong. None of them compiles. That
+is the deliverable — the review Fable 5 wrote (`.necklace/2026-08-19-os-
+implementation-language/review.md`, item 3) argued that every "what does a kernel
+need" judgement in this project so far has been an opinion, and that the cure is a
+program whose compile errors order the queue.
+
+**Ask the compiler the whole question, not the first one.** A plain compile run
+reports one complaint per file, whichever the parser reaches first, and that is
+traversal order rather than a ranking — `01-uart.sps` reported `bytevector` and
+said nothing about the four `mmio-*` names beside it. `missing.ss` feeds each
+complaint back as an extern and asks again until the compiler stops finding new
+names. Same trick as CUJ-08's "generate the inventory from the compiler", applied
+to the gap instead of the surface:
+
+```
+01-uart.sps     wants  bytevector bytevector-length bytevector-u8-ref
+                       mmio-u8-ref mmio-u8-set! u64and u64= +
+02-pagewalk.sps wants  mmio-u64-ref u64+ u64and u64ior u64shl u64shr u64=
+03-ring.sps     wants  (nothing -- define-record-type swallows the file)
+04-irq.sps      wants  mmio-u8-ref u64and u64= +
+```
+
+The `u64` and `mmio` families are what `0wr.1` and `0wr.2` were already filed for,
+and the fixture confirms the split: `01` and `04` need only byte-width MMIO, `02`
+needs the full 64-bit arithmetic. **Two names in that list were in no bead and no
+CUJ.**
+
+**There is no generic `+`.** Only `fx+`. `(define uart-thr (+ uart-base 0))` is
+how anybody writes a device register offset, and it stops with `undefined label
+[+]` — past parse, in code generation, because `+` resolved to an extern that has
+no definition. Small, and it is in every driver ever written.
+
+**`display` accepts `raw-f64` and nothing else, and this is load-bearing.**
+`repr.ss:230` fixes it, and the refusal is explicit and correct on its own terms:
+"a tagged value cannot be untagged into a machine register, so the program is
+refused rather than compiled into a call that reads a stale register." Both `02`
+and `04` die there, on a `raw-word` argument and a tagged one respectively.
+
+That is a real ordering constraint that the CUJ document does not contain. **The
+differential test for `u64` cannot be written until a `u64` can be printed.**
+`fx->fl` does not substitute: a double carries 53 significand bits and a page-table
+entry needs 64, so exactly the values that motivate the type are the ones the
+conversion destroys. So `0wr.2`'s acceptance — "shift and mask agree with the
+model at and past the 61-bit boundary" — is unreachable through the existing
+oracle, and printing a `u64` is a prerequisite rather than a nicety.
+
+**`03-ring.sps` reports no unbound variable at all**, which reads as a surprise
+until you see why: with `define-record-type` unknown, the form parses as an
+application, and the parser rejects the *next* definition for following a
+top-level expression. The error names `ring-new` and the cause is four lines
+above it. Worth knowing before somebody debugs the wrong line.
+
+**What the fixture does not test yet.** Nothing here runs. These are compile
+refusals, and a program that compiles is not a program that boots. The RV64
+bare-metal bead (`4qp.1`) is what turns `01-uart.sps` into evidence, and it has a
+confirmed blocker of its own: the container has `qemu-system-x86_64` and
+`qemu-riscv64` but not `qemu-system-riscv64`. `Dockerfile:159` installs
+`qemu-system-x86`; riscv64 system emulation is in `qemu-system-misc`.
