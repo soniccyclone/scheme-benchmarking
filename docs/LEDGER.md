@@ -9270,3 +9270,58 @@ gone from every wants list in `bench/kernel/SPEC.md`. What remains is three grou
 and both of D207's unfiled gaps.
 
 Suite: 8666 checks, 0 failures, 63 suites. Smoke gate green.
+
+## D209 — the fma run, and the ns/step column was measured on a machine that is gone
+
+Nathan asked what it costs to run the `sonic-fma` comparison now rather than
+later. Sizing it answered a different question first: **one rep of two configs
+takes 3.1 seconds, so 40 reps of four configs is 33 seconds.** The reason nobody
+had run it was never cost. It is the cheapest open measurement in the tree.
+
+**Run it, three times, 40 reps each, baseline named and checked against the row
+marked `(baseline)` per D69/D70.**
+
+| baseline sonic | ns/step | ratio | verdict |
+| --- | --- | --- | --- |
+| sonic | 38.06 | (baseline) | |
+| sonic-fma | 36.79 | 0.9666, CI [0.9038, 1.0005] | **no detected difference** |
+| c-native | 34.65 | 0.9106, CI [0.8801, 0.9990] | real |
+
+**FMA IS NOT DEMONSTRATED, and the near miss is the interesting part.** The upper
+bound is 1.0005. At 40 reps the interval contains 1.0 by five ten-thousandths, so
+the honest reading is a suggested ~3.3% that this instrument cannot resolve. Two
+things say the same: across three 40-rep runs `sonic-fma` measured 36.24, 37.29
+and 36.79 — a 2.9% spread between runs, against an effect of 3.3%. **The
+between-run variation is the same size as the thing being measured.** D89's rule
+about 15 reps not being enough applies again one level up: 40 is not enough for
+this comparison either.
+
+A single rep, which is what a person reaches for when sizing, said 57.66 against
+38.96 — a 32% win. It is noise, and it is noise in the flattering direction.
+
+**THE LEDGER'S ns/step COLUMN IS FROM A MACHINE THAT NO LONGER EXISTS.** The table
+in `docs/LOOP.md` reads sonic 65.03, c-scalar 62.77, c-native 56.88. Measured here
+today: 38.06, 36.78, 34.65. Everything is about 1.7x faster, because those numbers
+were taken under WSL2 and this is the native Ubuntu host.
+
+The ratios survive the move and the absolute numbers do not:
+
+| | old host | this host |
+| --- | --- | --- |
+| sonic vs c-scalar | 1.0361 | 1.0426, CI [0.9746, 1.0841] |
+| sonic vs c-native | 1.143 | 1.098, CI over c-native [0.8801, 0.9990] |
+| c-native vs c-scalar | 1.104 | 1.087 |
+
+Three independent ratios agreeing across a host change is better evidence for
+"parity with scalar C, roughly 1.1x behind `-march=native`" than either machine's
+numbers alone. It is also the exact shape of citation error D164 recorded:
+**quoting a ns/step figure from this ledger is quoting a different computer.**
+
+**What this does not settle.** Whether FMA is worth granting is not a
+speed question that 40 reps failed to answer; it is D24's question, and the answer
+does not change. `fp-contract` defaults off because a fused multiply-add rounds
+once where the pair rounds twice, so granting it globally retires the eleven-way
+bit-exact oracle. Buying an unresolvable 3.3% on a benchmark the project has
+just decided is the wrong workload, with the strongest correctness evidence in the
+tree as the price, is not a trade worth making. It stays a per-scope permission,
+which is what it was designed to be.

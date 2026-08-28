@@ -91,6 +91,11 @@ came from deleting a transformation.**
 
 ---
 
+**THE ns/step NUMBERS BELOW ARE FROM THE OLD WSL2 HOST. The ratios transfer; the
+absolute figures do not** — re-measured on this machine 2026-08-28 (D209), sonic
+is 38.06 ns/step, not 65.03, and every config moved with it by about 1.7x. Quote
+a ratio from this table, never a ns/step.
+
 Slope of N=1,000,000 to 2,000,000, **40 reps**, bootstrap CI, baseline sonic:
 
 | config | ns/step | ratio vs sonic | verdict |
@@ -140,6 +145,14 @@ for spills, not width. What it has and stock sonic has none of is 81 fused
 multiply-adds. `contract.ss` can produce them and is wired in; `fp-contract` is
 a permission defaulting to OFF (D24) that the benchmark never granted, while
 gcc -O3 takes `-ffp-contract=fast` by default. See the `sonic-fma` configuration.
+
+**MEASURED 2026-08-28 AND IT IS NOT DEMONSTRATED (D209).** 40 reps, baseline
+sonic: ratio 0.9666, CI [0.9038, **1.0005**]. The interval contains 1.0 by five
+ten-thousandths. Across three such runs sonic-fma gave 36.24, 37.29 and 36.79 —
+a between-run spread as large as the effect. Do not cite a number for FMA; cite
+that 40 reps could not resolve one. The decision is D24's anyway: granting it
+globally retires the bit-exact oracle, for an unresolvable few percent on a
+benchmark this project has decided is the wrong workload.
 
 That is not idle advice: raising the unroller's growth budget was tried and
 measured, unrolls hard (902 instructions to 1734, packed functions 5 to 17), and
