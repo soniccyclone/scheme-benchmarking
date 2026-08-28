@@ -350,3 +350,29 @@ would have needed a sixth exclusion in the next counter nobody has found yet.
 The probes behind the design still stand: the fold is real (probe 1), CSE rewrites
 and DCE reaps (probe 7), and object-scoped is required because a region cannot
 express a driver copying a register into RAM (probe 8). Only the carrier changes.
+
+## Review (Fable 5, 2026-08-28) — the plan is solving one fictional problem and sequencing the rest slowly
+
+Nathan asked for a read of the whole thing with an eye to speed. This is that read; the
+proposals are in `review.md` beside this file so the next agent has them in one place.
+
+**Volatile is the wrong problem.** Probe 8's example reads `(vector-ref dev 0)` where
+`dev` is a GC'd vector with a length header. No device register is a Scheme vector. Once
+raw-address accessors exist (CUJ-03), volatile is a second primitive family on the same
+encoding, and the pass changes are two list entries: `dce.ss` keeps anything not in
+`pure-ops` (line 78), and `cse.ss` flushes its memory table on `clobber-ops` (line 229).
+No carrier, no alias flow, nothing for a fifth counter to exclude. Linux's `readl`/`writel`,
+Rust's `read_volatile` and Zig all do it this way; object-scoped C `volatile` is the outlier
+and the kernel stopped using it in 2006 (Documentation/process/volatile-considered-harmful).
+The five-place refusal in 2xc was the codebase saying the annotation was the wrong shape.
+
+**u64 is raw-f64 with another register file.** `repr.ss:18` already has `raw-word`; the
+flonum path proves unboxed-with-boxed-fallback end to end; `lower.ss:48` maps `fx+ -> add`
+by table and the bit ops are the same row shape.
+
+**The heap is already freestanding.** `runtime.ss:85`: it is `.bss`. Freestanding is eight
+`syscall`/`ecall` sites behind a hook plus a `_start` that sets `sp`.
+
+**Confirmed, not assumed:** the container has `/usr/bin/qemu-system-x86_64` and
+`/usr/bin/qemu-riscv64`; `qemu-system-riscv64` is absent. Dockerfile line 159 installs
+`qemu-system-x86` only. `qemu-system-misc` is the Ubuntu package carrying riscv64.
