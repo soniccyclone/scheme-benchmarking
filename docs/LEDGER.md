@@ -9269,4 +9269,4 @@ comparison against it wrong.
 gone from every wants list in `bench/kernel/SPEC.md`. What remains is three groups
 and both of D207's unfiled gaps.
 
-Suite: 8663 checks, 0 failures, 63 suites. Smoke gate green.
+Suite: 8666 checks, 0 failures, 63 suites. Smoke gate green.
