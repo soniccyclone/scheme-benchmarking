@@ -82,6 +82,28 @@
       load load-at move vlen gref add-imm mul-imm ashr-imm
       cvt-f64-from-int cvt-int-from-f64))
 
+  ;; OPS THAT MAY NEVER JOIN THE LIST ABOVE, checked rather than commented.
+  ;;
+  ;; A device read's VALUE is often not what the read is for: on a 16550,
+  ;; reading the interrupt identification register is what clears the interrupt,
+  ;; and the result is discarded. Listing `mmio-load` as pure would let this
+  ;; pass delete it, and the device would then interrupt forever -- probe 5
+  ;; watched loads go from four to two right here.
+  ;;
+  ;; The list is an allowlist, so the guarantee today is that a name is ABSENT,
+  ;; and an absence is what a later change adds to without noticing. This turns
+  ;; it into a loud failure at load time instead.
+  ;; A definition rather than a bare expression because a library body takes its
+  ;; definitions first; the value is never read.
+  (define mmio-purity-checked
+    (begin
+      (for-each
+       (lambda (op)
+         (when (memq op pure-ops)
+           (error 'dce "an MMIO op is listed as pure; a device access is never removable" op)))
+       '(mmio-load mmio-store))
+      #t))
+
   ;; Operand vregs of one instruction. The DESTINATION is not an operand: that
   ;; is the whole point -- a definition whose destination is used nowhere is
   ;; what this pass removes, so counting it here would make every instruction

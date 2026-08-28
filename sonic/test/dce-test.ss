@@ -160,6 +160,40 @@
   (unless (> (dce-stats-removed st) 0)
     (display "       removed=") (display (dce-stats-removed st)) (newline)))
 
+(display "\n-- a device read is not dead, however unused its value --\n")
+
+;; Reading a 16550's interrupt identification register is what CLEARS the
+;; interrupt; the value is discarded and the READ is the point. Probe 5 watched
+;; loads go from four to two at this pass, which for a driver is a device that
+;; interrupts forever.
+;;
+;; `pure-ops` is an ALLOWLIST and `mmio-load` is deliberately absent from it, so
+;; `defines` returns #f and nothing here can remove the instruction. That is
+;; correctness by omission, which is exactly the kind of thing a later change
+;; undoes without noticing -- hence this test and the assertion in dce.ss.
+(let-values (((out st) (run (one-block '((const addr raw-word 268435456)
+                                         (mmio-load ignored raw-word addr)
+                                         (const live raw-word 1))
+                                       '(ret live)))))
+  (ck! "a device read whose result is unused SURVIVES"
+       (has-op? out 'entry 'mmio-load))
+  (ck! "and an ordinary load in the same position does not"
+       (let-values (((o2 s2) (run (one-block '((const addr raw-word 268435456)
+                                               (const idx raw-word 0)
+                                               (load unused raw-word addr idx)
+                                               (const live raw-word 1))
+                                             '(ret live)))))
+         (not (has-op? o2 'entry 'load)))))
+
+(let-values (((out st) (run (one-block '((const addr raw-word 268435456)
+                                         (const val raw-word 65)
+                                         (mmio-store ignored raw-word addr val)
+                                         (const live raw-word 1))
+                                       '(ret live)))))
+  (ck! "a device write survives, and keeps the value it stores alive"
+       (and (has-op? out 'entry 'mmio-store)
+            (defines-vreg? out 'entry 'val))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))

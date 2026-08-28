@@ -349,6 +349,29 @@
                                         "load expects a base and an optional index" srcs)))))
                `((,(mov-for sc) ,dst ,addr)))))
 
+     ;; DEVICE MEMORY. `(mmio-load dst sc addr)` and
+     ;; `(mmio-store <unused> sc addr value)`, both one instruction.
+     ;;
+     ;; The displacement is 0, where `load` uses `heap-element-disp`. That is
+     ;; the difference that makes this a separate op rather than a flag: `addr`
+     ;; is a physical address a driver computed, with no object header in front
+     ;; of it and no pointer tag to absorb. Any offset the driver wants -- the
+     ;; 16550's LSR at base+5 -- is already folded into the address by the
+     ;; source, and a second addend here would sit between what the program says
+     ;; and what the bus sees.
+     (cons 'mmio-load
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 1)
+               (error 'x86-64-selector "mmio-load expects one address" srcs))
+             `((,(mov-for sc) ,dst ,(mem/disp (car srcs) #f 0)))))
+
+     (cons 'mmio-store
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'x86-64-selector
+                      "mmio-store expects (mmio-store <unused> sc addr value)" srcs))
+             `((,(mov-for sc) ,(mem/disp (car srcs) #f 0) ,(cadr srcs)))))
+
      ;; The same load and store at a constant ELEMENT offset. The offset is in
      ;; elements because Lmach is machine-independent; here it becomes bytes by
      ;; the element scale, and folds into the displacement the tag adjustment

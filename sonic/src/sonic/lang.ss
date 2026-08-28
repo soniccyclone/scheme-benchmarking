@@ -68,6 +68,14 @@
       (flvector-set! 3 type-check bounds-check)
       (flvector-length 1 type-check)
       (make-flvector 2 type-check)
+      ;; DEVICE MEMORY. One argument: a raw physical address. No checks apply --
+      ;; there is no header to type-check and no length to bound, which is
+      ;; precisely what distinguishes a device window from a Scheme object.
+      ;; The width is in the NAME because a different width is a different
+      ;; instruction, not a parameter; `numeric.ss` fixes the word at 64 bits,
+      ;; so `mmio-u64-*` is the one that needs no masking and is first.
+      (mmio-u64-ref 1)
+      (mmio-u64-set! 2)
       ;; general storage
       (vector-ref 2 type-check bounds-check)
       (vector-set! 3 type-check bounds-check)
@@ -208,6 +216,33 @@
       cmp-lt cmp-le cmp-eq cmp-ge cmp-gt            ; integer comparison
       fcmp-lt fcmp-le fcmp-eq fcmp-ge fcmp-gt       ; f64 comparison
       load store                                    ; memory, with a scale
+      ;; DEVICE MEMORY, and it is a separate op rather than a flag on `load`
+      ;; for the reason `declare-distinct` needed its own production: it says
+      ;; something different, and every pass that must respect it decides by
+      ;; matching on the op it already matches on.
+      ;;
+      ;;   (mmio-load  dst sc addr)        reads the word at raw address `addr`
+      ;;   (mmio-store <unused> sc addr v) writes `v` there
+      ;;
+      ;; No header displacement, no scale, no bounds: `addr` is a physical
+      ;; address a driver computed, not a tagged pointer into the heap. That is
+      ;; also why an ordinary `load` cannot serve with an annotation -- it adds
+      ;; `heap-element-disp` to its base unconditionally.
+      ;;
+      ;; What the separate name buys, in the passes that already exist:
+      ;;   dce.ss     `pure-ops` is an allowlist; absence makes the read
+      ;;              unremovable, which is what clearing an interrupt by
+      ;;              reading a register requires
+      ;;   cse.ss     absence from `memory-ops` stops two reads of one address
+      ;;              folding; presence in `clobber-ops` stops a device read
+      ;;              being reordered against heap traffic it may have caused
+      ;;   addrfold,  match by op name, so neither participates
+      ;;   peephole
+      ;;
+      ;; That is the whole of `volatile`. It needs no control, no policy scope
+      ;; and no alias analysis, which is the arrangement Linux (readl/writel)
+      ;; and Rust (read_volatile) both settled on. See D207.
+      mmio-load mmio-store
       move                                          ; data movement
       ;; int<->float conversion. fl->fx and fx->fl were in the primitive table
       ;; with no mach op to select from, so fcvt.d.l was encodable and

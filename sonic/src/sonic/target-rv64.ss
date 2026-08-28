@@ -359,6 +359,23 @@
               (let ((n (offset-disp 'rv64-select d)))
                 (if (float? sc) `((fsd ,val ,t ,n)) `((sd ,val ,t ,n)))))))
 
+  ;; DEVICE MEMORY. One instruction each, and simpler than the heap forms
+  ;; because there is nothing to arrange: `addr` is already the address. No
+  ;; `address-into` (no index to scale), no `heap-element-disp` (no header to
+  ;; step over) and no float case (a device register is a machine word).
+  ;;
+  ;; A displacement of 0 is deliberate. Every offset a driver wants is a
+  ;; constant it folded into the address itself -- `(+ uart-base 5)` -- and
+  ;; letting an offset ride here would put a second, invisible addend between
+  ;; what the source says and what the bus sees.
+  (define (r:mmio-load dst sc srcs)
+    (arity-check! 'rv64-select 1 srcs)
+    `((ld ,dst ,(car srcs) 0)))
+
+  (define (r:mmio-store dst sc srcs)
+    (arity-check! 'rv64-select 2 srcs)
+    `((sd ,(cadr srcs) ,(car srcs) 0)))
+
   ;; Adding a constant. RV64 spells it directly and three-address, so this is
   ;; the one selection rule in this file that is a single instruction with
   ;; nothing to arrange around it.
@@ -718,6 +735,8 @@
      (cons 'ashr-imm r:ashr-imm)
      (cons 'load-at  r:load-at)
      (cons 'store-at r:store-at)
+     (cons 'mmio-load  r:mmio-load)
+     (cons 'mmio-store r:mmio-store)
      (cons 'add-imm  r:add-imm)
      (cons 'mul-imm  r:mul-imm)
      (cons 'move   r:move)

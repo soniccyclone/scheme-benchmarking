@@ -150,6 +150,52 @@
   (ck! "a gset does NOT invalidate a heap read"
        (equal? (last-operands out 'entry) '(a a))))
 
+(display "\n-- device reads, which are never the same value twice --\n")
+
+;; MMIO IS WHY `memory-ops` IS AN ALLOWLIST. A device register read is not a
+;; function of its address: the second read of a 16550's receive buffer is the
+;; next byte in the FIFO, and reading the interrupt identification register is
+;; what clears the interrupt. `mmio-load` is therefore never entered in the
+;; availability table, so it can neither be folded onto nor folded away, and
+;; there is nothing to add to this pass to get that -- `dest-of` already refuses
+;; a name it does not know.
+;;
+;; This replaces the `volatile` control the CUJ document originally asked for.
+;; The guarantee comes from the op being a different op, not from an annotation
+;; riding on the same one; see docs/LEDGER.md D207 and the review in
+;; .necklace/2026-08-19-os-implementation-language/review.md.
+(let-values (((out st) (run (block '((mmio-load a raw-word p)
+                                     (mmio-load b raw-word p)
+                                     (add use raw-word a b))))))
+  (ck! "two device reads of one address are NOT folded"
+       (equal? (last-operands out 'entry) '(a b))))
+
+;; The mirror of it, and the reason the previous assertion is not enough on its
+;; own: an ordinary load of the same shape MUST still fold, or this was fixed by
+;; disabling the pass.
+(let-values (((out st) (run (block '((load a raw-word p k)
+                                     (load b raw-word p k)
+                                     (add use raw-word a b))))))
+  (ck! "an ordinary load of one address still folds"
+       (equal? (last-operands out 'entry) '(a a))))
+
+;; A device read may have arbitrary effects on RAM -- starting a DMA transfer is
+;; the ordinary case -- so it invalidates the heap table like any other write.
+;; The cost is nothing: MMIO appears in drivers and nowhere else.
+(let-values (((out st) (run (block '((load a raw-f64 p k)
+                                     (mmio-load d raw-word f)
+                                     (load b raw-f64 p k)
+                                     (add use raw-f64 a b))))))
+  (ck! "a heap read across a device READ is not folded"
+       (equal? (last-operands out 'entry) '(a b))))
+
+(let-values (((out st) (run (block '((load a raw-f64 p k)
+                                     (mmio-store ignored raw-word f i)
+                                     (load b raw-f64 p k)
+                                     (add use raw-f64 a b))))))
+  (ck! "nor across a device WRITE"
+       (equal? (last-operands out 'entry) '(a b))))
+
 ;; --- THE PASS IS NOT INERT ON A REAL PROGRAM --------------------------------
 ;;
 ;; A fixture cannot catch inertness: it tests the shape it was written for, which

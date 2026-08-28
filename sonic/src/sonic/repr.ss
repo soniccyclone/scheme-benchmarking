@@ -75,7 +75,16 @@
   ;; alone in the value class gives the collector addresses 0 and 1 to chase.
   (define fixnum-word-prims
     '(fx+ fx- fx* fxneg fxquotient fxremainder fxmodulo
-      fl->fx flvector-length vector-length))
+      fl->fx flvector-length vector-length
+      ;; A device register holds a machine word. `fixnum` is its word-kind
+      ;; because that is how it tags IF it ever has to -- and that tagging
+      ;; SHIFTS LEFT 3, so the top three bits of a 64-bit register do not
+      ;; survive a trip through a tagged join. Probe 9 measured the same
+      ;; ceiling from the other side. A device window wider than 61 bits waits
+      ;; on `u64` as a storage class of its own (bead 0wr.2); until then a
+      ;; driver that reads one must keep the value raw, which is what every
+      ;; consumer in bench/kernel does.
+      mmio-u64-ref))
 
   (define boolean-word-prims
     '(fx< fx<= fx= fx>= fx> fl< fl<= fl= fl>= fl>
@@ -130,7 +139,7 @@
 
   ;; flvector-set! and vector-set! have no useful result; they are classified
   ;; raw-word so the unused destination does not pull a value register.
-  (define effect-prims '(flvector-set! vector-set!))
+  (define effect-prims '(flvector-set! vector-set! mmio-u64-set!))
 
   ;; --- what a primitive requires of its ARGUMENTS ----------------------------
   ;;

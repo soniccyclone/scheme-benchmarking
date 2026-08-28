@@ -226,7 +226,20 @@
 
   ;; Writes storage, or may. Invalidates the memory table.
   ;; Writes the heap, or may.
-  (define clobber-ops '(store store-at call))
+  ;;
+  ;; `mmio-load` IS IN THIS LIST, and it is a read. A device read is not a
+  ;; function of its address -- starting a DMA transfer is the ordinary way a
+  ;; driver fills a buffer, so the read may change RAM underneath every value in
+  ;; the table. Leaving it out would fold a reload onto a value the device has
+  ;; since replaced, which is the same bug as folding across a `store` and
+  ;; harder to see. It costs nothing: MMIO appears in drivers and nowhere else.
+  ;;
+  ;; Note what is NOT needed. `mmio-load` is absent from `memory-ops`, so
+  ;; `dest-of` never enters it in the availability table and two device reads of
+  ;; one address can never fold onto each other. That half is correctness by
+  ;; omission from an allowlist, which is why dce-test.ss and cse-test.ss both
+  ;; pin it -- an allowlist gains entries, and this is one nobody may add.
+  (define clobber-ops '(store store-at call mmio-load mmio-store))
 
   ;; Writes a global, or may. A call may do either, so it appears in both.
   (define global-clobber-ops '(gset call))
