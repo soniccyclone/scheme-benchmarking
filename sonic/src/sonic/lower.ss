@@ -61,6 +61,7 @@
       ;; separate name is what lets dce.ss and cse.ss tell a device access from
       ;; an ordinary one by the match they already perform. See lang.ss and D207.
       (mmio-u64-ref . mmio-load) (mmio-u64-set! . mmio-store)
+      (mmio-u8-ref . mmio-load8) (mmio-u8-set! . mmio-store8)
       ;; ONE MACH-OP FOR BOTH, and that is D29 rather than a shortcut. The
       ;; length word sits at the same offset for every heap type, so `vlen` is
       ;; a load at a constant displacement and knows nothing about what it is
@@ -230,7 +231,8 @@
       ;; the value is a machine word going to a device -- neither is ever a
       ;; tagged Scheme object, and a tagged one arriving here would be written
       ;; to hardware with its tag bits still on.
-      (mmio-u64-ref raw-word) (mmio-u64-set! raw-word raw-word)))
+      (mmio-u64-ref raw-word) (mmio-u64-set! raw-word raw-word)
+      (mmio-u8-ref raw-word) (mmio-u8-set! raw-word raw-word)))
 
   (define (op-for pr)
     (let ((p (assq pr prim->op)))

@@ -76,6 +76,8 @@
       ;; so `mmio-u64-*` is the one that needs no masking and is first.
       (mmio-u64-ref 1)
       (mmio-u64-set! 2)
+      (mmio-u8-ref 1)
+      (mmio-u8-set! 2)
       ;; general storage
       (vector-ref 2 type-check bounds-check)
       (vector-set! 3 type-check bounds-check)
@@ -243,6 +245,13 @@
       ;; and no alias analysis, which is the arrangement Linux (readl/writel)
       ;; and Rust (read_volatile) both settled on. See D207.
       mmio-load mmio-store
+      ;; The same, one byte wide. The WIDTH IS IN THE NAME because a narrower
+      ;; access is a different instruction rather than a parameter, and because
+      ;; a device that decodes byte lanes distinguishes one 32-bit write from
+      ;; four byte writes -- the transaction on the bus is part of the meaning.
+      ;; Only 8 and 64 exist: those are what bench/kernel asks for. 16 and 32
+      ;; arrive when something needs them, not before.
+      mmio-load8 mmio-store8
       move                                          ; data movement
       ;; int<->float conversion. fl->fx and fx->fl were in the primitive table
       ;; with no mach op to select from, so fcvt.d.l was encodable and

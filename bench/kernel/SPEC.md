@@ -14,23 +14,37 @@ the container like everything else.
 | `03-ring.sps` | an SPSC ring between a handler and a thread: a record with named mutable fields, byte storage, and `raise`/`guard` for "the ring was empty" |
 | `04-irq.sps` | the two shapes optimisation gets wrong -- a read whose value is discarded (probe 5: DCE reaps it) and two reads of one address (probe 7: CSE folds them) |
 
-## Standing, 2026-08-28
+## Standing
+
+Re-run `./compile-all.sh` after any language change and replace this block.
+
+**2026-08-28, after `mmio-u8` and `mmio-u64` landed** (D207, D208):
 
 ```
-01-uart.sps     wants  bytevector bytevector-length bytevector-u8-ref
-                       mmio-u8-ref mmio-u8-set! u64and u64= +
+01-uart.sps     wants  bytevector bytevector-length bytevector-u8-ref u64and u64= +
                 stops  undefined label [+]
 
-02-pagewalk.sps wants  mmio-u64-ref u64+ u64and u64ior u64shl u64shr u64=
+02-pagewalk.sps wants  u64+ u64and u64ior u64shl u64shr u64=
                 stops  display refuses a tagged argument
 
 03-ring.sps     wants  (nothing unbound -- define-record-type swallows the file)
                 stops  a top-level definition after a top-level expression
 
-04-irq.sps      wants  mmio-u8-ref u64and u64= +
+04-irq.sps      wants  u64and u64= +
                 stops  display refuses a raw-word argument
 ```
 
-Two of those were not in `cuj.md` and are recorded in `docs/LEDGER.md` D207: there
-is no generic `+`, and `display` accepts `raw-f64` alone, so nothing in this
-fixture can print its own answer.
+Every `mmio-*` name is gone from every list. What is left is three groups: the
+`u64` arithmetic and comparison (bead `0wr.2`), bytevectors (`0wr.1`), and
+`define-record-type` (`9yp`) -- plus the two gaps D207 found that were in no
+bead: `display` accepts `raw-f64` alone (`0rb`) and there is no generic `+`.
+
+**2026-08-28, first run, before anything landed:**
+
+```
+01-uart.sps     wants  bytevector bytevector-length bytevector-u8-ref
+                       mmio-u8-ref mmio-u8-set! u64and u64= +
+02-pagewalk.sps wants  mmio-u64-ref u64+ u64and u64ior u64shl u64shr u64=
+03-ring.sps     wants  (nothing)
+04-irq.sps      wants  mmio-u8-ref u64and u64= +
+```

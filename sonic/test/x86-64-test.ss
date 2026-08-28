@@ -283,9 +283,14 @@
       (string-append (name) " .+" (number->string (+ 6 (cadr (car ops))))))
      ((memq m setcc-mnemonics)
       (string-append (name) " " (symbol->string (gpr-8bit-name (car ops)))))
+     ;; The source is one byte, and gas is told so differently depending on
+     ;; where that byte is: an 8-bit register spelling for a register, an
+     ;; explicit BYTE PTR for memory, because an address carries no width.
      ((eq? m 'movzx)
       (string-append "movzx " (gas-op (car ops) #f) ", "
-                     (symbol->string (gpr-8bit-name (cadr ops)))))
+                     (if (and (pair? (cadr ops)) (eq? (car (cadr ops)) 'mem))
+                         (string-append "BYTE PTR " (gas-mem (cadr ops) #f))
+                         (symbol->string (gpr-8bit-name (cadr ops))))))
      ;; An 8-bit store. gas wants the size on the memory operand and the 8-bit
      ;; spelling of the register, exactly as it does for setcc.
      ((eq? m 'movb)
@@ -434,6 +439,13 @@
     (setg rdi)
     (movzx rbx rsi)
     (movzx r13 r14)
+    ;; MEMORY SOURCE, which is the form the MMIO byte read selects to and which
+    ;; nothing verified until it existed. The encoder always accepted it; a
+    ;; register-to-register check says nothing about the ModRM and SIB bytes an
+    ;; address needs, and those are where hand-written x86 goes wrong.
+    (movzx rdx (mem rcx #f 8 0))
+    (movzx rax (mem r13 #f 1 0))
+    (movzx r9 (mem rsp #f 1 0))
     ;; scalar double, baseline SSE2
     (addsd xmm3 xmm11)
     (subsd xmm9 xmm2)

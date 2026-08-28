@@ -239,7 +239,8 @@
   ;; one address can never fold onto each other. That half is correctness by
   ;; omission from an allowlist, which is why dce-test.ss and cse-test.ss both
   ;; pin it -- an allowlist gains entries, and this is one nobody may add.
-  (define clobber-ops '(store store-at call mmio-load mmio-store))
+  (define clobber-ops
+    '(store store-at call mmio-load mmio-store mmio-load8 mmio-store8))
 
   ;; Writes a global, or may. A call may do either, so it appears in both.
   (define global-clobber-ops '(gset call))

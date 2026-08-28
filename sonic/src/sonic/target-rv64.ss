@@ -376,6 +376,17 @@
     (arity-check! 'rv64-select 2 srcs)
     `((sd ,(cadr srcs) ,(car srcs) 0)))
 
+  ;; Byte-wide. `lbu` rather than `lb`: a device register holds a bit pattern,
+  ;; not a signed quantity, and sign-extending a status byte with bit 7 set
+  ;; would make every comparison against it wrong.
+  (define (r:mmio-load8 dst sc srcs)
+    (arity-check! 'rv64-select 1 srcs)
+    `((lbu ,dst ,(car srcs) 0)))
+
+  (define (r:mmio-store8 dst sc srcs)
+    (arity-check! 'rv64-select 2 srcs)
+    `((sb ,(cadr srcs) ,(car srcs) 0)))
+
   ;; Adding a constant. RV64 spells it directly and three-address, so this is
   ;; the one selection rule in this file that is a single instruction with
   ;; nothing to arrange around it.
@@ -737,6 +748,8 @@
      (cons 'store-at r:store-at)
      (cons 'mmio-load  r:mmio-load)
      (cons 'mmio-store r:mmio-store)
+     (cons 'mmio-load8  r:mmio-load8)
+     (cons 'mmio-store8 r:mmio-store8)
      (cons 'add-imm  r:add-imm)
      (cons 'mul-imm  r:mul-imm)
      (cons 'move   r:move)

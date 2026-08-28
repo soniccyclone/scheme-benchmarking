@@ -84,7 +84,7 @@
       ;; on `u64` as a storage class of its own (bead 0wr.2); until then a
       ;; driver that reads one must keep the value raw, which is what every
       ;; consumer in bench/kernel does.
-      mmio-u64-ref))
+      mmio-u64-ref mmio-u8-ref))
 
   (define boolean-word-prims
     '(fx< fx<= fx= fx>= fx> fl< fl<= fl= fl>= fl>
@@ -139,7 +139,7 @@
 
   ;; flvector-set! and vector-set! have no useful result; they are classified
   ;; raw-word so the unused destination does not pull a value register.
-  (define effect-prims '(flvector-set! vector-set! mmio-u64-set!))
+  (define effect-prims '(flvector-set! vector-set! mmio-u64-set! mmio-u8-set!))
 
   ;; --- what a primitive requires of its ARGUMENTS ----------------------------
   ;;

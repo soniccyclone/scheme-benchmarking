@@ -101,7 +101,7 @@
        (lambda (op)
          (when (memq op pure-ops)
            (error 'dce "an MMIO op is listed as pure; a device access is never removable" op)))
-       '(mmio-load mmio-store))
+       '(mmio-load mmio-store mmio-load8 mmio-store8))
       #t))
 
   ;; Operand vregs of one instruction. The DESTINATION is not an operand: that

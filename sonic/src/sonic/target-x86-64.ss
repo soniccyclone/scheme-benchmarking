@@ -372,6 +372,24 @@
                       "mmio-store expects (mmio-store <unused> sc addr value)" srcs))
              `((,(mov-for sc) ,(mem/disp (car srcs) #f 0) ,(cadr srcs)))))
 
+     ;; Byte-wide. `movzx` is REX.W 0F B6 -- zero-extending, not sign-extending,
+     ;; because a status byte with bit 7 set is a bit pattern rather than a
+     ;; negative number, and `movb` is 0x88 with REX.W clear, which writes
+     ;; exactly one byte and leaves the other seven of the word alone. Both
+     ;; were already encoded and byte-verified against gas.
+     (cons 'mmio-load8
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 1)
+               (error 'x86-64-selector "mmio-load8 expects one address" srcs))
+             `((movzx ,dst ,(mem/disp (car srcs) #f 0)))))
+
+     (cons 'mmio-store8
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 2)
+               (error 'x86-64-selector
+                      "mmio-store8 expects (mmio-store8 <unused> sc addr value)" srcs))
+             `((movb ,(mem/disp (car srcs) #f 0) ,(cadr srcs)))))
+
      ;; The same load and store at a constant ELEMENT offset. The offset is in
      ;; elements because Lmach is machine-independent; here it becomes bytes by
      ;; the element scale, and folds into the displacement the tag adjustment
