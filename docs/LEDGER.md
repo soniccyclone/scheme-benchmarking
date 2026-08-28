@@ -9198,3 +9198,75 @@ bare-metal bead (`4qp.1`) is what turns `01-uart.sps` into evidence, and it has 
 confirmed blocker of its own: the container has `qemu-system-x86_64` and
 `qemu-riscv64` but not `qemu-system-riscv64`. `Dockerfile:159` installs
 `qemu-system-x86`; riscv64 system emulation is in `qemu-system-misc`.
+
+## D208 — volatile, delivered as an op rather than an annotation
+
+CUJ-02 asked for `volatile` as a control on the memory primitives, beside
+`fp-contract`. That was attempted in August and the codebase refused it in five
+places (necklace ledger, "Bead 2xc"): `default-controls` gives every control the
+value `checked`, `checked` is the conservative value of every control here, and
+for volatile conservative means "treat as hardware" — so the honest default makes
+every vector access in every program unoptimisable, and the dishonest one makes it
+the single control that is off by default and breaks four counters and a fixture
+in each of four test files.
+
+Fable 5's review re-read the motivating probe and found the reason. Probe 8's
+example is `(vector-set! buf i (vector-ref dev 0))` where `dev` is a **GC'd Scheme
+vector with a length header**. No device register is that. A device register is a
+raw physical address and a fixed width, and once it is spelled that way the
+annotation has nothing left to annotate.
+
+**So `mmio-load` and `mmio-store` are their own mach-ops**, and every pass that
+could break a driver decides by the match it already performs:
+
+| pass | mechanism | what was needed |
+| --- | --- | --- |
+| `dce.ss` | `pure-ops` is an allowlist; `defines` returns `#f` for anything absent | **nothing** — plus an assertion that nobody adds it |
+| `cse.ss` | `memory-ops` is an allowlist; `dest-of` never enters an unknown op | **nothing** — two device reads cannot fold |
+| `cse.ss` | `clobber-ops` | four names, so heap traffic is not reordered across a read that may have started a DMA |
+| `addrfold`, `peephole` | match by op name | **nothing** |
+
+Two of the four guarantees were already true and neither was tested. That is the
+part worth keeping: **correctness by omission from an allowlist is correct today
+and unowned tomorrow**, because an allowlist is a thing people add to. Both are
+now pinned by tests, and `dce.ss` fails at load time if an MMIO op ever appears in
+`pure-ops`.
+
+**Measured, on the finalised listing rather than an IR.** Two source reads of one
+address:
+
+```
+(mov rdx (mem rcx #f 8 0))
+(mov rsi (mem rcx #f 8 0))
+```
+
+Two loads, two registers. Written with `vector-ref` the same shape emits one `mov`
+and adds the register to itself — the miscompile the spec opened with. The
+assertion is counted after `addrfold` and the peephole, both of which rewrite
+memory operands, because an assertion before them says nothing about the image.
+The control is in the same test: two ordinary reads still emit **one** load, or
+this was "fixed" by disabling CSE.
+
+**Widths are in the name, and only two exist.** `mmio-u8-*` and `mmio-u64-*`,
+because those are what `bench/kernel/` asks for. A narrower access is a different
+instruction, not a parameter, and the transaction on the bus is part of the
+meaning — a device that decodes byte lanes distinguishes one 32-bit write from
+four byte writes. 16 and 32 arrive when something needs them.
+
+RV64 was free: `lbu`, `sb`, `ld` and `sd` at displacement 0 are all in the
+binutils-verified set already. x86-64's `movb` was verified and `movzx` was
+verified **register-to-register only**, which says nothing about the ModRM and SIB
+bytes an address needs — the two places hand-written x86 is usually wrong. Three
+memory-source forms added, chosen for the awkward cases: `r13` as a base forces a
+`disp8` where any other register needs none, and `rsp` as a base forces a SIB.
+96 instructions now byte-exact against gas, up from 93.
+
+**Zero-extending, not sign-extending.** `lbu` and `movzx`. A status byte with bit
+7 set is a bit pattern, not a negative number, and `lb` would make every
+comparison against it wrong.
+
+**The fixture moved, which is the point of having one.** Every `mmio-*` name is
+gone from every wants list in `bench/kernel/SPEC.md`. What remains is three groups
+and both of D207's unfiled gaps.
+
+Suite: 8663 checks, 0 failures, 63 suites. Smoke gate green.
