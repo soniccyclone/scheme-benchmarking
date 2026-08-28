@@ -1447,6 +1447,61 @@
        "(define (main) (display (go 1 1 2 3 4 5 6 7 8 9 0)) (newline))\n(main)\n")
       '(2345678901.0))
 
+
+;; --- DEVICE MEMORY: N READS IN THE SOURCE ARE N LOADS IN THE IMAGE ----------
+;;
+;; The failure this pins is a MISCOMPILE, not a missed optimisation. Written
+;; with `vector-ref`, two reads of one address emit a single `mov` and add the
+;; register to itself -- a polling loop then reads the status register once and
+;; spins on a value that can never change, and an interrupt acknowledged by
+;; reading a register is never acknowledged at all.
+;;
+;; Counted on the finalised listing rather than on an IR, because CSE is not the
+;; only pass that could fold it: addrfold and the peephole both rewrite memory
+;; operands, and an assertion before them proves nothing about the image.
+;; Counts loads THROUGH A REGISTER BASE. A global cell is `(mem #f #f 1 <abs>)`
+;; -- absolute addressing, no base -- and both arms of the comparison below read
+;; one, so counting those would have the control failing for a reason that has
+;; nothing to do with the device.
+(define (base-reg-load? i)
+  (and (eq? (car i) 'mov)
+       (pair? (cddr i))
+       (pair? (caddr i))
+       (eq? (car (caddr i)) 'mem)
+       (cadr (caddr i))))
+
+(define (mem-reads-of src)
+  (length (filter base-reg-load? (emitted src))))
+
+(ck! "two device reads of one address emit two loads"
+     (= 2 (mem-reads-of
+           (string-append
+            "(define (drv a) (fx+ (mmio-u64-ref a) (mmio-u64-ref a)))\n"
+            "(define (main) (display (fx->fl (drv 4096))) (newline))\n(main)\n"))))
+
+;; The control. Without it, "two loads" is also what a compiler that folds
+;; nothing produces, and this test would pass on a broken CSE.
+(ck! "two ORDINARY reads of one place still emit one load"
+     (= 1 (mem-reads-of
+           (string-append
+            "(define v (make-vector 8 0))\n"
+            "(define (drv i) (fx+ (vector-ref v i) (vector-ref v i)))\n"
+            "(define (main) (display (fx->fl (drv 0))) (newline))\n(main)\n"))))
+
+;; A device write is not dead either, and the value it stores must survive to
+;; reach the bus.
+(ck! "a device write reaches the image"
+     (= 1 (length (filter (lambda (i)
+                            (and (eq? (car i) 'mov)
+                                 (pair? (cdr i))
+                                 (pair? (cadr i))
+                                 (eq? (car (cadr i)) 'mem)
+                                 (cadr (cadr i))))
+                          (emitted
+                           (string-append
+                            "(define (drv a v) (mmio-u64-set! a v))\n"
+                            "(define (main) (begin (drv 4096 65) (display 1.0) (newline)))\n(main)\n"))))))
+
 (newline)
 (display checks) (display " checks, ") (display failures) (display " failures") (newline)
 (if (> failures 0) (exit 1) (begin (display "PASS") (newline) (exit 0)))
