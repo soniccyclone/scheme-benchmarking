@@ -480,13 +480,30 @@
   ;;
   ;; The +#x800 is the carry correction, as in `r:const`: addi sign-extends its
   ;; 12 bits, so a low half above #x7ff borrows one from the high half.
+  ;; AN ADDRESS AT OR ABOVE 2^31 NEEDS TWO MORE INSTRUCTIONS. `lui`
+  ;; sign-extends its 32-bit result on RV64, so a global cell with bit 31 set
+  ;; materialises as a huge negative number and the load faults into nothing.
+  ;;
+  ;; That is measured, not read off the manual: test/addr-probe.ss builds
+  ;; 0x80200000 both ways on the emulated machine and prints N. And it is not
+  ;; hypothetical -- qemu's `virt` starts RAM at exactly 0x80000000, so a
+  ;; freestanding image's globals are ALL above the line. A compiled driver with
+  ;; a global booted and printed nothing at all while the identical driver with
+  ;; the constant inlined printed correctly, which is what pointed here.
+  ;;
+  ;; Shifting left 32 and back right 32 clears the sign extension; the address
+  ;; is known to fit in 32 bits so nothing else is lost. The hosted target never
+  ;; takes this branch: its globals sit at 0x600000.
   (define (rv64-address-of name t)
     (let* ((a (global-address name))
            (lo (- (bitwise-and (+ a #x800) #xfff) #x800))
-           (hi (bitwise-and (ash (- a lo) -12) #xfffff)))
-      (if (zero? lo)
-          `((lui ,t ,hi))
-          `((lui ,t ,hi) (addi ,t ,t ,lo)))))
+           (hi (bitwise-and (ash (- a lo) -12) #xfffff))
+           (base (if (zero? lo)
+                     `((lui ,t ,hi))
+                     `((lui ,t ,hi) (addi ,t ,t ,lo)))))
+      (if (< a #x80000000)
+          base
+          (append base `((slli ,t ,t 32) (srli ,t ,t 32))))))
 
   (define (r:gref dst sc srcs)
     (let ((t (rv64-addr-scratch)))

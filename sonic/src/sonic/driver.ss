@@ -298,7 +298,7 @@
                      (meta (function-object-metadata o))
                      (img (build-executable target (function-object-code o) pool
                                             (+ (elf-text-vaddr) start)
-                                            #x600000 runtime-data-size meta)))
+                                            (data-base) (runtime-data-size) meta)))
                 (make-compiled img (function-object-code o) pool
                                (+ (elf-text-vaddr) start) listing fns
                                gnames lrep meta)))))))))

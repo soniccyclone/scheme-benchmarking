@@ -45,7 +45,9 @@
 
 (library (sonic runtime)
   (export runtime-listing runtime-labels layout-pad runtime-clobbers
-          heap-base-address heap-size
+          heap-base-address heap-size data-base
+          rv64-freestanding-listing freestanding-stack-top
+          rv64-load-address freestanding?
           runtime-data-size
           heap-pointer-cell out-buffer-cell command-line-cell gcmeta-cell
           globals-base globals-span assign-global-cells)
@@ -58,14 +60,21 @@
   ;; runtime's own cells and the image is a static executable at a known load
   ;; address. An absolute disp32 is one instruction and needs no relocation.
 
-  (define data-base      #x600000)
-  (define heap-pointer-cell data-base)              ; 8 bytes: the bump pointer
-  (define out-buffer-cell   (+ data-base 8))        ; 8 bytes: one double
+  ;; PARAMETERS, because a freestanding image cannot use these addresses at all.
+  ;; qemu's `virt` machine starts RAM at 0x80000000 and maps nothing below it,
+  ;; so a global cell at 0x600000 is a store into empty space -- and an image
+  ;; whose ELF says to load a segment there simply does not get one.
+  ;;
+  ;; Only these three are settable; everything below is derived, so the layout
+  ;; cannot be made inconsistent by setting half of it.
+  (define data-base (make-parameter #x600000))
+  (define (heap-pointer-cell) (data-base))              ; 8 bytes: the bump pointer
+  (define (out-buffer-cell)   (+ (data-base) 8))        ; 8 bytes: one double
   ;; The argument list, built at _start and handed back by `command-line`. It
   ;; is a Scheme object -- a list of strings -- so it is a GC root the day a
   ;; collector exists, which is why it lives in a named cell rather than being
   ;; rebuilt on each call.
-  (define command-line-cell (+ data-base 16))      ; 8 bytes: a tagged list
+  (define (command-line-cell) (+ (data-base) 16))      ; 8 bytes: a tagged list
   ;; WHERE THE GC STACK MAPS ARE. The blob rides in the R+X segment after the
   ;; constant pool (D54), which is an address only the linker knows, so `_start`
   ;; computes it RIP-relatively and leaves it here for the collector to find.
@@ -74,13 +83,13 @@
   ;; because the collector will be emitted once, into a listing assembled before
   ;; the pool's size is known -- the same reason the pool's own loads are
   ;; RIP-relative rather than absolute.
-  (define gcmeta-cell       (+ data-base 24))      ; 8 bytes: address of the maps
+  (define (gcmeta-cell)       (+ (data-base) 24))      ; 8 bytes: address of the maps
   ;; The top-level bindings' cells sit between the runtime's own words and the
   ;; heap. Reserving a fixed span rather than sizing it to the program keeps the
   ;; heap's base a constant, which the entry code stores without arithmetic.
-  (define globals-base      (+ data-base 64))
-  (define globals-span      1024)                   ; 128 cells
-  (define heap-base-address (+ globals-base globals-span))
+  (define (globals-base)      (+ (data-base) 64))
+  (define globals-span (make-parameter 1024))          ; 128 cells
+  (define (heap-base-address) (+ (globals-base) (globals-span)))
   ;; 256 MB, AND IT COSTS NOTHING ON DISK. The heap is its own PT_LOAD with
   ;; filesz 0 and a nonzero memsz -- .bss -- so the kernel zeroes it lazily and
   ;; only the pages a program actually touches become resident. The emitted
@@ -98,19 +107,19 @@
   ;; sum has to stay inside a signed 32-bit immediate because those comparisons
   ;; use one. 6.3 MB + 256 MB is comfortably inside it; a gigabyte would not be,
   ;; and would need the encoder to grow a 64-bit compare.
-  (define heap-size      (* 256 1024 1024))
-  (define runtime-data-size (+ 64 globals-span heap-size))
+  (define heap-size (make-parameter (* 256 1024 1024)))
+  (define (runtime-data-size) (+ 64 (globals-span) (heap-size)))
 
   ;; cell name -> absolute address, in the order the program declares them.
   (define (assign-global-cells names)
     (let ((tbl (make-eq-hashtable)))
-      (let loop ((ns names) (at globals-base))
+      (let loop ((ns names) (at (globals-base)))
         (cond
          ((null? ns) tbl)
-         ((>= (- at globals-base) globals-span)
+         ((>= (- at (globals-base)) (globals-span))
           (error 'assign-global-cells
                  "more top-level bindings than the reserved span holds"
-                 (length names) globals-span))
+                 (length names) (globals-span)))
          (else (hashtable-set! tbl (car ns) at)
                (loop (cdr ns) (+ at 8)))))))
 
@@ -136,6 +145,28 @@
       (if (>= l 2048) (- l 4096) l)))
   (define (hi20 a)
     (bitwise-and (ash (+ a 2048) -12) #xfffff))
+
+  ;; MATERIALISE AN ADDRESS ON RV64, INCLUDING ONE ABOVE 2^31.
+  ;;
+  ;; `lui`+`addi` is the sequence every hand-written pair in this file uses, and
+  ;; it is limited to a SIGNED 32-bit value: `lui` sign-extends its result on
+  ;; RV64, so an address with bit 31 set becomes a huge negative number. That is
+  ;; not read off the manual -- test/addr-probe.ss builds 0x80200000 both ways
+  ;; on real hardware emulation, compares them, and prints N.
+  ;;
+  ;; It matters because qemu's `virt` machine starts RAM at exactly 0x80000000,
+  ;; one past the limit, so EVERY address a freestanding image needs is out of
+  ;; reach of the sequence the hosted runtime is built on. The hosted target is
+  ;; unaffected: its data sits at 0x600000.
+  ;;
+  ;; The fix is two more instructions and only when they are needed. Shifting
+  ;; left 32 and back right 32 clears the sign extension, and the value is known
+  ;; to fit in 32 bits, so nothing else is lost.
+  (define (rv64-load-address reg a)
+    (if (< a #x80000000)
+        `((lui ,reg ,(hi20 a)) (addi ,reg ,reg ,(lo12 a)))
+        `((lui ,reg ,(hi20 a)) (addi ,reg ,reg ,(lo12 a))
+          (slli ,reg ,reg 32) (srli ,reg ,reg 32))))
 
   ;; Exit codes, one per trap, so a failure names itself in $?.
   (define exit-ok             0)
@@ -209,12 +240,12 @@
             `((mov rax (imm ,three-lane-mask))
               (kmovw k1 rax))
             '())
-      (mov rax (imm ,heap-base-address))
-      (mov ,(abs-mem heap-pointer-cell) rax)
+      (mov rax (imm ,(heap-base-address)))
+      (mov ,(abs-mem (heap-pointer-cell)) rax)
       ;; The maps' address, computed the way every other link-time address in
       ;; this runtime is: RIP-relative against a label the assembler resolves.
       (lea rax (mem rip #f 1 (label %gcmeta)))
-      (mov ,(abs-mem gcmeta-cell) rax)
+      (mov ,(abs-mem (gcmeta-cell)) rax)
       ;; THE ARGUMENT LIST, built before anything else runs.
       ;;
       ;; The kernel leaves argc at [rsp] and the argv pointers directly after
@@ -241,7 +272,7 @@
       (mov r13 rax)
       (jmp (label %cl-loop))
       %cl-done
-      (mov ,(abs-mem command-line-cell) r13)
+      (mov ,(abs-mem (command-line-cell)) r13)
       (call (label ,entry))
       (mov rdi (imm ,exit-ok))
       (mov rax (imm ,sys-exit))
@@ -253,7 +284,7 @@
       ;; Layout is D29's: type word, length, then the elements, with the pointer
       ;; aimed at element zero and carrying the heap tag.
       %make-flvector
-      (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      (mov rax ,(abs-mem (heap-pointer-cell)))     ; rax = raw base
       ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN. The header goes to
       ;; [rax] and [rax+8], so a base within 16 bytes of the limit would fault
       ;; on the write itself and never reach the end check below.
@@ -264,7 +295,7 @@
       ;; and ends at 7.3 MB, so every value compared is a small positive number
       ;; and the two orderings agree. A heap placed above 2^63 would need the
       ;; unsigned form and the encoder would have to grow it.
-      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (cmp rax (imm ,(- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
       (jg (label sonic-heap-error))
       (mov rdx (imm ,heap-type-flvector))
       (mov (mem rax #f 1 0) rdx)                 ; [raw+0] = type
@@ -276,10 +307,10 @@
       (add rsi rax)
       ;; AND ON THE END, before the payload is written. A single large
       ;; allocation can clear the base check and still run off the end.
-      (cmp rsi (imm ,(+ heap-base-address heap-size)))
+      (cmp rsi (imm ,(+ (heap-base-address) (heap-size))))
       (jg (label sonic-heap-error))
 
-      (mov ,(abs-mem heap-pointer-cell) rsi)
+      (mov ,(abs-mem (heap-pointer-cell)) rsi)
       ;; fill the elements
       (lea rdi (mem rax #f 1 ,heap-header-bytes))
       (mov rsi (imm 0))
@@ -310,8 +341,8 @@
       ;; so, which is the same promise the flvector type makes and the reason
       ;; D29 put the type in the header rather than in the pointer.
       %make-bytevector
-      (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
-      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (mov rax ,(abs-mem (heap-pointer-cell)))     ; rax = raw base
+      (cmp rax (imm ,(- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
       (jg (label sonic-heap-error))
       (mov rsi (imm ,heap-type-bytevector))
       (mov (mem rax #f 1 0) rsi)                 ; [raw+0] = type
@@ -322,9 +353,9 @@
       (and rsi (imm -8))
       (add rsi (imm ,heap-header-bytes))
       (add rsi rax)
-      (cmp rsi (imm ,(+ heap-base-address heap-size)))
+      (cmp rsi (imm ,(+ (heap-base-address) (heap-size))))
       (jg (label sonic-heap-error))
-      (mov ,(abs-mem heap-pointer-cell) rsi)
+      (mov ,(abs-mem (heap-pointer-cell)) rsi)
       ;; fill, one byte at a time. The count is the BYTE count, so this loop
       ;; runs count times and not count/8 times.
       (lea rdi (mem rax #f 1 ,heap-header-bytes))
@@ -368,11 +399,11 @@
       ;; defined and the failure surfaced as `resolve-labels: undefined label
       ;; %make-vector` -- loudly, and at link time, which is the right place.
       %make-vector
-      (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      (mov rax ,(abs-mem (heap-pointer-cell)))     ; rax = raw base
       ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN. The header goes to
       ;; [rax] and [rax+8], so a base within 16 bytes of the limit would fault
       ;; on the write itself and never reach the end check below.
-      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (cmp rax (imm ,(- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
       (jg (label sonic-heap-error))
       ;; THE TYPE GOES THROUGH rdi, NOT rdx. rdx holds the FILL for the whole
       ;; routine, and %make-flvector's shape -- which this one is copied from --
@@ -391,10 +422,10 @@
       (add rsi rax)
       ;; AND ON THE END, before the payload is written. A single large
       ;; allocation can clear the base check and still run off the end.
-      (cmp rsi (imm ,(+ heap-base-address heap-size)))
+      (cmp rsi (imm ,(+ (heap-base-address) (heap-size))))
       (jg (label sonic-heap-error))
 
-      (mov ,(abs-mem heap-pointer-cell) rsi)
+      (mov ,(abs-mem (heap-pointer-cell)) rsi)
       ;; fill the elements
       (lea rdi (mem rax #f 1 ,heap-header-bytes))
       (mov rsi (imm 0))
@@ -429,11 +460,11 @@
       (add rcx (imm 1))
       (jmp (label %c2s-len))
       %c2s-alloc
-      (mov rax ,(abs-mem heap-pointer-cell))
+      (mov rax ,(abs-mem (heap-pointer-cell)))
       ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN. The header goes to
       ;; [rax] and [rax+8], so a base within 16 bytes of the limit would fault
       ;; on the write itself and never reach the end check below.
-      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (cmp rax (imm ,(- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
       (jg (label sonic-heap-error))
       (mov rdi (imm ,heap-type-string))
       (mov (mem rax #f 1 0) rdi)                 ; [raw+0] = type
@@ -455,10 +486,10 @@
       (add rdi rax)
       ;; AND ON THE END, before the payload is written. A single large
       ;; allocation can clear the base check and still run off the end.
-      (cmp rdi (imm ,(+ heap-base-address heap-size)))
+      (cmp rdi (imm ,(+ (heap-base-address) (heap-size))))
       (jg (label sonic-heap-error))
 
-      (mov ,(abs-mem heap-pointer-cell) rdi)
+      (mov ,(abs-mem (heap-pointer-cell)) rdi)
       (add rax (imm ,(+ heap-header-bytes heap-tag)))
       (ret)
 
@@ -486,11 +517,11 @@
       ;; is 2 because the collector's scan walks a header and a field count, and
       ;; a pair's two fields are exactly what it must follow.
       %cons
-      (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      (mov rax ,(abs-mem (heap-pointer-cell)))     ; rax = raw base
       ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN. The header goes to
       ;; [rax] and [rax+8], so a base within 16 bytes of the limit would fault
       ;; on the write itself and never reach the end check below.
-      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (cmp rax (imm ,(- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
       (jg (label sonic-heap-error))
       (mov rsi (imm ,heap-type-pair))
       (mov (mem rax #f 1 0) rsi)                 ; [raw+0] = type
@@ -501,10 +532,10 @@
       (lea rsi (mem rax #f 1 ,(+ heap-header-bytes 16)))
       ;; AND ON THE END, before the payload is written. A single large
       ;; allocation can clear the base check and still run off the end.
-      (cmp rsi (imm ,(+ heap-base-address heap-size)))
+      (cmp rsi (imm ,(+ (heap-base-address) (heap-size))))
       (jg (label sonic-heap-error))
 
-      (mov ,(abs-mem heap-pointer-cell) rsi)
+      (mov ,(abs-mem (heap-pointer-cell)) rsi)
       (add rax (imm ,(+ heap-header-bytes heap-tag)))
       (ret)
 
@@ -644,11 +675,11 @@
       ;; back as 0 -- which it did, for exactly one commit -- so the fill has to
       ;; be a real object like every other field the collector scans.
       %make-vector-tagged
-      (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      (mov rax ,(abs-mem (heap-pointer-cell)))     ; rax = raw base
       ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN. The header goes to
       ;; [rax] and [rax+8], so a base within 16 bytes of the limit would fault
       ;; on the write itself and never reach the end check below.
-      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (cmp rax (imm ,(- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
       (jg (label sonic-heap-error))
       (mov rdi (imm ,heap-type-vector))
       (mov (mem rax #f 1 0) rdi)                 ; [raw+0] = type
@@ -659,10 +690,10 @@
       (add rsi rax)
       ;; AND ON THE END, before the payload is written. A single large
       ;; allocation can clear the base check and still run off the end.
-      (cmp rsi (imm ,(+ heap-base-address heap-size)))
+      (cmp rsi (imm ,(+ (heap-base-address) (heap-size))))
       (jg (label sonic-heap-error))
 
-      (mov ,(abs-mem heap-pointer-cell) rsi)
+      (mov ,(abs-mem (heap-pointer-cell)) rsi)
       (lea rdi (mem rax #f 1 ,heap-header-bytes))
       (mov rsi (imm 0))
       %mkvt-loop
@@ -753,11 +784,11 @@
       (ret)
 
       %box-flonum
-      (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      (mov rax ,(abs-mem (heap-pointer-cell)))     ; rax = raw base
       ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN. The header goes to
       ;; [rax] and [rax+8], so a base within 16 bytes of the limit would fault
       ;; on the write itself and never reach the end check below.
-      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (cmp rax (imm ,(- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
       (jg (label sonic-heap-error))
       (mov rdx (imm ,heap-type-flonum))
       (mov (mem rax #f 1 0) rdx)                 ; [raw+0] = type
@@ -768,19 +799,19 @@
       (add rsi (imm ,(+ heap-header-bytes 8)))
       ;; AND ON THE END, before the payload is written. A single large
       ;; allocation can clear the base check and still run off the end.
-      (cmp rsi (imm ,(+ heap-base-address heap-size)))
+      (cmp rsi (imm ,(+ (heap-base-address) (heap-size))))
       (jg (label sonic-heap-error))
 
-      (mov ,(abs-mem heap-pointer-cell) rsi)
+      (mov ,(abs-mem (heap-pointer-cell)) rsi)
       (add rax (imm ,(+ heap-header-bytes heap-tag)))
       (ret)
 
       ;; ---- (display x) ----
       ;; The double arrives in xmm0. Eight raw bytes to fd 1; see the header.
       display
-      (movsd ,(abs-mem out-buffer-cell) xmm0)
+      (movsd ,(abs-mem (out-buffer-cell)) xmm0)
       (mov rdi (imm 1))
-      (mov rsi (imm ,out-buffer-cell))
+      (mov rsi (imm ,(out-buffer-cell)))
       (mov rdx (imm 8))
       (mov rax (imm ,sys-write))
       (syscall)
@@ -811,9 +842,9 @@
       ;; rcx is stored FIRST, before the syscall arguments overwrite rsi, rdi
       ;; and rdx -- all three of which are also raw-word argument registers.
       display-word
-      (mov ,(abs-mem out-buffer-cell) rcx)
+      (mov ,(abs-mem (out-buffer-cell)) rcx)
       (mov rdi (imm 1))
-      (mov rsi (imm ,out-buffer-cell))
+      (mov rsi (imm ,(out-buffer-cell)))
       (mov rdx (imm 8))
       (mov rax (imm ,sys-write))
       (syscall)
@@ -833,7 +864,7 @@
       ;; The list built at _start. It used to return the empty list, which took
       ;; nbody's default branch and was the whole reason N could not be passed.
       command-line
-      (mov rax ,(abs-mem command-line-cell))
+      (mov rax ,(abs-mem (command-line-cell)))
       (ret)
 
       ;; ---- (length lst) ----
@@ -912,9 +943,9 @@
       ;; and "a type check failed somewhere" is not a debuggable statement.
       ;; rax holds the masked tag at the point the check branches here.
       sonic-type-error
-      (mov ,(abs-mem out-buffer-cell) rax)
+      (mov ,(abs-mem (out-buffer-cell)) rax)
       (mov rdi (imm 2))
-      (mov rsi (imm ,out-buffer-cell))
+      (mov rsi (imm ,(out-buffer-cell)))
       (mov rdx (imm 8))
       (mov rax (imm ,sys-write))
       (syscall)
@@ -972,10 +1003,10 @@
     `(_start
       (addi gp zero ,sonic-null)
       ;; heap-pointer-cell <- heap-base-address
-      (lui  t0 ,(hi20 heap-base-address))
-      (addi t0 t0 ,(lo12 heap-base-address))
-      (lui  t2 ,(hi20 heap-pointer-cell))
-      (sd   t0 t2 ,(lo12 heap-pointer-cell))
+      (lui  t0 ,(hi20 (heap-base-address)))
+      (addi t0 t0 ,(lo12 (heap-base-address)))
+      (lui  t2 ,(hi20 (heap-pointer-cell)))
+      (sd   t0 t2 ,(lo12 (heap-pointer-cell)))
       ;; THE ARGUMENT LIST, walked exactly as the x86-64 listing walks it.
       ;;
       ;; This was an empty list while the target could not run at all, which
@@ -1006,8 +1037,8 @@
       (addi s4 a0 0)
       (jal  zero %rv-cl-loop)
       %rv-cl-done
-      (lui  t2 ,(hi20 command-line-cell))
-      (sd   s4 t2 ,(lo12 command-line-cell))
+      (lui  t2 ,(hi20 (command-line-cell)))
+      (sd   s4 t2 ,(lo12 (command-line-cell)))
       ;; A BARE SYMBOL, not `(label ...)`. The two targets spell a label
       ;; reference differently and object.ss resolves them separately: x86-64
       ;; rewrites `(label L)` to `(rel n)`, while the RV64 arm looks for a
@@ -1035,8 +1066,8 @@
       ;; elements, with the returned pointer aimed at element zero and carrying
       ;; the heap tag.
       %make-flvector
-      (lui  t0 ,(hi20 heap-pointer-cell))
-      (ld   t1 t0 ,(lo12 heap-pointer-cell))     ; t1 = raw base
+      (lui  t0 ,(hi20 (heap-pointer-cell)))
+      (ld   t1 t0 ,(lo12 (heap-pointer-cell)))     ; t1 = raw base
       ;; OUT OF HEAP, CHECKED BEFORE THE HEADER IS WRITTEN -- the header goes to
       ;; [t1] and [t1+8], so a base within 16 bytes of the limit would fault on
       ;; the write itself. Same ordering as the x86-64 routine, for the same
@@ -1046,8 +1077,8 @@
       ;; the same reason recorded there: the heap sits well below 2^31, so every
       ;; address compared is a small positive number and the signed and unsigned
       ;; orderings agree.
-      (lui  t2 ,(hi20 (- (+ heap-base-address heap-size) heap-header-bytes)))
-      (addi t2 t2 ,(lo12 (- (+ heap-base-address heap-size) heap-header-bytes)))
+      (lui  t2 ,(hi20 (- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
+      (addi t2 t2 ,(lo12 (- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
       (blt  t2 t1 sonic-heap-error)
       (addi t0 zero ,heap-type-flvector)
       (sd   t0 t1 0)                             ; [raw+0] = type
@@ -1058,11 +1089,11 @@
       (add  t0 t0 t1)
       ;; AND ON THE END, before the payload is written: one large allocation can
       ;; clear the base check and still run off the end.
-      (lui  t2 ,(hi20 (+ heap-base-address heap-size)))
-      (addi t2 t2 ,(lo12 (+ heap-base-address heap-size)))
+      (lui  t2 ,(hi20 (+ (heap-base-address) (heap-size))))
+      (addi t2 t2 ,(lo12 (+ (heap-base-address) (heap-size))))
       (blt  t2 t0 sonic-heap-error)
-      (lui  t2 ,(hi20 heap-pointer-cell))
-      (sd   t0 t2 ,(lo12 heap-pointer-cell))
+      (lui  t2 ,(hi20 (heap-pointer-cell)))
+      (sd   t0 t2 ,(lo12 (heap-pointer-cell)))
       ;; fill the elements: t1 stays the raw base, t0 walks, t2 counts
       (addi t0 t1 ,heap-header-bytes)
       (addi t2 zero 0)
@@ -1093,10 +1124,10 @@
       ;; count is 2 because the collector walks a header and a field count, and
       ;; a pair's two fields are exactly what it must follow.
       %rv-cons
-      (lui  t1 ,(hi20 heap-pointer-cell))
-      (ld   t0 t1 ,(lo12 heap-pointer-cell))
-      (lui  t2 ,(hi20 (- (+ heap-base-address heap-size) heap-header-bytes)))
-      (addi t2 t2 ,(lo12 (- (+ heap-base-address heap-size) heap-header-bytes)))
+      (lui  t1 ,(hi20 (heap-pointer-cell)))
+      (ld   t0 t1 ,(lo12 (heap-pointer-cell)))
+      (lui  t2 ,(hi20 (- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
+      (addi t2 t2 ,(lo12 (- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
       (blt  t2 t0 sonic-heap-error)
       (addi t1 zero ,heap-type-pair)
       (sd   t1 t0 0)
@@ -1105,11 +1136,11 @@
       (sd   a0 t0 ,heap-header-bytes)
       (sd   a1 t0 ,(+ heap-header-bytes 8))
       (addi t1 t0 ,(+ heap-header-bytes 16))
-      (lui  t2 ,(hi20 (+ heap-base-address heap-size)))
-      (addi t2 t2 ,(lo12 (+ heap-base-address heap-size)))
+      (lui  t2 ,(hi20 (+ (heap-base-address) (heap-size))))
+      (addi t2 t2 ,(lo12 (+ (heap-base-address) (heap-size))))
       (blt  t2 t1 sonic-heap-error)
-      (lui  t2 ,(hi20 heap-pointer-cell))
-      (sd   t1 t2 ,(lo12 heap-pointer-cell))
+      (lui  t2 ,(hi20 (heap-pointer-cell)))
+      (sd   t1 t2 ,(lo12 (heap-pointer-cell)))
       (addi a0 t0 ,(+ heap-header-bytes heap-tag))
       (jalr zero ra 0)
 
@@ -1127,10 +1158,10 @@
       (addi t0 t0 1)
       (jal  zero %rv-c2s-len)
       %rv-c2s-alloc
-      (lui  t1 ,(hi20 heap-pointer-cell))
-      (ld   a0 t1 ,(lo12 heap-pointer-cell))
-      (lui  t2 ,(hi20 (- (+ heap-base-address heap-size) heap-header-bytes)))
-      (addi t2 t2 ,(lo12 (- (+ heap-base-address heap-size) heap-header-bytes)))
+      (lui  t1 ,(hi20 (heap-pointer-cell)))
+      (ld   a0 t1 ,(lo12 (heap-pointer-cell)))
+      (lui  t2 ,(hi20 (- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
+      (addi t2 t2 ,(lo12 (- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
       (blt  t2 a0 sonic-heap-error)
       (addi t1 zero ,heap-type-string)
       (sd   t1 a0 0)
@@ -1152,11 +1183,11 @@
       (slli t1 t1 3)
       (addi t1 t1 ,heap-header-bytes)
       (add  t1 t1 a0)
-      (lui  t2 ,(hi20 (+ heap-base-address heap-size)))
-      (addi t2 t2 ,(lo12 (+ heap-base-address heap-size)))
+      (lui  t2 ,(hi20 (+ (heap-base-address) (heap-size))))
+      (addi t2 t2 ,(lo12 (+ (heap-base-address) (heap-size))))
       (blt  t2 t1 sonic-heap-error)
-      (lui  t2 ,(hi20 heap-pointer-cell))
-      (sd   t1 t2 ,(lo12 heap-pointer-cell))
+      (lui  t2 ,(hi20 (heap-pointer-cell)))
+      (sd   t1 t2 ,(lo12 (heap-pointer-cell)))
       (addi a0 a0 ,(+ heap-header-bytes heap-tag))
       (jalr zero ra 0)
 
@@ -1170,10 +1201,10 @@
       ;; See the x86-64 twin for why the length field is a BYTE count while the
       ;; bump rounds up to whole words.
       %make-bytevector
-      (lui  t0 ,(hi20 heap-pointer-cell))
-      (ld   t1 t0 ,(lo12 heap-pointer-cell))     ; t1 = raw base
-      (lui  t2 ,(hi20 (- (+ heap-base-address heap-size) heap-header-bytes)))
-      (addi t2 t2 ,(lo12 (- (+ heap-base-address heap-size) heap-header-bytes)))
+      (lui  t0 ,(hi20 (heap-pointer-cell)))
+      (ld   t1 t0 ,(lo12 (heap-pointer-cell)))     ; t1 = raw base
+      (lui  t2 ,(hi20 (- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
+      (addi t2 t2 ,(lo12 (- (+ (heap-base-address) (heap-size)) heap-header-bytes)))
       (blt  t2 t1 sonic-heap-error)
       (addi t0 zero ,heap-type-bytevector)
       (sd   t0 t1 0)                             ; [raw+0] = type
@@ -1183,11 +1214,11 @@
       (andi t0 t0 -8)
       (addi t0 t0 ,heap-header-bytes)
       (add  t0 t0 t1)
-      (lui  t2 ,(hi20 (+ heap-base-address heap-size)))
-      (addi t2 t2 ,(lo12 (+ heap-base-address heap-size)))
+      (lui  t2 ,(hi20 (+ (heap-base-address) (heap-size))))
+      (addi t2 t2 ,(lo12 (+ (heap-base-address) (heap-size))))
       (blt  t2 t0 sonic-heap-error)
-      (lui  t2 ,(hi20 heap-pointer-cell))
-      (sd   t0 t2 ,(lo12 heap-pointer-cell))
+      (lui  t2 ,(hi20 (heap-pointer-cell)))
+      (sd   t0 t2 ,(lo12 (heap-pointer-cell)))
       ;; fill one byte at a time: t0 walks, t2 counts, t4 is the fill
       (addi t0 t1 ,heap-header-bytes)
       (addi t2 zero 0)
@@ -1213,11 +1244,11 @@
       ;; result is `tagged`, which callconv-rv64 returns in a0, NOT in the
       ;; raw-word register the x86-64 copy uses.
       display
-      (lui  t0 ,(hi20 out-buffer-cell))
-      (fsd  fa0 t0 ,(lo12 out-buffer-cell))
+      (lui  t0 ,(hi20 (out-buffer-cell)))
+      (fsd  fa0 t0 ,(lo12 (out-buffer-cell)))
       (addi a0 zero 1)                           ; fd 1
-      (lui  a1 ,(hi20 out-buffer-cell))
-      (addi a1 a1 ,(lo12 out-buffer-cell))
+      (lui  a1 ,(hi20 (out-buffer-cell)))
+      (addi a1 a1 ,(lo12 (out-buffer-cell)))
       (addi a2 zero 8)                           ; count
       (addi a7 zero ,rv64-sys-write)
       (ecall)
@@ -1232,11 +1263,11 @@
       ;; words out of the value registers on purpose: a raw word in a0 is a
       ;; non-pointer the collector would scavenge.
       display-word
-      (lui  t0 ,(hi20 out-buffer-cell))
-      (sd   t3 t0 ,(lo12 out-buffer-cell))
+      (lui  t0 ,(hi20 (out-buffer-cell)))
+      (sd   t3 t0 ,(lo12 (out-buffer-cell)))
       (addi a0 zero 1)                           ; fd 1
-      (lui  a1 ,(hi20 out-buffer-cell))
-      (addi a1 a1 ,(lo12 out-buffer-cell))
+      (lui  a1 ,(hi20 (out-buffer-cell)))
+      (addi a1 a1 ,(lo12 (out-buffer-cell)))
       (addi a2 zero 8)                           ; count
       (addi a7 zero ,rv64-sys-write)
       (ecall)
@@ -1254,8 +1285,8 @@
       ;; sequence does not walk argv yet, which takes nbody's default branch of
       ;; N = 1000 -- the case docs/METHOD.md publishes an oracle for.
       command-line
-      (lui  t0 ,(hi20 command-line-cell))
-      (ld   a0 t0 ,(lo12 command-line-cell))
+      (lui  t0 ,(hi20 (command-line-cell)))
+      (ld   a0 t0 ,(lo12 (command-line-cell)))
       (jalr zero ra 0)
 
       ;; ---- (length lst) ----
@@ -1497,8 +1528,73 @@
   ;; regression and reverted a correct change.
   (define layout-pad (make-parameter 0))
 
+  ;; --- the freestanding RV64 entry -----------------------------------------
+  ;;
+  ;; What a kernel gets and a hosted program does not: no loader has set `sp`,
+  ;; there is no argv on the stack, and there is nothing to exit TO.
+  ;;
+  ;; ALLOCATION-FREE PROGRAMS ONLY, and that is stated rather than discovered.
+  ;; The heap pointer cell is not initialised here, so a program that allocates
+  ;; bumps from whatever the cell happens to hold. bench/kernel's page walker and
+  ;; interrupt driver allocate nothing -- probe 4 and CUJ-05 are about exactly
+  ;; that class -- and the compile-time guarantee that says so is bead 5em. Until
+  ;; it exists this entry is honest about its precondition and no more.
+  ;;
+  ;; `sp` is set to the top of the region the image reserves. It grows down, so
+  ;; one instruction is the whole of stack setup.
+  ;;
+  ;; The end is a spin, not an exit. There is no supervisor to return to; `wfi`
+  ;; would be the polite spelling and needs the encoder to grow it.
+  (define freestanding-stack-top (make-parameter #x80100000))
+
+  (define (rv64-freestanding-listing entry)
+    `(_start
+      (addi gp zero ,sonic-null)
+      ,@(rv64-load-address 'sp (freestanding-stack-top))
+      ;; NOTHING IS WRITTEN TO A DATA CELL HERE, and that is deliberate rather
+      ;; than an omission. `command-line-cell` lives at 0x600000, which a
+      ;; freestanding image does not map at all -- storing nil into it to be
+      ;; tidy would fault on the first instruction after the stack is set up.
+      ;; A program that calls `command-line` in this mode is a program this
+      ;; entry cannot serve, and it should say so rather than pretend.
+      (jal ra ,entry)
+      %halt
+      (jal zero %halt)
+      ;; THE TRAPS STILL HAVE TO EXIST. A check that survives elision branches
+      ;; to one of these by name, and a label that does not resolve is a link
+      ;; failure rather than a missing feature -- which is how this was found:
+      ;; `(+ 48 n)` carries an overflow check and the first freestanding build
+      ;; refused with `undefined label (trap-overflow-check)`.
+      ;;
+      ;; They halt rather than exit. There is no supervisor to report a status
+      ;; to, and a kernel that has just detected a bounds violation has nothing
+      ;; better to do than stop. A real one would print first; that needs the
+      ;; console driver to be part of the runtime, which it is not yet.
+      trap-overflow-check
+      (jal zero %halt)
+      trap-bounds-check
+      (jal zero %halt)
+      trap-type-check
+      (jal zero %halt)
+      sonic-type-error
+      (jal zero %halt)
+      sonic-heap-error
+      (jal zero %halt)))
+
+  ;; Which entry the image gets. A parameter rather than an argument because
+  ;; `runtime-listing` is called from three places in driver.ss and they must
+  ;; agree -- D56 records what happens when a label map is built against a
+  ;; different prologue than the code it describes.
+  (define freestanding? (make-parameter #f))
+
   (define (runtime-listing target entry . opt)
     (let ((lane-mask? (if (null? opt) #t (car opt))))
+      (when (and (freestanding?) (not (eq? target 'rv64)))
+        (error 'runtime-listing
+               "the freestanding entry exists for rv64 only; x86-64 needs multiboot2, a GDT and long-mode entry before its first instruction runs"
+               target))
+      (if (freestanding?)
+          (rv64-freestanding-listing entry)
       (case target
         ((x86-64) (append (x86-64-listing entry lane-mask?)
                           ;; Unreachable: everything above it ends in `ret` or a
@@ -1506,7 +1602,7 @@
                           (let loop ((n (layout-pad)) (acc '()))
                             (if (<= n 0) acc (loop (- n 1) (cons '(mov rsi rsi) acc))))))
         ((rv64) (rv64-listing entry))
-        (else (error 'runtime-listing "unknown target" target)))))
+        (else (error 'runtime-listing "unknown target" target))))))
 
   ;; The flag is forwarded, not defaulted again: labels are OFFSETS, and a label
   ;; map built against a two-instruction-longer prologue than the code it

@@ -701,6 +701,30 @@
                   (= 75 (bytevector-u8-ref got 0))
                   (= 10 (bytevector-u8-ref got 1)))))))
 
+(if (not qemu-system-available?)
+    (display "  SKIP qemu-system-riscv64 absent; the compiled image is not booted\n")
+    (begin
+      (system "scheme -q --libdirs src:vendor/nanopass --script test/boot-compiled.ss")
+      (system (string-append
+               "timeout 4 qemu-system-riscv64 -machine virt -bios none "
+               "-kernel /tmp/sonic-boot-compiled.elf -display none "
+               "-serial file:/tmp/sonic-boot-compiled.ser >/dev/null 2>&1 || true"))
+      (let ((got (guard (e (#t #f))
+                   (let* ((p (open-file-input-port "/tmp/sonic-boot-compiled.ser"))
+                          (bv (get-bytevector-all p)))
+                     (close-port p)
+                     (if (eof-object? bv) (make-bytevector 0) bv)))))
+        ;; "S321\n": a global read, a counted loop, and four MMIO stores. Every
+        ;; one of those was a separate failure on the way here -- the loop alone
+        ;; worked while the same program with a GLOBAL printed nothing at all,
+        ;; because a global cell in a freestanding image sits above 2^31 and
+        ;; `lui`+`addi` cannot reach it.
+        (ck! "a COMPILED Scheme driver boots on bare metal and drives a 16550"
+             (and got (= 5 (bytevector-length got))))
+        (ck! "and it printed what the program says, in order"
+             (and got (= 5 (bytevector-length got))
+                  (equal? (bytevector->u8-list got) (list 83 51 50 49 10)))))))
+
 ;;; --- the reserved scratch registers are shared, and nothing arbitrated ----
 ;;;
 ;;; regs.ss reserves t0/t1/t2 so passes can use a register the allocator will
