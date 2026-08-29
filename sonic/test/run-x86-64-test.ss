@@ -1507,6 +1507,73 @@
              "(define (main) (display-word (sum 1000 0)))\n(main)\n")
             '(500500))
 
+;; --- RECORDS ----------------------------------------------------------------
+;;
+;; `define-record-type` is a source rewrite into ordinary defines over a general
+;; vector: slot 0 is a type id, the fields follow. It needs nothing from the
+;; back end, which is why it is an hour of expander rather than an epic.
+(define rec-point
+  (string-append
+   "(define-record-type point (make-point x y) point?\n"
+   "  (x point-x) (y point-y set-point-y!))\n"))
+
+(run-words! "a record field reads back what the constructor put there"
+            (string-append rec-point
+                           "(define (main) (display-word (point-x (make-point 3 4))))\n(main)\n")
+            '(3))
+
+(run-words! "a modifier writes the field it names and no other"
+            (string-append rec-point
+                           "(define (main) (let ((p (make-point 3 4)))\n"
+                           "  (begin (set-point-y! p 9) (display-word (point-x p)))))\n(main)\n")
+            '(3))
+
+(run-words! "and the field it names really did change"
+            (string-append rec-point
+                           "(define (main) (let ((p (make-point 3 4)))\n"
+                           "  (begin (set-point-y! p 9) (display-word (point-y p)))))\n(main)\n")
+            '(9))
+
+;; THE PREDICATE GUARDS ITS OWN LOAD. `and` short-circuits, so a non-vector
+;; never reaches the `vector-ref` of slot 0 that would trap on it. Without that
+;; ordering the predicate is not a predicate, it is a crash.
+(run-words! "the predicate is false for a value that is not a record at all"
+            (string-append rec-point
+                           "(define (main) (display-word (if (point? 5) 1 0)))\n(main)\n")
+            '(0))
+
+;; WHY SLOT 0 HOLDS AN ID RATHER THAN NOTHING. A bare `vector?` would call every
+;; record of every type -- and every plain vector -- a point.
+(run-words! "two record types are told apart"
+            (string-append
+             rec-point
+             "(define-record-type circle (make-circle r) circle? (r circle-r))\n"
+             "(define (main) (display-word (if (point? (make-circle 1)) 1 0)))\n(main)\n")
+            '(0))
+
+(run-words! "and each answers true for its own"
+            (string-append
+             rec-point
+             "(define-record-type circle (make-circle r) circle? (r circle-r))\n"
+             "(define (main) (display-word (if (circle? (make-circle 1)) 1 0)))\n(main)\n")
+            '(1))
+
+;; A FIELD READ IS ONE LOAD AT A CONSTANT OFFSET, which is what CUJ-04 asked
+;; for: the index is a literal, so the interval domain discharges its bounds
+;; check without knowing anything about the object, and nothing searches.
+(ck! "a record field access emits no bounds-check branch"
+     (= 0 (length (filter (lambda (i) (and (eq? (car i) 'jne)
+                                           (pair? (cdr i))
+                                           (equal? (cadr i) '(label sonic-bounds-error))))
+                          ;; `emitted` compiles with the ordinary extern list,
+                          ;; so this one prints through `display` rather than
+                          ;; `display-word`. What is being counted is the branch,
+                          ;; not the value.
+                          (emitted
+                           (string-append
+                            rec-point
+                            "(define (main) (display (fx->fl (point-x (make-point 3 4)))) (newline))\n(main)\n"))))))
+
 ;; --- BYTE-ADDRESSED STORAGE -------------------------------------------------
 ;;
 ;; A 4 KiB ring in `make-vector` is 32 KiB of heap and every element is scanned

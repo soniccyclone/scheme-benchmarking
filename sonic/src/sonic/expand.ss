@@ -110,6 +110,7 @@
 
   (define (reset-state!)
     (set! counter 0)
+    (set! record-counter 0)
     (set! used-symbols (make-eq-hashtable))
     (set! aliases (make-eq-hashtable))
     (set! globals (make-eq-hashtable))
@@ -218,9 +219,98 @@
 
   (define special-forms
     '(quote if lambda let let* letrec letrec* begin set!
-      define define-syntax let-syntax letrec-syntax
+      define define-syntax define-record-type let-syntax letrec-syntax
       syntax-rules when unless cond and or else =>
       declare declare-distinct policy import))
+
+  ;; --- records ---------------------------------------------------------------
+  ;;
+  ;; `define-record-type` is a SOURCE REWRITE into ordinary `define` forms,
+  ;; spliced where it stood -- the same thing `begin` does at both the top level
+  ;; and in a body, so it needs no new machinery in either scan loop.
+  ;;
+  ;; The layout is a general vector: slot 0 is a type id and the fields follow.
+  ;;
+  ;;   (define-record-type ring (make-ring a b) ring?
+  ;;     (a ring-a) (b ring-b set-ring-b!))
+  ;;
+  ;; THE TYPE ID IS A FIXNUM, not a descriptor object, and that is the one
+  ;; design decision here. A unique heap object would be the obvious identity --
+  ;; `eq?` on a per-type vector -- and it would cost the whole program: repr.ss
+  ;; computes ONE element class for every general vector, so a single tagged
+  ;; value stored into one makes every general vector tagged, which is a
+  ;; program-wide precision loss for a predicate almost nothing calls. A small
+  ;; integer keeps slot 0 a raw word like the fields beside it.
+  ;;
+  ;; The cost is stated rather than hidden: ids are assigned by a counter in
+  ;; this expander, so they are unique within a compilation unit and there is no
+  ;; other kind. If this compiler ever gains separate compilation, two units
+  ;; will disagree and the predicate will be wrong rather than conservative.
+  ;;
+  ;; The predicate guards its own load: `(and (vector? r) (fx= (vector-ref r 0)
+  ;; id))`. `and` short-circuits, so a non-vector never reaches the `vector-ref`
+  ;; that would trap on it -- which is why the type id lives in the vector and
+  ;; the predicate cannot be a bare `vector?`.
+  (define record-counter 0)
+
+  (define (next-record-id!)
+    (set! record-counter (+ record-counter 1))
+    record-counter)
+
+  (define (rt-error form msg) (ex-error msg (strip form)))
+
+  (define (expand-record-type form)
+    (unless (and (list? form) (>= (length form) 4))
+      (rt-error form "malformed define-record-type"))
+    (let ((ctor (caddr form))
+          (pred (cadddr form))
+          (specs (cddddr form))
+          (id (next-record-id!)))
+      (unless (and (pair? ctor) (for-all symbol? ctor))
+        (rt-error form "a record constructor is (name field ...)"))
+      (unless (symbol? pred)
+        (rt-error form "a record predicate is an identifier"))
+      (unless (for-all (lambda (sp)
+                         (and (list? sp) (<= 2 (length sp) 3) (for-all symbol? sp)))
+                       specs)
+        (rt-error form "a record field is (field accessor) or (field accessor modifier)"))
+      (let* ((fields (map car specs))
+             ;; Field i lives at slot i+1; slot 0 is the type id.
+             (slot-of (lambda (f)
+                        (let loop ((fs fields) (i 1))
+                          (cond ((null? fs)
+                                 (rt-error form "the constructor names a field the type does not have"))
+                                ((eq? (car fs) f) i)
+                                (else (loop (cdr fs) (+ i 1)))))))
+             (size (+ 1 (length fields)))
+             (self (fresh 'r))
+             (val (fresh 'x))
+             (tmp (fresh 'v)))
+        (append
+         ;; The constructor. Every slot the caller named is written; a field the
+         ;; constructor omits keeps the fill, which is R7RS's "unspecified".
+         (list `(define (,(car ctor) ,@(cdr ctor))
+                  (let ((,tmp (make-vector ,size 0)))
+                    (begin (vector-set! ,tmp 0 ,id)
+                           ,@(map (lambda (a) `(vector-set! ,tmp ,(slot-of a) ,a))
+                                  (cdr ctor))
+                           ,tmp))))
+         (list `(define (,pred ,self)
+                  (and (vector? ,self) (fx= (vector-ref ,self 0) ,id))))
+         ;; One accessor per field, and a modifier where the spec named one.
+         ;; Both are a single `vector-ref`/`vector-set!` at a CONSTANT index,
+         ;; which is what makes a field read as cheap as an array element: the
+         ;; index is a literal, so the interval domain discharges its bounds
+         ;; check without needing to know anything about the object.
+         (apply append
+                (map (lambda (sp)
+                       (let ((slot (slot-of (car sp))))
+                         (cons `(define (,(cadr sp) ,self) (vector-ref ,self ,slot))
+                               (if (= (length sp) 3)
+                                   (list `(define (,(caddr sp) ,self ,val)
+                                            (vector-set! ,self ,slot ,val)))
+                                   '()))))
+                     specs))))))
 
   ;; --- syntax-rules transformers --------------------------------------------
   ;;
@@ -575,6 +665,8 @@
                   (scan (cdr fs)
                         (extend env name (make-variable new))
                         (cons (cons new (cdr parts)) defs))))
+               ((special-is? d 'define-record-type)
+                (scan (append (expand-record-type f) (cdr fs)) env defs))
                ((special-is? d 'define-syntax)
                 (let ((parsed (parse-define-syntax f)))
                   (scan (cdr fs)
@@ -1065,6 +1157,8 @@
                ;; for whoever resolves libraries; expanding it would turn
                ;; `(rnrs base)` into an application of `rnrs`.
                (loop (cdr fs) (cons (strip f) out)))
+              ((special-is? d 'define-record-type)
+               (loop (append (expand-record-type f) (cdr fs)) out))
               ((special-is? d 'define-syntax)
                (let ((parsed (parse-define-syntax f)))
                  (hashtable-set! globals (car parsed)
