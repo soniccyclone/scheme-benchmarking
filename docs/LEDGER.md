@@ -9473,3 +9473,102 @@ now          01: 4           02: 2   03: form   04: 1
 ```
 
 Suite: 8680 checks, 0 failures. Smoke gate green.
+
+## D212 — `+`, the variable shifts, and two fixtures that compile
+
+Two beads in one entry because each was decided by a fact that was already in the
+tree, and finding those facts was most of the work.
+
+### `+`, and a diagnosis that was never made
+
+`bench/kernel` stopped on `(+ uart-base 5)` in two files. The bead asked whether
+`+` should alias `fx+` or dispatch, and warned that aliasing is "wrong the moment
+a flonum arrives".
+
+**Probe first.** What does `fx+` do with a flonum *today*? Four shapes, all
+refused — so aliasing cannot miscompile and the bead's worry was unfounded. But
+look at how:
+
+```
+REFUSED: bad mov operands
+```
+
+That is the **encoder**, three stages downstream, naming neither the primitive
+nor the argument, and reading like an encoder bug rather than a type error in the
+program. It was always refused; it was never diagnosed. Now `lower.ss` refuses it
+where `prim-raw-args` already knows the requirement:
+
+```
+argument 0 of `+` must be a machine word and this one is a flonum; there is
+no implicit conversion, so the program is refused rather than compiled into
+integer arithmetic on a double's bits
+```
+
+That generalises past `+` to every fixnum primitive, which is the part worth
+having. **The probe found a defect that had nothing to do with the question it
+was asked.**
+
+`+`, `-` and `*` are the fixnum operations, 2-ary, and `lang.ss` says so rather
+than leaving it to be discovered. The polymorphic version is possible and is
+recorded there: `op-for/controls` already receives the storage class and `add`
+already selects to `addsd`, so the instruction side is solved. The **control** is
+not — `+` would carry `overflow-check`, which is meaningless on a float, and repr
+would have to compute the result class per site rather than per primitive.
+
+### The variable shifts, and the option that was a fact
+
+`0wr.3` listed three ways to get a variable shift count on x86-64: pin CL through
+`scan-pins`, call a runtime helper as `%fxquotient` does, or use BMI2's
+`shlx`/`shrx`/`sarx`, which take the count in any register. It said to settle the
+third first **because it is a fact rather than a preference**, and it was:
+
+D33, three weeks ago, raised the ISA floor from SSE2 to AVX, on the stated
+grounds that "the vector path already emits AVX-512, so the project had accepted
+AVX hardware before this". AVX-512 is Skylake-X, 2017. **BMI2 is Haswell, 2013**
+— strictly below a floor the project accepted three years of hardware ago. And
+the baseline guard is aimed at fusion rather than at ISA level, which is D33's own
+title; `shlx` fuses nothing and does not begin with `v`, so it passes unchanged.
+
+So: no register pin, no allocator change, no runtime call in a page-table walk.
+Three-address, so `twoaddr.ss` needs no entry either — it lists only `sub` and
+`div` as needing a fixup, and `shlx` reads both sources before it writes.
+
+RV64 needed nothing at all. `sll`, `srl` and `sra` have been byte-verified
+against binutils this whole time with nothing able to select them — the same
+shape as `fl->fx` in D29 and `cvtsi2sd` before it. **That is three times now that
+the encoder was ahead of the selector, and the encoding test cannot see it.**
+
+**105 instructions byte-exact against gas**, up from 100. The five new cases were
+picked to make an operand swap visible: the count rides in `VEX.vvvv` and the
+source in `ModRM.rm`, which is the opposite nesting from every other three-operand
+form in the file, so distinct registers in all three slots plus the high-register
+cases that exercise `VEX.R` and `VEX.B` separately.
+
+### Two fixtures compile
+
+```
+01-uart.sps     wants  bytevector bytevector-length bytevector-u8-ref
+02-pagewalk.sps COMPILES
+03-ring.sps     wants  (nothing -- define-record-type swallows the file)
+04-irq.sps      COMPILES
+```
+
+`04-irq`: 68 instructions, and **four `mmio-u8-ref` in the source are four
+`movzx`-from-memory in the image** — including the one in `irq-ack` whose value is
+discarded. That is D208's whole argument, measured on a driver rather than a
+fixture.
+
+`02-pagewalk`: 112 instructions, four `shrx`, and the NX constant materialised as
+`mov rcx, 0x8000000000000000`.
+
+**Which corrects a bead I filed this morning.** `34x` said a constant above 32
+bits "cannot be written". It can — `imm64-bytes` has always handled `mov r64,
+imm64`. What fails is a wide constant folded into an **ALU immediate**, where
+x86-64 has no imm64 form. The fix is therefore not "route wide constants to
+imm64" but "do not fold one into an ALU immediate", which is a different and
+smaller change. Retitled and narrowed.
+
+Neither fixture can be RUN hosted: both read `0x10000000`, which is a device
+window on qemu `virt` and a segfault under Linux. That is `4qp.1`.
+
+Suite: 8690 checks, 0 failures. Smoke gate green.

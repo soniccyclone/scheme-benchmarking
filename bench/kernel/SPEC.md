@@ -18,26 +18,29 @@ the container like everything else.
 
 Re-run `./compile-all.sh` after any language change and replace this block.
 
-**2026-08-28, after `+` landed** (D212):
+**2026-08-28, after the variable shifts** (D212):
 
 ```
 01-uart.sps     wants  bytevector bytevector-length bytevector-u8-ref
-02-pagewalk.sps wants  u64shl u64shr
+02-pagewalk.sps COMPILES
 03-ring.sps     wants  (nothing -- define-record-type swallows the file)
 04-irq.sps      COMPILES
 ```
 
-**`04-irq.sps` is the first one through.** Its four `mmio-u8-ref` calls become
-four `movzx`-from-memory in the image -- including the one in `irq-ack` whose
-value is discarded, which is what clears an interrupt and what DCE used to reap.
-68 instructions.
+**Two of four compile.** Both are the driver-shaped ones.
 
-It compiles and cannot be RUN hosted: it reads 0x10000000, which is a device
-window on qemu `virt` and a segfault under Linux. Running it is `4qp.1`.
+`04-irq.sps`: four `mmio-u8-ref` calls become four `movzx`-from-memory in the
+image -- including the one in `irq-ack` whose value is discarded, which is what
+clears an interrupt and what DCE used to reap. 68 instructions.
+
+`02-pagewalk.sps`: 112 instructions, four variable shifts through BMI2's `shrx`,
+and the NX constant materialised exactly as `mov rcx, 0x8000000000000000`.
+
+Neither can be RUN hosted: both read `0x10000000`, a device window on qemu
+`virt` and a segfault under Linux. Running them is `4qp.1`.
 
 | still missing | bead |
 | --- | --- |
-| `u64shl`, `u64shr` | `0wr.3` — a variable shift count must sit in CL on x86-64 |
 | bytevectors | `0wr.1` |
 | `define-record-type`, `raise`, `guard` | `9yp` |
 
