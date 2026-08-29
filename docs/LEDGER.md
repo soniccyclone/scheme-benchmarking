@@ -9651,3 +9651,79 @@ time: R7RS writes `#u8(72 101 ...)`, which `read.ss` does not read, and
 on purpose. Filed.
 
 Suite: 8697 checks, 0 failures. Smoke gate green.
+
+## D214 — records in an hour, and the first bare-metal boot
+
+### `define-record-type` needed no back end at all
+
+A source rewrite in `expand.ss`, spliced where it stood — the same thing `begin`
+already does in both the top-level loop and the body scan, so neither needed new
+machinery. Layout is a general vector: slot 0 a type id, fields after it.
+
+**The type id is a fixnum, not a descriptor object, and that is the one real
+decision.** `eq?` on a unique per-type vector is the obvious identity and it
+would cost the whole program: `repr.ss` computes ONE element class for every
+general vector, so a single tagged value stored into one makes every general
+vector tagged. A small integer keeps slot 0 a raw word like the fields beside it.
+The cost is stated rather than hidden — ids are unique within a compilation unit
+and there is no other kind, so separate compilation would make the predicate
+wrong rather than conservative.
+
+The predicate guards its own load: `(and (vector? r) (fx= (vector-ref r 0) id))`.
+`and` short-circuits, so a non-vector never reaches the `vector-ref` that would
+trap on it. Tested against a non-record and against a second record type — a bare
+`vector?` would call every record of every type a point.
+
+Exceptions split out. `guard` has to transfer control from inside a call that has
+already pushed frames, and the source language cannot name a jump target, so
+there is nothing for a rewrite to expand into. The design filed with the bead
+avoids a new IR form by making the target a **procedure**: `with-handler` takes a
+handler lambda and a thunk, `raise` restores a saved context and tail-calls the
+handler. `callconv.ss:166` says the x86-64 context is six words — four
+callee-saved registers, sp, and the return address.
+
+### Bare metal
+
+```
+$ qemu-system-riscv64 -machine virt -bios none -kernel image
+K
+```
+
+Two bytes on a real 16550, out of an ELF this compiler wrote, started by the
+machine's reset vector with nothing underneath it. The RV64 ladder was: bytes
+match binutils, objdump reads our output back, the Linux kernel runs our image,
+a compiled Scheme program runs under qemu-user. This is the rung above all of
+them.
+
+**The bug that made it silent is the part worth keeping.** `build-executable`
+takes an `entry` argument, and `elf-load-base` was a **constant**. So the probe
+set `e_entry` to `0x80000000`, emitted a text segment at `0x400000`, and qemu
+loaded the code where the program header said, jumped where `e_entry` said, and
+executed empty RAM. No fault, no message, no exit code — a boot failure has none
+of those. Two addresses describing one thing, and only one of them was
+adjustable. `elf-load-base` is a parameter now.
+
+**`-bios none` does not read `e_entry`.** The reset vector goes to `0x80000000`
+unconditionally, so the load base sits one page lower and `text-file-offset`
+lands the first instruction exactly on it. The header page is then below RAM and
+qemu does not place it, which is harmless — nothing reads a program header at run
+time — and it is the fragile part of the arrangement. A freestanding layout with
+no header page is the honest fix.
+
+**OpenSBI was tried and rejected on evidence.** `-machine virt -kernel` without
+`-bios none` boots OpenSBI, which prints its banner and hands off in S-mode with
+PMP configured; the identical store to `0x10000000` then produces **nothing at
+all**, no fault and no output. Bare M-mode is both simpler and what a kernel
+wants.
+
+`qemu-system-riscv64` is a different Ubuntu package from the user-mode
+`qemu-riscv64` the smoke gate runs — `qemu-system-misc`, added to the Dockerfile.
+The image rebuild took 90 seconds. Containment re-verified afterwards: 8 passed,
+0 failed.
+
+**What this is not.** It boots a hand-written listing, not a compiled Scheme
+program: a freestanding `_start` still has to set `sp`, initialise the heap
+pointer, skip the argv walk, and end in a halt rather than an `exit` syscall.
+And `bench/kernel`'s three compiling drivers cannot be linked into one yet.
+
+Suite: 8706 checks, 0 failures. Smoke green. Containment 8/8.
