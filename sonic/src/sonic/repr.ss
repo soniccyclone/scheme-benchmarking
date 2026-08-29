@@ -92,7 +92,8 @@
       ;; that REFUSES the join instead of truncating is the honest fix and is
       ;; filed rather than guessed at.
       u64+ u64- u64* u64and u64ior u64xor
-      + - *))
+      + - *
+      u64shl u64shr u64sar))
 
   (define boolean-word-prims
     '(u64=

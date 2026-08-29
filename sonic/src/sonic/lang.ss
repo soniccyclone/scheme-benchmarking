@@ -113,6 +113,15 @@
       ;; meaningless on a float, and repr would have to compute the result class
       ;; per site rather than per primitive. See the bead.
       (+ 2 overflow-check) (- 2 overflow-check) (* 2 overflow-check)
+      ;; Shifts. `u64shr` is LOGICAL and `u64sar` ARITHMETIC, and they are
+      ;; separate primitives rather than one with a signedness flag because
+      ;; they are separate instructions on both targets. A driver shifting a
+      ;; page-table entry down wants the logical one: bit 63 set is the NX flag,
+      ;; not a sign.
+      ;;
+      ;; No overflow check on the left shift. Bits shifted off the top are gone,
+      ;; which is what the hardware does and what building a PTE field wants.
+      (u64shl 2) (u64shr 2) (u64sar 2)
       (mmio-u8-ref 1)
       (mmio-u8-set! 2)
       ;; general storage
@@ -261,6 +270,15 @@
       ;; express -- see the bead, and `ashr-imm` for the constant-count case
       ;; that addrfold already produces.
       and or xor
+      ;; VARIABLE SHIFTS, three-address: (shl dst sc value count). The count is
+      ;; a vreg, not a constant -- `ashr-imm` is the constant form and addrfold
+      ;; is what produces it. A Sv39 walk is `(va >> (12 + 9*level))`, so a
+      ;; constant-only shift does not cover real code.
+      ;;
+      ;; x86-64 selects these to BMI2's shlx/shrx/sarx, which take the count in
+      ;; any register; the legacy forms want it in CL, which is a two-register
+      ;; pin this allocator cannot express. RV64 has sll/srl/sra already.
+      shl shr sar
       load store                                    ; memory, with a scale
       ;; DEVICE MEMORY, and it is a separate op rather than a flag on `load`
       ;; for the reason `declare-distinct` needed its own production: it says

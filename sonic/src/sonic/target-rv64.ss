@@ -706,6 +706,11 @@
      ;; no two-address fixup and no destructive destination. `#f` as the float
      ;; mnemonic makes a raw-f64 arrival a loud failure rather than a mask over
      ;; a double.
+     ;; RV64 has had these all along: R-type, three-address, byte-verified
+     ;; against binutils since before anything could select them.
+     (cons 'shl    (binop 'sll #f))
+     (cons 'shr    (binop 'srl #f))
+     (cons 'sar    (binop 'sra #f))
      (cons 'and    (binop 'and #f))
      (cons 'or     (binop 'or  #f))
      (cons 'xor    (binop 'xor #f))

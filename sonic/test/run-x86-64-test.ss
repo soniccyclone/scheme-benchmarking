@@ -1587,6 +1587,25 @@
                            "(define (main) (display-word (u64+ (dbl 63 1) (dbl 63 1))))\n(main)\n")
             '(0))
 
+(run-words! "a variable shift count: one level of an Sv39 index"
+            (string-append
+             "(define (vpn va level) (u64and (u64shr va (+ 12 (* 9 level))) 511))\n"
+             "(define (main) (display-word (vpn 1073741824 2)))\n(main)\n")
+            '(1))
+
+;; LOGICAL VERSUS ARITHMETIC, at the one bit where they differ. A driver
+;; shifting a PTE down wants the logical one: bit 63 set is the NX flag, not a
+;; sign, and `sar` would fill the whole word with it.
+(run-words! "u64shr fills with zeros where u64sar propagates the top bit"
+            (string-append u64-dbl
+                           "(define (main) (display-word (u64shr (dbl 63 1) 63)))\n(main)\n")
+            '(1))
+
+(run-words! "and u64sar gives every bit back"
+            (string-append u64-dbl
+                           "(define (main) (display-word (u64sar (dbl 63 1) 63)))\n(main)\n")
+            '(18446744073709551615))
+
 (run-words! "u64 multiplication reaches bit 63 from below"
             (string-append u64-dbl
                            "(define (main) (display-word (u64* (dbl 62 1) 2)))\n(main)\n")

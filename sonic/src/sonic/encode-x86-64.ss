@@ -235,6 +235,28 @@
   ;; "r/m64, r64" direction (opcodes 01/29/39/89), with the destination in the
   ;; ModRM rm field.
 
+  ;; VARIABLE SHIFTS, BMI2. `shlx dst, src, count` shifts `src` by `count` and
+  ;; writes `dst`, with the count in ANY general register.
+  ;;
+  ;; The legacy `shl`/`shr`/`sar` take a variable count only in CL, which is a
+  ;; two-register constraint the register allocator here cannot express -- the
+  ;; same wall `idiv` hit, and its comment says so. These need no pin at all.
+  ;;
+  ;; THE ISA FLOOR ALREADY PERMITS THIS, and that is a fact rather than a
+  ;; preference. D33 raised the floor from SSE2 to AVX on the grounds that the
+  ;; vector path already emits AVX-512 -- Skylake-X, 2017. BMI2 is Haswell,
+  ;; 2013, so it is strictly below a floor the project accepted three years of
+  ;; hardware ago. The baseline guard is aimed at FUSION rather than at ISA
+  ;; level (D33's title), and these three fuse nothing.
+  ;;
+  ;; VEX.LZ.<pp>.0F38.W1 F7 /r, the prefix selecting which shift:
+  ;;   66 -> shlx    F3 -> sarx    F2 -> shrx
+  ;; The COUNT rides in VEX.vvvv, the source in ModRM.rm and the destination in
+  ;; ModRM.reg -- which is why the operand order below is not the one the
+  ;; two-address shifts use.
+  (define bmi2-shift
+    '((shlx . #x66) (sarx . #xF3) (shrx . #xF2)))
+
   ;; op-mr: dst is r/m, src is the reg field.  op-rm: the other direction.
   ;; ext:   the /digit for the immediate form.
   (define int-alu
@@ -347,6 +369,7 @@
     (or (assq m int-alu) (assq m sse-arith) (assq m sse-bitwise)
         (assq m vex-arith) (assq m vex-packed) (memq m '(vmovupd vmovddup))
         (assq m jcc-table) (assq m setcc-table)
+        (assq m bmi2-shift)
         (memq m '(mov movb movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
                   syscall cqo idiv))
         #f))
@@ -357,6 +380,7 @@
     (append (map car int-alu) (map car sse-arith) (map car sse-bitwise)
             (map car vex-arith) (map car vex-packed) '(vmovupd vmovddup cqo idiv)
             (map car jcc-table) (map car setcc-table)
+            (map car bmi2-shift)
             '(mov movb movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
               syscall)))
 
@@ -577,6 +601,13 @@
           (unless (or (gpr? src) (mem? src)) (error 'encode-instr "bad movzx source" i))
           ;; REX.W is always present here, so the 8-bit ambiguity resolves itself.
           (asm 'encode-instr '() 1 '(#x0F #xB6) (reg-number dst) src '() #f)))
+       ((assq m bmi2-shift)
+        (let ((dst (arg 0)) (src (arg 1)) (cnt (arg 2)))
+          (unless (and (gpr? dst) (gpr? src) (gpr? cnt))
+            (error 'encode-instr "a BMI2 shift takes three GPRs" i))
+          (vex-asm 'encode-instr #xF7 (reg-number cnt)
+                   (vex-pp (cdr (assq m bmi2-shift))) (vex-map #x0F38) 0 1
+                   (reg-number dst) src)))
        ((eq? m 'jmp)  (cons #xE9 (imm32-bytes (rel-value 'encode-instr (arg 0)))))
        ((eq? m 'call) (cons #xE8 (imm32-bytes (rel-value 'encode-instr (arg 0)))))
        ((assq m jcc-table)

@@ -146,6 +146,17 @@
         (error who "no floating-point form of this bitwise operation" mn dst srcs))
       ((arith who mn mn #t) dst sc srcs)))
 
+  ;; A BMI2 variable shift: `(shlx dst value count)`. The operand order is the
+  ;; instruction's, which is not the Lmach one -- Lmach says
+  ;; (shl dst sc value count) and the count rides in VEX.vvvv.
+  (define (var-shift who mn)
+    (lambda (dst sc srcs)
+      (when (fp? sc)
+        (error who "no floating-point form of a shift" mn dst srcs))
+      (unless (= (length srcs) 2)
+        (error who "a shift expects a value and a count" dst srcs))
+      `((,mn ,dst ,(car srcs) ,(cadr srcs)))))
+
   ;; --- comparisons ----------------------------------------------------------
   ;;
   ;; Lmach names the comparison's result as a vreg, so the flags cannot stay in
@@ -278,6 +289,13 @@
      ;; flonum spelling of these: `andpd` exists but masks a double's bits,
      ;; which is a different operation from `u64and` and must not be reachable
      ;; by a class join arriving here with raw-f64.
+     ;; VARIABLE SHIFTS. Three-address and therefore NOT routed through
+     ;; `two-address`: `shlx` reads both sources before it writes, so a
+     ;; destination aliasing either one is simply fine, and twoaddr.ss lists
+     ;; only sub and div as needing a fixup.
+     (cons 'shl (var-shift 'x86-64-selector 'shlx))
+     (cons 'shr (var-shift 'x86-64-selector 'shrx))
+     (cons 'sar (var-shift 'x86-64-selector 'sarx))
      (cons 'and (bitwise 'x86-64-selector 'and))
      (cons 'or  (bitwise 'x86-64-selector 'or))
      (cons 'xor (bitwise 'x86-64-selector 'xor))

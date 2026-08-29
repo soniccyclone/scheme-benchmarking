@@ -69,6 +69,7 @@
       (u64+ . add) (u64- . sub) (u64* . mul) (u64= . cmp-eq)
       (u64and . and) (u64ior . or) (u64xor . xor)
       (+ . add) (- . sub) (* . mul)
+      (u64shl . shl) (u64shr . shr) (u64sar . sar)
       ;; ONE MACH-OP FOR BOTH, and that is D29 rather than a shortcut. The
       ;; length word sits at the same offset for every heap type, so `vlen` is
       ;; a load at a constant displacement and knows nothing about what it is
@@ -243,7 +244,9 @@
       (u64+ raw-word raw-word) (u64- raw-word raw-word) (u64* raw-word raw-word)
       (u64and raw-word raw-word) (u64ior raw-word raw-word)
       (u64xor raw-word raw-word) (u64= raw-word raw-word)
-      (+ raw-word raw-word) (- raw-word raw-word) (* raw-word raw-word)))
+      (+ raw-word raw-word) (- raw-word raw-word) (* raw-word raw-word)
+      (u64shl raw-word raw-word) (u64shr raw-word raw-word)
+      (u64sar raw-word raw-word)))
 
   (define (op-for pr)
     (let ((p (assq pr prim->op)))

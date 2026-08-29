@@ -637,8 +637,8 @@
              (zero? (system (string-append "cmp -s " rv ".out " x8 ".out")))))
       ;; THE CONTROL. `cmp` on two empty files also succeeds, so an agreement
       ;; test says nothing until the output is known to exist. Six words.
-      (ck! "and both produced the six words, rather than agreeing by both failing"
-           (= 48 (let ((p (open-file-input-port "/tmp/sonic-u64-rv64.out")))
+      (ck! "and both produced the nine words, rather than agreeing by both failing"
+           (= 72 (let ((p (open-file-input-port "/tmp/sonic-u64-rv64.out")))
                    (let ((bv (get-bytevector-all p)))
                      (close-port p)
                      (if (eof-object? bv) 0 (bytevector-length bv))))))))

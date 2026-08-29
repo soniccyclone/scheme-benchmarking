@@ -296,6 +296,13 @@
      ((eq? m 'movb)
       (string-append "mov BYTE PTR " (gas-mem (car ops) #f) ", "
                      (symbol->string (gpr-8bit-name (cadr ops)))))
+     ;; BMI2 variable shifts: three GPR operands, dest first, count last. The
+     ;; default two-operand branch below would silently print the first two and
+     ;; compare our five bytes against gas's encoding of a different
+     ;; instruction, so this needs its own line rather than falling through.
+     ((memq m '(shlx shrx sarx))
+      (string-append (name) " " (gas-op (car ops) #f) ", "
+                     (gas-op (cadr ops) #f) ", " (gas-op (caddr ops) #f)))
      ((eq? m 'lea)
       ;; no size prefix: lea computes an address, it does not access memory
       (string-append "lea " (gas-op (car ops) #f) ", " (gas-op (cadr ops) #f)))
@@ -399,6 +406,16 @@
     (xor r13 (imm 255))
     (xor r14 r8)
     (xor rax rax)
+    ;; BMI2. The count is in VEX.vvvv and the source in ModRM.rm, which is the
+    ;; opposite nesting from every other three-operand form here, so the
+    ;; register choices below are picked to make a swap visible: distinct
+    ;; registers in all three slots, and the high-register cases that exercise
+    ;; VEX.R and VEX.B separately.
+    (shlx rbx rcx rdx)
+    (shrx r13 r14 r15)
+    (sarx rax rbx rcx)
+    (shlx r8 rax r9)
+    (shrx rsi rdi rbp)
     ;; integer arithmetic
     (add rbx r8)
     (add r14 (imm 7))                       ; imm8 form
