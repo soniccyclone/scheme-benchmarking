@@ -9325,3 +9325,76 @@ bit-exact oracle. Buying an unresolvable 3.3% on a benchmark the project has
 just decided is the wrong workload, with the strongest correctness evidence in the
 tree as the price, is not a trade worth making. It stays a per-scope permission,
 which is what it was designed to be.
+
+## D210 — display-word, and the RV64 runtime gap it walked into
+
+`0rb`: `display` reads xmm0 unconditionally, so an integer could only be printed
+by converting it. `fx->fl` does not serve — a double carries 53 significand bits
+and a page-table entry needs 64, so **exactly the values that motivate a machine
+word are the ones the conversion destroys.** That is why this blocked `0wr.2`'s
+acceptance test rather than merely being inconvenient.
+
+`display-word` is a separate name, not an overload. The two routines write
+different bit patterns out of different register files, and neither is R7RS
+`display`, which would print decimal text — overloading would have made the name
+wrong a third way. The tagged-argument refusal that caught `(display (car q))`
+printing a stale xmm0 stays exactly as it was.
+
+The test that justifies the routine prints 2^53+1, the first integer a double
+cannot represent, and gets it back exactly.
+
+**The argument register was wrong first, and the way it was wrong is worth
+keeping.** I wrote the routine to read `r8`, copying `length`. It printed
+6292561 — an address out of the globals region. `callconv.ss` has **one argument
+register list per storage class**: tagged in `(r8 r9)`, raw-word in
+`(rcx rdx rsi rdi r10 r11)`. `length` takes a tagged list, so `r8` is right for
+it and wrong for everything raw. RV64 the same: `t3`, not `a0`, because a raw
+word in a value register is a non-pointer the collector would scavenge. A wrong
+argument register does not crash; it prints whatever was live.
+
+---
+
+**Then the smoke test found something nobody had filed.** Compiling a program
+that uses `make-vector` for RV64 fails at LINK time:
+
+```
+Exception in resolve-labels: undefined label with irritants (%make-vector ...)
+```
+
+The identical source compiles and runs on x86-64. Comparing the two listings in
+`runtime.ss` label by label, **RV64 is missing nine routines**: `%make-vector`,
+`%make-vector-tagged`, `%car`, `%cdr`, `%fxquotient`, `%fxremainder`, `%fxmodulo`,
+`%box-flonum`, `%error`. It has `%make-flvector` and `%rv-cons` — so a pair can
+be built and never taken apart.
+
+**nbody is what hid it.** nbody runs on RV64 and is held to the bit-exact oracle,
+which is the project's strongest "both targets" evidence — and nbody uses
+flvectors, no pairs and no division. D132 and D160 both recorded features that
+silently did nothing on RV64; this is the same class one level down, in the
+runtime rather than in a pass, and the differential gate cannot see it because
+the gate's program does not use the missing routines.
+
+**The good news, measured rather than assumed.** RV64 runs allocation-free
+compiled Scheme end to end today:
+
+```
+(define (sum i acc) (if (fx= i 0) acc (sum (fx- i 1) (fx+ acc i))))
+(define (main) (display-word (sum 1000 0)))
+
+x86:  500500
+rv64: 500500        (qemu-riscv64, our encoder, our ELF writer, a real loader)
+```
+
+Self-tail-calls, globals, syscalls and `display-word` all work. So "no RV64
+runtime" overstates it: the gap is the allocator and the tagged-object routines.
+**And allocation-free is exactly the shape of a kernel path** — bead `5em` is
+about proving a procedure allocates nothing, and on RV64 that class of program
+already runs. `4qp.1` is closer than its description says, on a narrower base than
+its description assumes.
+
+The acceptance criterion on the new bead is that the two label sets are compared
+by a test that DERIVES both from `runtime.ss`. A hand-maintained list of what
+each target provides is the thing that was missing here, and writing one down
+would reproduce the failure a year from now.
+
+Suite: 8669 checks, 0 failures. Smoke gate green.
