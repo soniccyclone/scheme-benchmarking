@@ -80,7 +80,7 @@
 ;;; Run the tests: scheme -q --libdirs src:vendor/nanopass --script test/expand-test.ss
 
 (library (sonic expand)
-  (export expand-program expand-expression)
+  (export expand-program expand-expression no-allocation-declared)
   (import (rnrs base)
           (rnrs lists)
           (rnrs control)
@@ -111,6 +111,7 @@
   (define (reset-state!)
     (set! counter 0)
     (set! record-counter 0)
+    (set! declared-no-allocation '())
     (set! used-symbols (make-eq-hashtable))
     (set! aliases (make-eq-hashtable))
     (set! globals (make-eq-hashtable))
@@ -219,7 +220,8 @@
 
   (define special-forms
     '(quote if lambda let let* letrec letrec* begin set!
-      define define-syntax define-record-type let-syntax letrec-syntax
+      define define-syntax define-record-type declare-no-allocation
+      let-syntax letrec-syntax
       syntax-rules when unless cond and or else =>
       declare declare-distinct policy import))
 
@@ -252,6 +254,12 @@
   ;; that would trap on it -- which is why the type id lives in the vector and
   ;; the predicate cannot be a bare `vector?`.
   (define record-counter 0)
+
+  ;; Names collected by `declare-no-allocation`, read by the driver after
+  ;; lowering. A list rather than a set: the order is the order they were
+  ;; written, which is the order the errors should come in.
+  (define declared-no-allocation '())
+  (define (no-allocation-declared) declared-no-allocation)
 
   (define (next-record-id!)
     (set! record-counter (+ record-counter 1))
@@ -1157,6 +1165,21 @@
                ;; for whoever resolves libraries; expanding it would turn
                ;; `(rnrs base)` into an application of `rnrs`.
                (loop (cdr fs) (cons (strip f) out)))
+              ;; A TOP-LEVEL DECLARATION ABOUT PROCEDURES, recorded and
+              ;; dropped. It is not an expression and it is not lexically
+              ;; scoped, because the thing it asserts is a property of a
+              ;; procedure rather than of a region -- the same reason
+              ;; `declare-distinct` needed its own production rather than a slot
+              ;; in `policy`, and the same reason volatile did not (D208).
+              ;;
+              ;; The check itself runs on Lmach (see noalloc.ss): two of the
+              ;; ways a program allocates are invisible in its own text.
+              ((special-is? d 'declare-no-allocation)
+               (unless (and (list? f) (for-all symbol? (cdr f)))
+                 (ex-error "declare-no-allocation takes procedure names" (strip f)))
+               (set! declared-no-allocation
+                     (append declared-no-allocation (map id-name (cdr f))))
+               (loop (cdr fs) out))
               ((special-is? d 'define-record-type)
                (loop (append (expand-record-type f) (cdr fs)) out))
               ((special-is? d 'define-syntax)

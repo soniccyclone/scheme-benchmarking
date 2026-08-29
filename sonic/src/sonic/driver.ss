@@ -41,6 +41,7 @@
           (sonic anf) (sonic assign) (sonic inline) (sonic unroll)
           (sonic essa) (sonic elide) (sonic gconst)
           (sonic repr) (sonic lift) (sonic convert) (sonic lower) (sonic globals)
+          (sonic noalloc)
           (sonic shapes) (sonic elemrange) (sonic interval) (sonic cse) (sonic dce) (sonic contract) (sonic fold) (sonic specialize) (sonic addrfold) (sonic slp)
           (sonic select) (sonic regs) (sonic regalloc) (sonic finalize)
           (sonic litpool) (sonic object) (sonic runtime) (sonic elfexec)
@@ -145,6 +146,12 @@
                ;; delete anything: it rewrites the USES of a redundant result
                ;; to name the earlier one, which leaves the redundant
                ;; definition with no readers for DCE to collect.
+               ;; THE ALLOCATION-FREE CHECK, BEFORE cse AND dce. It must not
+               ;; depend on them: DCE removes an allocation whose result is
+               ;; unused, which would make the guarantee depend on whether the
+               ;; program happened to use the object, and a later change to DCE
+               ;; would silently widen what this promises. See noalloc.ss.
+               ((_noalloc) (check-no-allocation prog0 (no-allocation-declared)))
                ((gprog) (globalize prog0 cells classes))
                ((hook-pre-cse) ((compile-stage-hook) 'lmach/pre-cse gprog))
                ((cprog cse-st) (cse-program gprog))

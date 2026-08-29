@@ -14,6 +14,13 @@
 ;;;      `add t.5 t.7` becoming `add t.5 t.5` -- so a FIFO drained twice returns
 ;;;      the same byte twice.
 
+;; THE GUARANTEE THIS FILE EXISTS TO NEED. An interrupt handler runs with the
+;; heap in whatever state the interrupted code left it, and on the freestanding
+;; target the heap pointer is not even initialised -- so an allocation here is
+;; not slow, it is a wild store. Declared, and refused at compile time if it
+;; ever stops being true.
+(declare-no-allocation irq-ack read-pair data-ready? service)
+
 (define uart-base #x10000000)
 (define uart-rbr  (+ uart-base 0))   ; receive buffer, reading pops the FIFO
 (define uart-iir  (+ uart-base 2))   ; interrupt identification, reading clears

@@ -45,6 +45,7 @@ shell:
 # one engine's implementation detail as if it meant "am I contained".
 test-suite:
 	@$(RUN) --assert-inside
+	@$(CHEZ) -q $(LIBS) --script test/noalloc-test.ss
 	@$(CHEZ) -q $(LIBS) --script test/lang-test.ss
 	@echo
 	@$(CHEZ) -q $(LIBS) --script test/read-test.ss
