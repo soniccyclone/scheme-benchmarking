@@ -33,7 +33,7 @@ programs now name at most three missing things. What is left:
 | missing | bead |
 | --- | --- |
 | generic `+` | `2f7` |
-| `u64shl`, `u64shr` | `xhr` — a variable shift count must sit in CL on x86-64 |
+| `u64shl`, `u64shr` | `0wr.3` — a variable shift count must sit in CL on x86-64 |
 | bytevectors | `0wr.1` |
 | `define-record-type`, `raise`, `guard` | `9yp` |
 

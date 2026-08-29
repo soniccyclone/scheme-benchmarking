@@ -68,6 +68,7 @@
       ;; left to differ about. Only the bitwise ops are new.
       (u64+ . add) (u64- . sub) (u64* . mul) (u64= . cmp-eq)
       (u64and . and) (u64ior . or) (u64xor . xor)
+      (+ . add) (- . sub) (* . mul)
       ;; ONE MACH-OP FOR BOTH, and that is D29 rather than a shortcut. The
       ;; length word sits at the same offset for every heap type, so `vlen` is
       ;; a load at a constant displacement and knows nothing about what it is
@@ -241,7 +242,8 @@
       (mmio-u8-ref raw-word) (mmio-u8-set! raw-word raw-word)
       (u64+ raw-word raw-word) (u64- raw-word raw-word) (u64* raw-word raw-word)
       (u64and raw-word raw-word) (u64ior raw-word raw-word)
-      (u64xor raw-word raw-word) (u64= raw-word raw-word)))
+      (u64xor raw-word raw-word) (u64= raw-word raw-word)
+      (+ raw-word raw-word) (- raw-word raw-word) (* raw-word raw-word)))
 
   (define (op-for pr)
     (let ((p (assq pr prim->op)))
@@ -534,6 +536,30 @@
                 (let ((s (car ss))
                       (r (and (pair? rs) (car rs)))
                       (rest (if (pair? rs) (cdr rs) '())))
+                  ;; A FLONUM ARRIVING WHERE A MACHINE WORD IS REQUIRED IS
+                  ;; REFUSED HERE, BY NAME. It was refused before too, but three
+                  ;; stages downstream and as `bad mov operands` from the
+                  ;; encoder -- a message that names neither the primitive nor
+                  ;; the argument, and reads like an encoder bug rather than a
+                  ;; type error in the program. Found by probing what `fx+`
+                  ;; does with a flonum before deciding what `+` should mean
+                  ;; (D212).
+                  ;;
+                  ;; A refusal rather than a conversion, for the reason repr.ss
+                  ;; gives at `extern-arg-classes`: this compiler has no
+                  ;; untagging direction and inserting `fl->fx` here would
+                  ;; silently truncate a value the programmer wrote as a double.
+                  (when (and (eq? r 'raw-word) (symbol? s)
+                             (eq? (hashtable-ref vreg-classes s #f) 'raw-f64))
+                    (error 'lower
+                           (string-append
+                            "argument " (number->string (- (length srcs) (length ss)))
+                            " of `" (symbol->string pr)
+                            "` must be a machine word and this one is a flonum;"
+                            " there is no implicit conversion, so the program is"
+                            " refused rather than compiled into integer"
+                            " arithmetic on a double's bits")
+                           pr s))
                   (if (and (eq? r 'raw-word) (symbol? s)
                            (eq? (hashtable-ref vreg-classes s #f) 'tagged))
                       (let ((t (fresh! "u")))

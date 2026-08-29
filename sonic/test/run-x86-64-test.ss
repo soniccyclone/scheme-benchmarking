@@ -1507,6 +1507,51 @@
              "(define (main) (display-word (sum 1000 0)))\n(main)\n")
             '(500500))
 
+;; --- `+`, WHICH IS THE FIXNUM OPERATION AND SAYS SO ------------------------
+;;
+;; Not R7RS `+`: 2-ary, and fixnum only. It exists because
+;; `(define uart-thr (+ uart-base 5))` is how every driver spells a register
+;; offset, and D207 found bench/kernel stopping on it in two files.
+(run-words! "+ - and * compute what their fx spellings compute"
+            (string-append
+             "(define (main) (display-word (+ (* 6 7) (- 10 10))))\n(main)\n")
+            '(42))
+
+;; THE REFUSAL, AND ITS MESSAGE IS THE POINT. Before this, a flonum reaching a
+;; fixnum primitive died at the ENCODER with `bad mov operands` -- three stages
+;; downstream, naming neither the primitive nor the argument, and reading like
+;; an encoder bug rather than a type error in the program. It was always
+;; refused; it was never diagnosed. Found by probing what `fx+` did with a
+;; flonum before deciding what `+` should mean (D212).
+;;
+;; The values are behind a two-argument procedure so constant folding cannot
+;; evaluate the expression away before lowering sees the classes.
+(define (refusal-message src)
+  (let ((f (string-append tmp "-refuse.sps")))
+    (let ((p (open-file-output-port f (file-options no-fail)
+                                    (buffer-mode block) (native-transcoder))))
+      (put-string p src) (close-port p))
+    (guard (e (#t (if (message-condition? e) (condition-message e) "")))
+      (compile-sonic-to-file f '(display-word) (string-append tmp "-refuse.bin"))
+      "COMPILED")))
+
+(let ((m (refusal-message
+          (string-append
+           "(define (f a b) (+ a b))\n"
+           "(define (main) (display-word (f 1.5 2.5)))\n(main)\n"))))
+  (ck! "a flonum handed to `+` is refused, and the message names the primitive"
+       (and (> (string-length m) 0)
+            (let scan ((i 0))
+              (cond ((> (+ i 3) (string-length m)) #f)
+                    ((string=? (substring m i (+ i 3)) "`+`") #t)
+                    (else (scan (+ i 1)))))))
+  (unless (and (> (string-length m) 0)
+               (let scan ((i 0))
+                 (cond ((> (+ i 3) (string-length m)) #f)
+                       ((string=? (substring m i (+ i 3)) "`+`") #t)
+                       (else (scan (+ i 1))))))
+    (display "       got=") (write m) (newline)))
+
 ;; --- u64: THE BIT A FIXNUM CANNOT REACH ------------------------------------
 ;;
 ;; Probe 9's ceiling, from the other side. 3 tag bits leave 61 value bits, so

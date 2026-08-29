@@ -91,7 +91,8 @@
       ;; not survive a tagged join. Nothing in bench/kernel joins one; a check
       ;; that REFUSES the join instead of truncating is the honest fix and is
       ;; filed rather than guessed at.
-      u64+ u64- u64* u64and u64ior u64xor))
+      u64+ u64- u64* u64and u64ior u64xor
+      + - *))
 
   (define boolean-word-prims
     '(u64=

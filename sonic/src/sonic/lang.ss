@@ -93,6 +93,26 @@
       ;; comparison that does not care, so it is the one that can be spelled
       ;; with what exists.
       (u64= 2)
+      ;; `+`, `-` and `*` ARE THE FIXNUM OPERATIONS, and the restriction is
+      ;; stated rather than discovered. This is not R7RS `+`: it is 2-ary, not
+      ;; variadic, and it does not accept flonums -- there is no numeric tower
+      ;; here and probe 9 records why one is not wanted (bignums allocate).
+      ;;
+      ;; They exist because `(define uart-thr (+ uart-base 5))` is how every
+      ;; driver ever written spells a device register offset, and D207 found
+      ;; bench/kernel stopping on it in two files.
+      ;;
+      ;; Same checks and same mach-ops as `fx+`. Handing one a flonum is refused
+      ;; -- see repr.ss, which names the primitive rather than letting it reach
+      ;; the encoder as "bad mov operands", which is what it did before.
+      ;;
+      ;; A POLYMORPHIC `+` IS POSSIBLE AND IS NOT THIS. `op-for/controls`
+      ;; already receives the storage class, and the `add` mach-op already
+      ;; selects to `addsd` for raw-f64, so the instruction side is solved. What
+      ;; is not is the CONTROL: `+` would carry `overflow-check`, which is
+      ;; meaningless on a float, and repr would have to compute the result class
+      ;; per site rather than per primitive. See the bead.
+      (+ 2 overflow-check) (- 2 overflow-check) (* 2 overflow-check)
       (mmio-u8-ref 1)
       (mmio-u8-set! 2)
       ;; general storage
