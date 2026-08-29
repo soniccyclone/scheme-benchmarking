@@ -9790,3 +9790,77 @@ compile-time guarantee that turns this precondition into a refusal, and this is
 the first thing that actually needs it.
 
 Suite: 8708 checks, 0 failures. Smoke green. Hosted images byte-identical.
+
+## D216 — the allocation-free guarantee, and why it is not a source-level check
+
+`5em`. `(declare-no-allocation f ...)` at top level, refused at compile time if
+any named procedure can reach an allocator. `bench/kernel/04-irq.sps` declares
+all four of its procedures and compiles — a real interrupt driver carrying the
+guarantee and satisfying it.
+
+D215's freestanding entry states allocation-free as a precondition it cannot
+check: the heap pointer cell is not initialised, so a program that allocates
+bumps from whatever the cell holds. **This is the thing that turns that sentence
+into a refusal**, which is the whole difference between a comment and a
+guarantee.
+
+### It runs on Lmach, and that is soundness rather than convenience
+
+Two of the ways a program allocates **are invisible in its own text**.
+
+`%box-flonum` is inserted by `convert.ss` whenever a double has to take the
+`tagged` representation — a polymorphic parameter that also receives a heap
+object forces the join (D31). Nothing in the source says so.
+
+`%make-vector-tagged` is chosen from the **fill's class** at lowering, so even
+the primitive's name does not say which routine runs.
+
+A source-level check would therefore hand a kernel author a guarantee that is
+wrong exactly where flonums meet generic code. On Lmach both are ordinary `call`
+instructions to named labels, and the check becomes a graph walk with no analysis
+in it at all.
+
+### And before `cse` and `dce`, so it cannot depend on them
+
+DCE removes an allocation whose result is unused. Checking after it would make
+the guarantee depend on whether the program happened to **use** the object, and a
+later change to DCE would silently widen what this promises. Checking the
+unoptimised graph makes the answer a property of the program.
+
+### Three things the error has to do
+
+Name the procedure, name the allocator, and give the chain:
+
+```
+`outer` is declared allocation-free and allocates: it reaches
+`%make-vector` through outer -> allocs
+```
+
+Naming the routine is what makes it actionable — "allocates" sends the author to
+read their own source, and the source of a boxed flonum says nothing.
+
+The chain test is written with **two** callers of `allocs` on purpose: with one,
+`inline.ss` splices it and the allocation appears directly in `outer`, which
+tests nothing about following a call.
+
+**A marked name that matches no procedure is refused.** A guarantee attached to
+nothing is indistinguishable from one that holds, and a typo would otherwise
+produce a silent pass — which is the failure mode this whole feature exists to
+remove.
+
+### The list is the correctness argument, so it is checked against the runtime
+
+`allocating-labels` names six routines. **A missing entry is a wrong answer**,
+not a missed optimisation — the opposite of `dce.ss`'s `pure-ops`, where an
+absent name costs instructions and never correctness. `noalloc-test.ss` checks it
+against `runtime-labels` in both directions: every listed label exists, and every
+runtime label spelled `%make-*` or `%box-*` is listed.
+
+The mark costs nothing when satisfied, verified by image equality: byte-identical
+with and without it.
+
+**What it does not cover, stated rather than discovered.** The stack. A deeply
+recursive allocation-free procedure still grows the frame, and on a kernel stack
+that is just as fatal. Bounding depth is a different analysis.
+
+Suite: 8727 checks, 0 failures. Smoke green.
