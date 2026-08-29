@@ -312,6 +312,8 @@
     (add   a0 a1 a2)   (sub   t0 t1 t2)   (mul  s2 s3 s4)   (div  t3 t4 t5)
     (slt   a7 s7 t6)   (sltu  a1 a2 a3)   (xor  s11 s10 s9) (and  a4 a5 a6)
     (or    a4 a5 a6)   (sll   a0 a1 a2)   (srl  a0 a1 a2)   (sra  a0 a1 a2)
+    ;; supervisor return, for interrupt handlers: SYSTEM with imm 0x102
+    (sret)
     ;; register-immediate, including both ends of the 12-bit field
     (addi  a0 a1 -1)   (addi  t0 zero 2047) (addi t1 t2 -2048)
     (slti  a0 a1 5)    (sltiu a6 a7 1)    (xori a4 a5 1)

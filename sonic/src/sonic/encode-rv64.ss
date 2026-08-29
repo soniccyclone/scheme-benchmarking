@@ -207,6 +207,15 @@
       ;; funct3 and imm are all zero. Linux/RV64 takes the syscall number
       ;; in a7 and arguments in a0-a5.
       (ecall system ,op-system #b000)
+      ;; SUPERVISOR RETURN. The same SYSTEM opcode with a non-zero immediate:
+      ;; `sret` is imm 0x102, rd/rs1/funct3 all zero, so the word is 0x10200073.
+      ;;
+      ;; It exists for interrupt handlers. `ret` is `jalr zero ra 0` -- it goes
+      ;; where a CALL said to -- and an interrupt was not a call: the hardware
+      ;; pushed the interrupted PC into `sepc` and there is no return address in
+      ;; `ra` to jump to. Returning with `ret` resumes at whatever `ra` last
+      ;; held, which is not where the machine was interrupted.
+      (sret  system-imm ,op-system #b000 #x102)
       ;; register-immediate: (op rd rs1 imm)
       (addi  i ,op-imm #b000)
       (slti  i ,op-imm #b010)
@@ -346,6 +355,9 @@
                                  (simm12 who (caddr ops))))
         ;; Every field is zero, so this takes no operands and reads none.
         ((system) (arity! 0) (enc-i (car f) (cadr f) 0 0 0))
+        ;; The same, with the immediate the row carries: rd, rs1 and funct3 stay
+        ;; zero and the CSR-shaped immediate says which SYSTEM instruction it is.
+        ((system-imm) (arity! 0) (enc-i (car f) (cadr f) 0 0 (caddr f)))
         ((shift) (arity! 3) (enc-shift (car f) (cadr f) (caddr f)
                                      (gpr-number (car ops)) (gpr-number (cadr ops))
                                      (shamt6 who (caddr ops))))

@@ -275,6 +275,7 @@
     (cond
      ((eq? m 'ret) "ret")
      ((eq? m 'syscall) "syscall")
+     ((eq? m 'iretq) "iretq")
      ;; `cqo` takes no operands: it sign-extends rax across rdx, both implicit.
      ((eq? m 'cqo) "cqo")
      ((memq m '(jmp call))
@@ -406,6 +407,10 @@
     (xor r13 (imm 255))
     (xor r14 r8)
     (xor rax rax)
+    ;; INTERRUPT RETURN. REX.W matters: without it this is `iretd` and pops a
+    ;; 32-bit frame, which is the wrong number of bytes and lands on a
+    ;; plausible address rather than faulting.
+    (iretq)
     ;; BMI2. The count is in VEX.vvvv and the source in ModRM.rm, which is the
     ;; opposite nesting from every other three-operand form here, so the
     ;; register choices below are picked to make a swap visible: distinct

@@ -371,7 +371,7 @@
         (assq m jcc-table) (assq m setcc-table)
         (assq m bmi2-shift)
         (memq m '(mov movb movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
-                  syscall cqo idiv))
+                  syscall iretq cqo idiv))
         #f))
 
   (define (x86-64-supports? m) (and (mnemonic-known? m) #t))
@@ -382,7 +382,7 @@
             (map car jcc-table) (map car setcc-table)
             (map car bmi2-shift)
             '(mov movb movsd movzx imul lea shl sar shr neg cvtsi2sd jmp call ret
-              syscall)))
+              syscall iretq)))
 
   ;; --- the baseline guard ---------------------------------------------------
   ;;
@@ -563,6 +563,15 @@
        ;; system. Adding it here rather than as a magic byte string keeps it
        ;; inside the differential test like every other instruction.
        ((eq? m 'syscall) '(#x0F #x05))
+       ;; INTERRUPT RETURN, 64-bit: REX.W + CF. Without the REX.W it is `iretd`
+       ;; and pops a 32-bit frame, which on x86-64 is the wrong number of bytes
+       ;; off the stack -- and the failure is a jump to a plausible-looking
+       ;; address rather than a fault.
+       ;;
+       ;; `ret` will not serve: an interrupt pushed SS, RSP, RFLAGS, CS and RIP,
+       ;; and `ret` pops one word. It exists for interrupt handlers and for
+       ;; nothing else.
+       ((eq? m 'iretq) '(#x48 #xCF))
        ((eq? m 'neg) (asm 'encode-instr '() 1 '(#xF7) 3 (arg 0) '() #f))
        ;; SIGNED DIVISION, which needs the rdx:rax pair and so is reachable
        ;; only from hand-written runtime code -- see runtime.ss. `cqo`
