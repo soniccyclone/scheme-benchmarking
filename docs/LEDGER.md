@@ -9727,3 +9727,66 @@ pointer, skip the argv walk, and end in a halt rather than an `exit` syscall.
 And `bench/kernel`'s three compiling drivers cannot be linked into one yet.
 
 Suite: 8706 checks, 0 failures. Smoke green. Containment 8/8.
+
+## D215 — a compiled Scheme driver on bare metal, and the 2 GB wall in front of it
+
+```
+$ qemu-system-riscv64 -machine virt -bios none -kernel image
+S321
+```
+
+A program with a global, a counted loop and four MMIO stores, compiled by this
+compiler and started by the machine's reset vector. D214 booted a hand-written
+listing; this is the compiler's own output.
+
+### The wall, measured rather than read
+
+`test/addr-probe.ss` builds `0x80200000` twice on the emulated machine — once
+with the `lui`+`addi` pair every hand-written address in `runtime.ss` uses, once
+by shifting `1` left 31 — compares them, and prints `N`.
+
+**`lui` sign-extends its 32-bit result on RV64**, so an address with bit 31 set
+becomes a huge negative number. qemu's `virt` machine starts RAM at exactly
+`0x80000000`, one past the limit. **Every address a freestanding image needs is
+out of reach of the sequence the entire RV64 runtime is built on.**
+
+It announced itself as a silent failure and not as an error. The driver with its
+loop booted and printed `321`; the identical driver with a **global** printed
+nothing at all — `r:gref` materialises a cell address with the same pair, so the
+load went to `0xFFFFFFFF80200040` and the store to nowhere. Bisecting three
+variants is what located it; no message named anything.
+
+`rv64-address-of` widens to four instructions above the line and is unchanged
+below it. The hosted target never takes the branch: its globals sit at
+`0x600000`.
+
+### What made that verifiable
+
+The data addresses were compile-time constants — `data-base`, `heap-base-address`
+and eight others, 113 use sites across `runtime.ss` and `driver.ss`. They are
+parameters now, converted mechanically, and **the check is image equality**:
+nbody and fannkuch are byte-identical across the whole change, D182's technique
+applied to a refactor rather than to a bug. A mechanical edit of 113 sites is
+exactly the kind that reads correct and is not.
+
+### What the freestanding entry does and does not do
+
+`sp` set, `gp` set to nil, jump to the program, spin. No argv walk — nothing
+pushed one. **Nothing is written to a data cell**, deliberately:
+`command-line-cell` is at the hosted `0x600000` when this runs on a machine that
+maps nothing below `0x80000000`, so storing nil into it to be tidy would fault on
+the instruction after the stack is set up.
+
+**The traps still have to exist.** A check that survives elision branches to one
+by name, and the first freestanding build refused with `undefined label
+(trap-overflow-check)` — `(+ 48 n)` carries an overflow check. They halt rather
+than exit: there is no supervisor to report a status to.
+
+**Allocation-free programs only, and it is stated at the entry rather than
+discovered.** The heap pointer cell is not initialised, so a program that
+allocates bumps from whatever the cell holds. `bench/kernel`'s page walker and
+interrupt driver allocate nothing; the UART driver does. Bead `5em` is the
+compile-time guarantee that turns this precondition into a refusal, and this is
+the first thing that actually needs it.
+
+Suite: 8708 checks, 0 failures. Smoke green. Hosted images byte-identical.
