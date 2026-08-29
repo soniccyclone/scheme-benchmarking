@@ -29,7 +29,7 @@
     'ok))
 
 (define (probe path out)
-  (let loop ((externs '(display newline)) (found '()))
+  (let loop ((externs '(display display-word newline)) (found '())) ; display-word: runtime.ss provides it, so declaring it is correct rather than a discovery
     (let ((r (ask path externs out)))
       (cond
        ((eq? r 'ok) (values (reverse found) "COMPILES"))

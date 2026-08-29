@@ -18,33 +18,36 @@ the container like everything else.
 
 Re-run `./compile-all.sh` after any language change and replace this block.
 
-**2026-08-28, after `mmio-u8` and `mmio-u64` landed** (D207, D208):
+**2026-08-28, after `mmio-*`, `display-word` and the `u64` set** (D207, D208, D210, D211):
 
 ```
-01-uart.sps     wants  bytevector bytevector-length bytevector-u8-ref u64and u64= +
-                stops  undefined label [+]
-
-02-pagewalk.sps wants  u64+ u64and u64ior u64shl u64shr u64=
-                stops  display refuses a tagged argument
-
-03-ring.sps     wants  (nothing unbound -- define-record-type swallows the file)
-                stops  a top-level definition after a top-level expression
-
-04-irq.sps      wants  u64and u64= +
-                stops  display refuses a raw-word argument
+01-uart.sps     wants  bytevector bytevector-length bytevector-u8-ref +
+02-pagewalk.sps wants  u64shl u64shr
+03-ring.sps     wants  (nothing -- define-record-type swallows the file)
+04-irq.sps      wants  +
 ```
 
-Every `mmio-*` name is gone from every list. What is left is three groups: the
-`u64` arithmetic and comparison (bead `0wr.2`), bytevectors (`0wr.1`), and
-`define-record-type` (`9yp`) -- plus the two gaps D207 found that were in no
-bead: `display` accepts `raw-f64` alone (`0rb`) and there is no generic `+`.
+**04-irq is one primitive from compiling, and it is `+`.** Three of the four
+programs now name at most three missing things. What is left:
 
-**2026-08-28, first run, before anything landed:**
+| missing | bead |
+| --- | --- |
+| generic `+` | `2f7` |
+| `u64shl`, `u64shr` | `xhr` — a variable shift count must sit in CL on x86-64 |
+| bytevectors | `0wr.1` |
+| `define-record-type`, `raise`, `guard` | `9yp` |
+
+### Earlier runs, so the movement is visible
 
 ```
-01-uart.sps     wants  bytevector bytevector-length bytevector-u8-ref
-                       mmio-u8-ref mmio-u8-set! u64and u64= +
-02-pagewalk.sps wants  mmio-u64-ref u64+ u64and u64ior u64shl u64shr u64=
-03-ring.sps     wants  (nothing)
-04-irq.sps      wants  mmio-u8-ref u64and u64= +
+2026-08-28, first run, before anything landed:
+01-uart      bytevector bytevector-length bytevector-u8-ref mmio-u8-ref mmio-u8-set! u64and u64= +
+02-pagewalk  mmio-u64-ref u64+ u64and u64ior u64shl u64shr u64=
+03-ring      (nothing)
+04-irq       mmio-u8-ref u64and u64= +
+
+after mmio-u8 and mmio-u64:
+01-uart      bytevector bytevector-length bytevector-u8-ref u64and u64= +
+02-pagewalk  u64+ u64and u64ior u64shl u64shr u64=
+04-irq       u64and u64= +
 ```

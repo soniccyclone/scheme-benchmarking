@@ -76,7 +76,7 @@
   ;; instruction reads, once per iteration of the hottest loop in the
   ;; benchmark, next to the `add $0x1` that made it redundant.
   (define pure-ops
-    '(const add sub mul neg sqrt abs
+    '(const add sub mul neg sqrt abs and or xor
       cmp-lt cmp-le cmp-eq cmp-ge cmp-gt
       fcmp-lt fcmp-le fcmp-eq fcmp-ge fcmp-gt
       load load-at move vlen gref add-imm mul-imm ashr-imm

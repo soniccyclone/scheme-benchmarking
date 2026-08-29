@@ -56,6 +56,6 @@
   (let ((r (ring-new 16)))
     (ring-push! r 3)
     (ring-push! r 4)
-    (display (drain r 0))))
+    (display-word (drain r 0))))
 
 (main)

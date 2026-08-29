@@ -136,6 +136,16 @@
       (let ((a (car srcs)) (b (cadr srcs)))
         (two-address who (if (fp? sc) fp-mn int-mn) sc dst a b commutative?))))
 
+  ;; Bitwise operations, which have no floating-point counterpart here. Passing
+  ;; `andpd` as the fp mnemonic would compile: it masks a double's bit pattern,
+  ;; which is a different operation with the same name, so a class join that
+  ;; delivered raw-f64 would silently mask a float. Refuse instead.
+  (define (bitwise who mn)
+    (lambda (dst sc srcs)
+      (when (fp? sc)
+        (error who "no floating-point form of this bitwise operation" mn dst srcs))
+      ((arith who mn mn #t) dst sc srcs)))
+
   ;; --- comparisons ----------------------------------------------------------
   ;;
   ;; Lmach names the comparison's result as a vreg, so the flags cannot stay in
@@ -264,6 +274,13 @@
                  (error 'x86-64-selector
                         "only exact integer and flonum literals are selectable" d))))))
 
+     ;; BITWISE, integers only. The fp mnemonic is #f because there is no
+     ;; flonum spelling of these: `andpd` exists but masks a double's bits,
+     ;; which is a different operation from `u64and` and must not be reachable
+     ;; by a class join arriving here with raw-f64.
+     (cons 'and (bitwise 'x86-64-selector 'and))
+     (cons 'or  (bitwise 'x86-64-selector 'or))
+     (cons 'xor (bitwise 'x86-64-selector 'xor))
      (cons 'add (arith 'x86-64-selector 'add 'addsd #t))
      (cons 'sub (arith 'x86-64-selector 'sub 'subsd #f))
      (cons 'mul (arith 'x86-64-selector 'imul 'mulsd #t))

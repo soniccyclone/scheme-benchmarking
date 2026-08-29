@@ -56,6 +56,6 @@
 (define (main)
   ;; A writable, non-executable identity mapping of physical page 0x80000.
   (let ((pte (make-pte #x80000000 (u64ior pte-v (u64ior pte-r (u64ior pte-w pte-nx))))))
-    (display (translate #x80001000 #x40000000))))
+    (display-word (translate #x80001000 #x40000000))))
 
 (main)

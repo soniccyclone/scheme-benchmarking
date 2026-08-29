@@ -43,6 +43,6 @@
           (service (fx- n 1) (fx+ acc (read-pair))))))
 
 (define (main)
-  (display (service 4 0)))
+  (display-word (service 4 0)))
 
 (main)

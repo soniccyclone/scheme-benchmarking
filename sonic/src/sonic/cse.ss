@@ -198,7 +198,7 @@
 
   ;; Value-like: the result is a function of the operand vregs alone.
   (define value-ops
-    '(add sub mul neg sqrt abs
+    '(add sub mul neg sqrt abs and or xor
       cmp-lt cmp-le cmp-eq cmp-ge cmp-gt
       fcmp-lt fcmp-le fcmp-eq fcmp-ge fcmp-gt
       move cvt-f64-from-int cvt-int-from-f64))

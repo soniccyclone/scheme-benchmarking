@@ -624,6 +624,25 @@
              (system (string-append x8 " > " x8 ".out"))
              (zero? (system (string-append "cmp -s " rv ".out " x8 ".out")))))))
 
+(if (not qemu-available?)
+    (display "  SKIP qemu-riscv64 absent; u64 is not run on rv64\n")
+    (let ((rv "/tmp/sonic-u64-rv64") (x8 "/tmp/sonic-u64-x86"))
+      (ck! "u64 arithmetic at bit 63 agrees BIT FOR BIT between rv64 and x86-64"
+           (guard (e (#t #f))
+             (compile-sonic-to-file "test/rv64-u64.sps" '(display-word) rv 'rv64)
+             (compile-sonic-to-file "test/rv64-u64.sps" '(display-word) x8 'x86-64)
+             (system (string-append "chmod +x " rv " " x8))
+             (system (string-append "qemu-riscv64 " rv " > " rv ".out"))
+             (system (string-append x8 " > " x8 ".out"))
+             (zero? (system (string-append "cmp -s " rv ".out " x8 ".out")))))
+      ;; THE CONTROL. `cmp` on two empty files also succeeds, so an agreement
+      ;; test says nothing until the output is known to exist. Six words.
+      (ck! "and both produced the six words, rather than agreeing by both failing"
+           (= 48 (let ((p (open-file-input-port "/tmp/sonic-u64-rv64.out")))
+                   (let ((bv (get-bytevector-all p)))
+                     (close-port p)
+                     (if (eof-object? bv) 0 (bytevector-length bv))))))))
+
 ;;; --- the reserved scratch registers are shared, and nothing arbitrated ----
 ;;;
 ;;; regs.ss reserves t0/t1/t2 so passes can use a register the allocator will

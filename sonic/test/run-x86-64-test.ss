@@ -1507,6 +1507,46 @@
              "(define (main) (display-word (sum 1000 0)))\n(main)\n")
             '(500500))
 
+;; --- u64: THE BIT A FIXNUM CANNOT REACH ------------------------------------
+;;
+;; Probe 9's ceiling, from the other side. 3 tag bits leave 61 value bits, so
+;; bit 63 -- x86-64's NX in a page-table entry -- does not fit a fixnum at all.
+;;
+;; Every value is DOUBLED rather than written as a literal. A constant above 32
+;; bits is refused by both targets today, so a literal would test the refusal
+;; instead of the arithmetic; and a folded literal would exercise no instruction.
+;; rv64-test.ss runs the same shapes and compares the two ISAs byte for byte.
+(define u64-dbl
+  "(define (dbl n x) (if (fx= n 0) x (dbl (fx- n 1) (u64+ x x))))\n")
+
+(run-words! "2^63 is representable, which is one bit more than a fixnum holds"
+            (string-append u64-dbl "(define (main) (display-word (dbl 63 1)))\n(main)\n")
+            '(9223372036854775808))
+
+(run-words! "a PTE's top bit and its flag bits coexist"
+            (string-append u64-dbl
+                           "(define (main) (display-word (u64ior (dbl 63 1) 3)))\n(main)\n")
+            '(9223372036854775811))
+
+(run-words! "disjoint masks intersect in nothing"
+            (string-append u64-dbl
+                           "(define (main) (display-word (u64and (dbl 63 1) (dbl 62 1))))\n(main)\n")
+            '(0))
+
+;; THE DIFFERENCE FROM fx+, and it is the reason u64 is a separate set of
+;; primitives rather than a spelling. This overflows a 64-bit word. `fx+` carries
+;; `overflow-check` and would trap; `u64+` carries no checks at all and wraps,
+;; which is what an address computation wants and what the hardware does.
+(run-words! "u64 addition WRAPS where fx+ would trap"
+            (string-append u64-dbl
+                           "(define (main) (display-word (u64+ (dbl 63 1) (dbl 63 1))))\n(main)\n")
+            '(0))
+
+(run-words! "u64 multiplication reaches bit 63 from below"
+            (string-append u64-dbl
+                           "(define (main) (display-word (u64* (dbl 62 1) 2)))\n(main)\n")
+            '(9223372036854775808))
+
 ;; --- DEVICE MEMORY: N READS IN THE SOURCE ARE N LOADS IN THE IMAGE ----------
 ;;
 ;; The failure this pins is a MISCOMPILE, not a missed optimisation. Written

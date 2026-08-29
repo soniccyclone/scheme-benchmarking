@@ -84,10 +84,18 @@
       ;; on `u64` as a storage class of its own (bead 0wr.2); until then a
       ;; driver that reads one must keep the value raw, which is what every
       ;; consumer in bench/kernel does.
-      mmio-u64-ref mmio-u8-ref))
+      mmio-u64-ref mmio-u8-ref
+      ;; u64 arithmetic. Its word-kind is `fixnum` for the same reason and with
+      ;; the same caveat as the MMIO reads above: that is how it tags IF it has
+      ;; to, and tagging SHIFTS LEFT 3, so a value using the top three bits does
+      ;; not survive a tagged join. Nothing in bench/kernel joins one; a check
+      ;; that REFUSES the join instead of truncating is the honest fix and is
+      ;; filed rather than guessed at.
+      u64+ u64- u64* u64and u64ior u64xor))
 
   (define boolean-word-prims
-    '(fx< fx<= fx= fx>= fx> fl< fl<= fl= fl>= fl>
+    '(u64=
+      fx< fx<= fx= fx>= fx> fl< fl<= fl= fl>= fl>
       null? pair? fixnum? flonum? vector? flvector? eq?))
 
   (define word-prims (append fixnum-word-prims boolean-word-prims))

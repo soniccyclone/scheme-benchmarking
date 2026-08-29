@@ -247,6 +247,10 @@
       ;; `or` is here for the runtime: tagging a heap pointer is
       ;; `(raw + header) | 1`, and tagging a boolean is `(x << 3) | 7` (D28).
       (or  . (#x09 #x0B 1))
+      ;; `xor` is here for u64 (bead 0wr.2): a driver masking a device
+      ;; descriptor needs all three of and/or/xor, and the first two were
+      ;; already present for reasons that had nothing to do with each other.
+      (xor . (#x31 #x33 6))
       (cmp . (#x39 #x3B 7))))
 
   (define sse-arith

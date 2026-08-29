@@ -391,6 +391,14 @@
     (and rbx (imm 7))
     (and r13 (imm 7))                       ; REX.B on the immediate form
     (and r14 r8)
+    ;; `xor` completes the trio. `and` was here for the tag mask and `or` for
+    ;; pointer tagging; nothing had ever needed the third until u64 (bead
+    ;; 0wr.2), and a table entry that no test reads is a table entry nobody
+    ;; knows is wrong.
+    (xor rbx (imm 7))
+    (xor r13 (imm 255))
+    (xor r14 r8)
+    (xor rax rax)
     ;; integer arithmetic
     (add rbx r8)
     (add r14 (imm 7))                       ; imm8 form

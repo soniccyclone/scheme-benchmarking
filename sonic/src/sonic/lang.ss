@@ -76,6 +76,23 @@
       ;; so `mmio-u64-*` is the one that needs no masking and is first.
       (mmio-u64-ref 1)
       (mmio-u64-set! 2)
+      ;; FIXED-WIDTH MACHINE WORDS. Probe 9: 3 tag bits leave 61 value bits, so
+      ;; a page-table entry with NX at bit 63 does not fit a fixnum, and a
+      ;; numeric tower does not substitute because bignums allocate.
+      ;;
+      ;; NO CHECKS AT ALL, and that is the definition rather than an omission.
+      ;; `fx+` carries `overflow-check` because a fixnum that overflows has left
+      ;; the type; a u64 that overflows has wrapped, which is what the hardware
+      ;; does and what a driver computing an address wants. Same mach-ops as the
+      ;; fixnum forms, minus the check.
+      (u64+ 2) (u64- 2) (u64* 2)
+      (u64and 2) (u64ior 2) (u64xor 2)
+      ;; Equality only. ORDERING IS DELIBERATELY ABSENT: `cmp-lt` and friends
+      ;; are the SIGNED forms (see target-x86-64.ss), and unsigned comparison of
+      ;; two machine words is a different instruction. Equality is the one
+      ;; comparison that does not care, so it is the one that can be spelled
+      ;; with what exists.
+      (u64= 2)
       (mmio-u8-ref 1)
       (mmio-u8-set! 2)
       ;; general storage
@@ -217,6 +234,13 @@
       ;; comparison is unselectable.
       cmp-lt cmp-le cmp-eq cmp-ge cmp-gt            ; integer comparison
       fcmp-lt fcmp-le fcmp-eq fcmp-ge fcmp-gt       ; f64 comparison
+      ;; BITWISE, on machine words. Commutative, so twoaddr's
+      ;; `non-commutative-ops` needs no entry, and pure, so dce and cse both
+      ;; want them listed. Shifts are NOT here: a variable shift count must sit
+      ;; in CL on x86-64, which is a register pin this allocator cannot yet
+      ;; express -- see the bead, and `ashr-imm` for the constant-count case
+      ;; that addrfold already produces.
+      and or xor
       load store                                    ; memory, with a scale
       ;; DEVICE MEMORY, and it is a separate op rather than a flag on `load`
       ;; for the reason `declare-distinct` needed its own production: it says

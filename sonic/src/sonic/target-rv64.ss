@@ -702,6 +702,13 @@
                (vslidedown.vi ,rv64-vector-scratch ,(car srcs) 1)
                (vfmv.f.s ,dst ,rv64-vector-scratch))))
      (cons 'const  r:const)
+     ;; Bitwise. RV64 spells all three three-address, so unlike x86-64 there is
+     ;; no two-address fixup and no destructive destination. `#f` as the float
+     ;; mnemonic makes a raw-f64 arrival a loud failure rather than a mask over
+     ;; a double.
+     (cons 'and    (binop 'and #f))
+     (cons 'or     (binop 'or  #f))
+     (cons 'xor    (binop 'xor #f))
      (cons 'add    (binop 'add 'fadd.d))
      (cons 'sub    (binop 'sub 'fsub.d))
      (cons 'mul    (binop 'mul 'fmul.d))
