@@ -18,21 +18,25 @@ the container like everything else.
 
 Re-run `./compile-all.sh` after any language change and replace this block.
 
-**2026-08-28, after `mmio-*`, `display-word` and the `u64` set** (D207, D208, D210, D211):
+**2026-08-28, after `+` landed** (D212):
 
 ```
-01-uart.sps     wants  bytevector bytevector-length bytevector-u8-ref +
+01-uart.sps     wants  bytevector bytevector-length bytevector-u8-ref
 02-pagewalk.sps wants  u64shl u64shr
 03-ring.sps     wants  (nothing -- define-record-type swallows the file)
-04-irq.sps      wants  +
+04-irq.sps      COMPILES
 ```
 
-**04-irq is one primitive from compiling, and it is `+`.** Three of the four
-programs now name at most three missing things. What is left:
+**`04-irq.sps` is the first one through.** Its four `mmio-u8-ref` calls become
+four `movzx`-from-memory in the image -- including the one in `irq-ack` whose
+value is discarded, which is what clears an interrupt and what DCE used to reap.
+68 instructions.
 
-| missing | bead |
+It compiles and cannot be RUN hosted: it reads 0x10000000, which is a device
+window on qemu `virt` and a segfault under Linux. Running it is `4qp.1`.
+
+| still missing | bead |
 | --- | --- |
-| generic `+` | `2f7` |
 | `u64shl`, `u64shr` | `0wr.3` — a variable shift count must sit in CL on x86-64 |
 | bytevectors | `0wr.1` |
 | `define-record-type`, `raise`, `guard` | `9yp` |
