@@ -359,6 +359,30 @@
               (let ((n (offset-disp 'rv64-select d)))
                 (if (float? sc) `((fsd ,val ,t ,n)) `((sd ,val ,t ,n)))))))
 
+  ;; BYTE-WIDE HEAP ACCESS, scale 1. `address-into` scales by the storage
+  ;; class's width, which is 8 for every class this compiler has; a bytevector
+  ;; index is a byte offset, so the address is a plain add and the header
+  ;; displacement rides in the load's own immediate as it always does.
+  (define (byte-address-into scratch base idx)
+    (if idx
+        (list `(add ,scratch ,base ,idx))
+        (list `(addi ,scratch ,base 0))))
+
+  (define (r:load8 dst sc srcs)
+    (let ((t (rv64-addr-scratch)))
+      (case (length srcs)
+        ((1) (append (byte-address-into t (car srcs) #f)
+                     `((lbu ,dst ,t ,heap-element-disp))))
+        ((2) (append (byte-address-into t (car srcs) (cadr srcs))
+                     `((lbu ,dst ,t ,heap-element-disp))))
+        (else (error 'rv64-select "load8 expects a base and an optional index" srcs)))))
+
+  (define (r:store8 dst sc srcs)
+    (arity-check! 'rv64-select 3 srcs)
+    (let ((t (rv64-addr-scratch)))
+      (append (byte-address-into t (car srcs) (cadr srcs))
+              `((sb ,(caddr srcs) ,t ,heap-element-disp)))))
+
   ;; DEVICE MEMORY. One instruction each, and simpler than the heap forms
   ;; because there is nothing to arrange: `addr` is already the address. No
   ;; `address-into` (no index to scale), no `heap-element-disp` (no header to
@@ -591,9 +615,21 @@
        (unless (= (length srcs) 1)
          (error who "type check expects one value" srcs))
        (let ((v (car srcs)))
+         ;; `(rv64-trap-label 'type-check)`, NOT a hand-written name. This case
+         ;; said `%type-error`, a label that has never existed in either
+         ;; runtime -- the bounds and overflow cases beside it both build their
+         ;; label from the check's own name and land on `trap-bounds-check` and
+         ;; `trap-overflow-check`, which do. So NO RV64 PROGRAM WITH A LIVE TYPE
+         ;; CHECK HAS EVER LINKED.
+         ;;
+         ;; Nothing noticed for the reason runtime.ss already records about the
+         ;; other two: nbody's checks are all discharged by proof or by policy,
+         ;; so it never references a trap at all. D160 fixed exactly this in the
+         ;; other two cases and this one was left behind. Found by the first
+         ;; program to carry a surviving type check -- a bytevector access.
          `((andi t0 ,v 7)
            (addi t1 zero ,tag)
-           (bne t0 t1 %type-error))))
+           (bne t0 t1 ,(rv64-trap-label 'type-check)))))
       (else (error who "no RV64 sequence for this check" name))))
 
   ;; (chk pn c v* ...) arrives as dst = pn, sc = c. select-instr already refuses
@@ -760,6 +796,8 @@
      (cons 'store-at r:store-at)
      (cons 'mmio-load  r:mmio-load)
      (cons 'mmio-store r:mmio-store)
+     (cons 'load8   r:load8)
+     (cons 'store8  r:store8)
      (cons 'mmio-load8  r:mmio-load8)
      (cons 'mmio-store8 r:mmio-store8)
      (cons 'add-imm  r:add-imm)

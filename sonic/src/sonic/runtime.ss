@@ -293,6 +293,52 @@
       (add rax (imm ,(+ heap-header-bytes heap-tag)))
       (ret)
 
+      ;; ---- (make-bytevector count fill) ----
+      ;; count in rcx and fill in rdx -- raw-word arguments 0 and 1. Returns a
+      ;; tagged pointer.
+      ;;
+      ;; `%make-flvector` with two differences, and both are the byte width:
+      ;;
+      ;;   * THE LENGTH FIELD IS THE BYTE COUNT, not a word count. `vlen` reads
+      ;;     it straight and a bounds check compares an index against it, so a
+      ;;     word count would bound every access at one eighth of the object.
+      ;;   * THE BUMP ROUNDS UP TO WHOLE WORDS. The heap is word-addressed
+      ;;     (alloc.ss, gc.ss), so a 3-byte bytevector still consumes one word
+      ;;     and the next object still starts aligned. (count + 7) & ~7.
+      ;;
+      ;; The payload is never traced: `heap-type-bytevector` tells the collector
+      ;; so, which is the same promise the flvector type makes and the reason
+      ;; D29 put the type in the header rather than in the pointer.
+      %make-bytevector
+      (mov rax ,(abs-mem heap-pointer-cell))     ; rax = raw base
+      (cmp rax (imm ,(- (+ heap-base-address heap-size) heap-header-bytes)))
+      (jg (label sonic-heap-error))
+      (mov rsi (imm ,heap-type-bytevector))
+      (mov (mem rax #f 1 0) rsi)                 ; [raw+0] = type
+      (mov (mem rax #f 1 8) rcx)                 ; [raw+8] = length IN BYTES
+      ;; bump: heap_ptr = raw + 16 + ((count + 7) & ~7)
+      (mov rsi rcx)
+      (add rsi (imm 7))
+      (and rsi (imm -8))
+      (add rsi (imm ,heap-header-bytes))
+      (add rsi rax)
+      (cmp rsi (imm ,(+ heap-base-address heap-size)))
+      (jg (label sonic-heap-error))
+      (mov ,(abs-mem heap-pointer-cell) rsi)
+      ;; fill, one byte at a time. The count is the BYTE count, so this loop
+      ;; runs count times and not count/8 times.
+      (lea rdi (mem rax #f 1 ,heap-header-bytes))
+      (mov rsi (imm 0))
+      %mkbv-loop
+      (cmp rsi rcx)
+      (jge (label %mkbv-done))
+      (movb (mem rdi rsi 1 0) rdx)
+      (add rsi (imm 1))
+      (jmp (label %mkbv-loop))
+      %mkbv-done
+      (add rax (imm ,(+ heap-header-bytes heap-tag)))
+      (ret)
+
       ;; ---- (make-vector count fill) ----
       ;; count in rcx and fill in rdx -- raw-word arguments 0 and 1. Returns a
       ;; tagged pointer.
@@ -1112,6 +1158,47 @@
       (lui  t2 ,(hi20 heap-pointer-cell))
       (sd   t1 t2 ,(lo12 heap-pointer-cell))
       (addi a0 a0 ,(+ heap-header-bytes heap-tag))
+      (jalr zero ra 0)
+
+      ;; ---- (make-bytevector count fill) ----
+      ;;
+      ;; count in t3 and fill in t4 -- raw-word arguments 0 and 1. Returns a
+      ;; TAGGED pointer in a0, for the reason spelled out at %make-flvector
+      ;; above: the count arrives in the raw pool and the result leaves in the
+      ;; value pool, which is one register on x86-64 and two here.
+      ;;
+      ;; See the x86-64 twin for why the length field is a BYTE count while the
+      ;; bump rounds up to whole words.
+      %make-bytevector
+      (lui  t0 ,(hi20 heap-pointer-cell))
+      (ld   t1 t0 ,(lo12 heap-pointer-cell))     ; t1 = raw base
+      (lui  t2 ,(hi20 (- (+ heap-base-address heap-size) heap-header-bytes)))
+      (addi t2 t2 ,(lo12 (- (+ heap-base-address heap-size) heap-header-bytes)))
+      (blt  t2 t1 sonic-heap-error)
+      (addi t0 zero ,heap-type-bytevector)
+      (sd   t0 t1 0)                             ; [raw+0] = type
+      (sd   t3 t1 8)                             ; [raw+8] = length IN BYTES
+      ;; bump: heap_ptr = raw + 16 + ((count + 7) & ~7)
+      (addi t0 t3 7)
+      (andi t0 t0 -8)
+      (addi t0 t0 ,heap-header-bytes)
+      (add  t0 t0 t1)
+      (lui  t2 ,(hi20 (+ heap-base-address heap-size)))
+      (addi t2 t2 ,(lo12 (+ heap-base-address heap-size)))
+      (blt  t2 t0 sonic-heap-error)
+      (lui  t2 ,(hi20 heap-pointer-cell))
+      (sd   t0 t2 ,(lo12 heap-pointer-cell))
+      ;; fill one byte at a time: t0 walks, t2 counts, t4 is the fill
+      (addi t0 t1 ,heap-header-bytes)
+      (addi t2 zero 0)
+      %mkbv-loop
+      (bge  t2 t3 %mkbv-done)
+      (sb   t4 t0 0)
+      (addi t0 t0 1)
+      (addi t2 t2 1)
+      (jal  zero %mkbv-loop)
+      %mkbv-done
+      (addi a0 t1 ,(+ heap-header-bytes heap-tag))
       (jalr zero ra 0)
 
       ;; ---- (display x) ----

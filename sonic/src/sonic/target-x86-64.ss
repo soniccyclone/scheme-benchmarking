@@ -407,6 +407,32 @@
                       "mmio-store expects (mmio-store <unused> sc addr value)" srcs))
              `((,(mov-for sc) ,(mem/disp (car srcs) #f 0) ,(cadr srcs)))))
 
+     ;; BYTE-WIDE HEAP ACCESS, scale 1. `load` and `store` scale their index by
+     ;; 8 because every storage class this compiler had was a machine word
+     ;; wide; a bytevector's elements are not, so these are the same rules with
+     ;; the scale changed and the same `heap-element-disp` absorbing the header
+     ;; offset and the pointer tag.
+     ;;
+     ;; Zero-extending, like the MMIO byte read and for the same reason: a byte
+     ;; out of a device descriptor with bit 7 set is a bit pattern, not a
+     ;; negative number.
+     (cons 'load8
+           (lambda (dst sc srcs)
+             (let ((addr (case (length srcs)
+                           ((1) `(mem ,(car srcs) #f 1 ,heap-element-disp))
+                           ((2) `(mem ,(car srcs) ,(cadr srcs) 1 ,heap-element-disp))
+                           (else (error 'x86-64-selector
+                                        "load8 expects a base and an optional index" srcs)))))
+               `((movzx ,dst ,addr)))))
+
+     (cons 'store8
+           (lambda (dst sc srcs)
+             (unless (= (length srcs) 3)
+               (error 'x86-64-selector
+                      "store8 expects (store8 <unused> sc base index value)" srcs))
+             `((movb (mem ,(car srcs) ,(cadr srcs) 1 ,heap-element-disp)
+                     ,(caddr srcs)))))
+
      ;; Byte-wide. `movzx` is REX.W 0F B6 -- zero-extending, not sign-extending,
      ;; because a status byte with bit 7 set is a bit pattern rather than a
      ;; negative number, and `movb` is 0x88 with REX.W clear, which writes

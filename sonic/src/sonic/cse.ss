@@ -207,7 +207,10 @@
   ;; Reads the HEAP, so equal operands mean equal results only between writes
   ;; to it. `load-at` belongs here and was missing: it is a load like any other
   ;; and was simply never considered for elimination.
-  (define memory-ops '(load load-at vlen))
+  ;; `load8` is a heap read like any other: foldable between writes, which is
+  ;; exactly what `mmio-load8` is NOT. Byte width is the only thing the two
+  ;; share.
+  (define memory-ops '(load load8 load-at vlen))
 
   ;; Reads a GLOBAL CELL, which is a different storage area entirely.
   ;;
@@ -240,7 +243,7 @@
   ;; omission from an allowlist, which is why dce-test.ss and cse-test.ss both
   ;; pin it -- an allowlist gains entries, and this is one nobody may add.
   (define clobber-ops
-    '(store store-at call mmio-load mmio-store mmio-load8 mmio-store8))
+    '(store store8 store-at call mmio-load mmio-store mmio-load8 mmio-store8))
 
   ;; Writes a global, or may. A call may do either, so it appears in both.
   (define global-clobber-ops '(gset call))

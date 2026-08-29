@@ -93,7 +93,10 @@
       ;; filed rather than guessed at.
       u64+ u64- u64* u64and u64ior u64xor
       + - *
-      u64shl u64shr u64sar))
+      u64shl u64shr u64sar
+      ;; A byte read yields a machine word 0..255, and the length is a raw
+      ;; count exactly as `vector-length` is.
+      bytevector-u8-ref bytevector-length))
 
   (define boolean-word-prims
     '(u64=
@@ -109,7 +112,7 @@
           (else #f)))
 
   (define tagged-prims
-    '(make-flvector make-vector cons car cdr error))
+    '(make-flvector make-vector make-bytevector cons car cdr error))
 
   ;; --- what a general vector's elements are ----------------------------------
   ;;
@@ -149,7 +152,7 @@
 
   ;; flvector-set! and vector-set! have no useful result; they are classified
   ;; raw-word so the unused destination does not pull a value register.
-  (define effect-prims '(flvector-set! vector-set! mmio-u64-set! mmio-u8-set!))
+  (define effect-prims '(flvector-set! vector-set! mmio-u64-set! mmio-u8-set! bytevector-u8-set!))
 
   ;; --- what a primitive requires of its ARGUMENTS ----------------------------
   ;;

@@ -122,6 +122,19 @@
       ;; No overflow check on the left shift. Bits shifted off the top are gone,
       ;; which is what the hardware does and what building a PTE field wants.
       (u64shl 2) (u64shr 2) (u64sar 2)
+      ;; BYTEVECTORS. Byte-addressed storage the collector never traces.
+      ;;
+      ;; A 4 KiB ring buffer in `make-vector` is 32 KiB of heap and every
+      ;; element is scanned for a pointer it cannot contain; the same ring in a
+      ;; bytevector is 4 KiB and is skipped entirely. That is the reason a
+      ;; kernel needs these and not a convenience.
+      ;;
+      ;; MANDATORY FILL, as `make-vector` and `make-flvector` have: an unfilled
+      ;; bytevector is a determinism hazard the bit-exact oracle cannot tolerate.
+      (make-bytevector 2 type-check)
+      (bytevector-u8-ref 2 type-check bounds-check)
+      (bytevector-u8-set! 3 type-check bounds-check)
+      (bytevector-length 1 type-check)
       (mmio-u8-ref 1)
       (mmio-u8-set! 2)
       ;; general storage
@@ -314,6 +327,13 @@
       ;; Only 8 and 64 exist: those are what bench/kernel asks for. 16 and 32
       ;; arrive when something needs them, not before.
       mmio-load8 mmio-store8
+      ;; BYTE-WIDE HEAP ACCESS. `load` and `store` scale their index by 8,
+      ;; because every storage class this compiler had was a machine word wide.
+      ;; A bytevector's are not, so these are the same operations at scale 1 --
+      ;; distinct from `mmio-load8`, which is byte-wide AND unfoldable AND has
+      ;; no header displacement. Three properties, and only one of them is
+      ;; shared.
+      load8 store8
       move                                          ; data movement
       ;; int<->float conversion. fl->fx and fx->fl were in the primitive table
       ;; with no mach op to select from, so fcvt.d.l was encodable and

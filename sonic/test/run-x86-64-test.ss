@@ -1507,6 +1507,58 @@
              "(define (main) (display-word (sum 1000 0)))\n(main)\n")
             '(500500))
 
+;; --- BYTE-ADDRESSED STORAGE -------------------------------------------------
+;;
+;; A 4 KiB ring in `make-vector` is 32 KiB of heap and every element is scanned
+;; by the collector for a pointer it cannot contain. That is the reason these
+;; had to reach the allocator rather than being emulated on a vector, and it is
+;; why the header carries a new type word rather than reusing flvector's.
+(define bv-setup
+  (string-append
+   "(define b (make-bytevector 6 65))\n"
+   "(define c (make-bytevector 3 7))\n"))
+
+;; THE LENGTH FIELD IS THE BYTE COUNT, not the word count the allocator rounded
+;; up to. `vlen` reads it straight and a bounds check compares an index against
+;; it, so a word count would bound every access at one eighth of the object.
+(run-words! "a bytevector's length is its byte count"
+            (string-append bv-setup
+                           "(define (main) (display-word (bytevector-length b)))\n(main)\n")
+            '(6))
+
+;; A BYTE STORE WRITES ONE BYTE. Written with `mov` instead of `movb`, or with
+;; the index scaled by 8 instead of 1, this reads back 0 -- the fill value is
+;; what makes the neighbour's survival visible.
+(run-words! "a byte store leaves its neighbour alone"
+            (string-append bv-setup
+                           "(define (main) (begin (bytevector-u8-set! b 0 72)\n"
+                           "  (display-word (bytevector-u8-ref b 1))))\n(main)\n")
+            '(65))
+
+(run-words! "and the byte it wrote is the byte that comes back"
+            (string-append bv-setup
+                           "(define (main) (begin (bytevector-u8-set! b 0 72)\n"
+                           "  (display-word (bytevector-u8-ref b 0))))\n(main)\n")
+            '(72))
+
+;; THE ROUNDING. `b` is 6 bytes, which is not a whole number of words, so the
+;; allocator must round its bump up to 8 or `c` overlaps it. Writing through `b`
+;; past its length would then be visible in `c`.
+(run-words! "an object allocated after a ragged one is intact"
+            (string-append bv-setup
+                           "(define (main) (begin (bytevector-u8-set! b 5 10)\n"
+                           "  (display-word (bytevector-u8-ref c 0))))\n(main)\n")
+            '(7))
+
+;; A byte is UNSIGNED. `movzx`, not `movsx`: a status byte with bit 7 set is a
+;; bit pattern, and sign-extending it would make every comparison against it
+;; wrong.
+(run-words! "a byte with its top bit set reads back unsigned"
+            (string-append
+             "(define d (make-bytevector 2 200))\n"
+             "(define (main) (display-word (bytevector-u8-ref d 0)))\n(main)\n")
+            '(200))
+
 ;; --- `+`, WHICH IS THE FIXNUM OPERATION AND SAYS SO ------------------------
 ;;
 ;; Not R7RS `+`: 2-ary, and fixnum only. It exists because

@@ -194,6 +194,7 @@
           ;; heap objects
           heap-tag heap-pointer?
           heap-type-vector heap-type-flvector heap-type-pair
+          heap-type-bytevector
           heap-type-string heap-type-procedure heap-type-flonum
           heap-header-words heap-header-bytes
           heap-element-disp heap-length-disp heap-type-disp
@@ -329,6 +330,16 @@
   ;; that from the header, which is the whole reason D29 puts the type there
   ;; rather than in the pointer.
   (define heap-type-flonum    5)
+  ;; A BYTEVECTOR. Raw bytes, never traced -- the same promise an flvector's
+  ;; payload makes, at a different element width.
+  ;;
+  ;; ITS LENGTH FIELD IS IN BYTES, and that is the one place it departs from
+  ;; every other heap object here. `vlen` yields the length word directly and a
+  ;; bounds check compares an index against it, so a length in words would bound
+  ;; `bytevector-u8-ref` at one eighth of the object. The allocator rounds the
+  ;; byte count up to whole words for the bump; the field keeps the count the
+  ;; program asked for.
+  (define heap-type-bytevector 6)
 
   (define heap-header-words 2)
   (define heap-header-bytes (* 8 heap-header-words))

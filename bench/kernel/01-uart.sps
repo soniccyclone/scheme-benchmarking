@@ -39,9 +39,24 @@
              (uart-write bv (fx+ i 1) n))
       0))
 
-(define hello (bytevector 72 101 108 108 111 10))
+;; SPELLED OUT ONE STORE AT A TIME, and that is a gap rather than a style.
+;; R7RS writes this `#u8(72 101 108 108 111 10)` or `(bytevector 72 101 ...)`;
+;; the first is a reader literal this compiler does not read and the second is
+;; variadic, which `prim-table` cannot express -- every arity there is fixed on
+;; purpose, because a variadic flonum operation would make association order
+;; observable in the result bits. See the bead.
+(define hello (make-bytevector 6 0))
+
+(define (init-hello)
+  (begin (bytevector-u8-set! hello 0 72)      ; H
+         (bytevector-u8-set! hello 1 101)     ; e
+         (bytevector-u8-set! hello 2 108)     ; l
+         (bytevector-u8-set! hello 3 108)     ; l
+         (bytevector-u8-set! hello 4 111)     ; o
+         (bytevector-u8-set! hello 5 10)))    ; newline
 
 (define (main)
-  (uart-write hello 0 (bytevector-length hello)))
+  (begin (init-hello)
+         (uart-write hello 0 (bytevector-length hello))))
 
 (main)

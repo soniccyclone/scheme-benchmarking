@@ -301,6 +301,7 @@
     (case pr
       [(flvector-ref flvector-set! flvector-length) 'flvector]
       [(vector-ref vector-set! vector-length) 'vector]
+      [(bytevector-u8-ref bytevector-u8-set! bytevector-length) 'bytevector]
       [(car cdr) 'pair]
       [else #f]))
 
@@ -325,7 +326,7 @@
                  [else (values #f #f)]))]
         ;; make-flvector's obligation is on the LENGTH argument, not on a
         ;; container it does not yet have.
-        [(and (memq pr '(make-flvector make-vector)) (pair? args))
+        [(and (memq pr '(make-flvector make-vector make-bytevector)) (pair? args))
          (if (nonneg-fixnum? (iv-of env (car args)))
              (values #t 'interval)
              (values #f #f))]

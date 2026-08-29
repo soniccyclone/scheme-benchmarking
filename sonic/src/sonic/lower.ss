@@ -70,6 +70,11 @@
       (u64and . and) (u64ior . or) (u64xor . xor)
       (+ . add) (- . sub) (* . mul)
       (u64shl . shl) (u64shr . shr) (u64sar . sar)
+      ;; Byte-wide heap access, and `bytevector-length` reads the same length
+      ;; word every other heap object keeps -- so `vlen` serves unchanged, as
+      ;; D29 said it would for any type.
+      (bytevector-u8-ref . load8) (bytevector-u8-set! . store8)
+      (bytevector-length . vlen)
       ;; ONE MACH-OP FOR BOTH, and that is D29 rather than a shortcut. The
       ;; length word sits at the same offset for every heap type, so `vlen` is
       ;; a load at a constant displacement and knows nothing about what it is
@@ -92,7 +97,7 @@
       ;; no selector rule can ask for it. Before this the selector refused
       ;; `div` outright and no program using fxquotient compiled at all.
       (fxquotient . call) (fxremainder . call) (fxmodulo . call)
-      (make-flvector . call) (make-vector . call)
+      (make-flvector . call) (make-vector . call) (make-bytevector . call)
       (cons . call) (car . call) (cdr . call) (error . call)
       (null? . call) (pair? . call) (eq? . call)
       (fixnum? . call) (flonum? . call) (vector? . call) (flvector? . call)))
@@ -111,6 +116,7 @@
   (define prim->runtime
     '((make-flvector . %make-flvector) (make-vector . %make-vector)
       (make-vector-tagged . %make-vector-tagged)
+      (make-bytevector . %make-bytevector)
       (cons . %cons) (car . %car) (cdr . %cdr) (error . %error)
       (null? . %null?) (pair? . %pair?) (eq? . %eq?)
       (fxquotient . %fxquotient) (fxremainder . %fxremainder)
@@ -180,7 +186,12 @@
   ;; check with no tag passes. That is only expressible because D27 gave `chk`
   ;; a separate field for it: the NAME says whether the tag means anything, and
   ;; only `type-check` reads it.
-  (define fixnum-checked-prims '(make-vector make-flvector))
+  ;; `make-bytevector` belongs here for the same reason the other two do: its
+  ;; type check is on the COUNT, which is a fixnum, not on a heap object. Left
+  ;; out, it fell to the `heap-tag` default and every program allocating a
+  ;; bytevector trapped with exit 101 -- checking that an element count was a
+  ;; pointer.
+  (define fixnum-checked-prims '(make-vector make-flvector make-bytevector))
 
   (define (expected-tag name pr)
     (cond ((not (eq? name 'type-check)) 0)
@@ -246,7 +257,11 @@
       (u64xor raw-word raw-word) (u64= raw-word raw-word)
       (+ raw-word raw-word) (- raw-word raw-word) (* raw-word raw-word)
       (u64shl raw-word raw-word) (u64shr raw-word raw-word)
-      (u64sar raw-word raw-word)))
+      (u64sar raw-word raw-word)
+      ;; The bytevector is a tagged pointer, the index and the value machine
+      ;; words -- the same split `vector-ref` has and for the same reason.
+      (bytevector-u8-ref #f raw-word) (bytevector-u8-set! #f raw-word raw-word)
+      (make-bytevector raw-word raw-word)))
 
   (define (op-for pr)
     (let ((p (assq pr prim->op)))
