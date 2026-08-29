@@ -1108,7 +1108,7 @@
        ;; elf-load-base, not elf-text-vaddr: `metadata-offset-for` returns a
        ;; FILE offset and already carries the text segment's own offset, so
        ;; adding the text vaddr would count that page twice.
-       (want (+ elf-load-base
+       (want (+ (elf-load-base)
                 (metadata-offset-for (bytevector-length (compiled-code c))
                                      (bytevector-length (compiled-pool c)))))
        ;; find the lea in the entry code and decode its rip-relative target
@@ -1122,7 +1122,7 @@
                  (= #x8d (bytevector-u8-ref code (+ i 1)))
                  (= #x05 (bytevector-u8-ref code (+ i 2))))
             (let* ((d (bytevector-s32-ref code (+ i 3) 'little))
-                   (next (+ elf-text-vaddr i 7)))
+                   (next (+ (elf-text-vaddr) i 7)))
               (if (= (+ next d) want) #t (scan (+ i 1)))))
            (else (scan (+ i 1)))))))
   (ck! "_start computes the maps' address and it points at the maps" found))

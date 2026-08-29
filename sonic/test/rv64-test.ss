@@ -533,7 +533,7 @@
                                     (addi a7 zero 93)
                                     (ecall)))))
            (img (build-executable 'rv64 code (make-bytevector 0)
-                                  elf-text-vaddr #x600000 4096))
+                                  (elf-text-vaddr) #x600000 4096))
            (path "/tmp/sonic-rv64-exit42"))
       (write-executable path img)
       (system (string-append "chmod +x " path))
@@ -547,7 +547,7 @@
                                          (addi a7 zero 93)
                                          (ecall)))))
                   (i2 (build-executable 'rv64 c2 (make-bytevector 0)
-                                        elf-text-vaddr #x600000 4096))
+                                        (elf-text-vaddr) #x600000 4096))
                   (p2 "/tmp/sonic-rv64-exit7"))
              (write-executable p2 i2)
              (system (string-append "chmod +x " p2))
@@ -659,6 +659,47 @@
                    (let ((bv (get-bytevector-all p)))
                      (close-port p)
                      (if (eof-object? bv) 0 (bytevector-length bv))))))))
+
+(define qemu-system-available?
+  (zero? (system "qemu-system-riscv64 --version >/dev/null 2>&1")))
+
+;;; --- BARE METAL: no OS, no BIOS, no runtime ------------------------------
+;;;
+;;; The ladder for RV64 was: bytes match binutils, objdump reads our output
+;;; back, the Linux kernel loads and runs our image, a compiled Scheme program
+;;; runs under qemu-user. This is the rung above all of them -- an image we
+;;; emit, started by the machine's reset vector with nothing underneath it,
+;;; talking to a real 16550.
+;;;
+;;; A BOOT FAILURE IS SILENT BY NATURE. There is no exit code, no message, and
+;;; nothing distinguishes "did not load" from "loaded and faulted on the first
+;;; instruction" -- so the assertion is on the BYTES THAT ARRIVE, and there is a
+;;; control below asserting they are the right bytes rather than merely some.
+(if (not qemu-system-available?)
+    (display "  SKIP qemu-system-riscv64 absent; the bare-metal image is not booted\n")
+    (begin
+      (system "scheme -q --libdirs src:vendor/nanopass --script test/boot-probe.ss")
+      ;; `|| true`: the program spins for ever on purpose, because a bare-metal
+      ;; image has nothing to exit to. `timeout` is the normal ending here, so
+      ;; its status says nothing and the serial line says everything.
+      (system (string-append
+               "timeout 4 qemu-system-riscv64 -machine virt -bios none "
+               "-kernel /tmp/sonic-boot.elf -display none "
+               "-serial file:/tmp/sonic-boot.ser >/dev/null 2>&1 || true"))
+      (let ((got (guard (e (#t #f))
+                   (let* ((p (open-file-input-port "/tmp/sonic-boot.ser"))
+                          (bv (get-bytevector-all p)))
+                     (close-port p)
+                     (if (eof-object? bv) (make-bytevector 0) bv)))))
+        (ck! "an image we emit boots on bare metal and drives a 16550"
+             (and got (= 2 (bytevector-length got))))
+        ;; THE CONTROL. Two bytes of anything would also pass the length check,
+        ;; and OpenSBI's banner would pass it in the other direction by being
+        ;; far longer. These are the two bytes the program stores.
+        (ck! "and the bytes are the ones the program wrote, not a firmware banner"
+             (and got (= 2 (bytevector-length got))
+                  (= 75 (bytevector-u8-ref got 0))
+                  (= 10 (bytevector-u8-ref got 1)))))))
 
 ;;; --- the reserved scratch registers are shared, and nothing arbitrated ----
 ;;;

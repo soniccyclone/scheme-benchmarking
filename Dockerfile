@@ -157,6 +157,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # with a bare EPERM three layers from its cause. harness/vm-perf.sh is the
         # only entry point and it refuses outside the guest.
         qemu-system-x86 \
+        # RISC-V SYSTEM emulation, which is a different package from the
+        # user-mode qemu-riscv64 the smoke gate runs. `qemu-system-misc` is
+        # where Ubuntu keeps every system emulator that is not x86 or ARM.
+        #
+        # bench/kernel's drivers read 0x10000000 -- a 16550 on qemu's `virt`
+        # machine and a segfault under Linux -- so a freestanding image is the
+        # only way to RUN them, and `-machine virt` is the only way to run that.
+        # Confirmed absent by running `which` inside the container, which is
+        # also how nobody noticed: the smoke gate needs only the user-mode one.
+        qemu-system-misc \
         virtme-ng \
         # virtme-ng BUILDS AN INITRAMFS at boot and shells out to busybox to
         # populate it; without this it refuses with `initramfs is needed, and no

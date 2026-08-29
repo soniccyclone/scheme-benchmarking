@@ -43,7 +43,19 @@
       (else (error 'elf-flags "unknown target" t))))
 
   (define elf-page-size 4096)
-  (define elf-load-base #x400000)
+
+  ;; WHERE THE IMAGE LOADS, and it is a parameter because a freestanding target
+  ;; has no say in the matter: qemu's `virt` machine starts RAM at 0x80000000
+  ;; and `-bios none -kernel` puts an ELF where its program headers say, so an
+  ;; image linked at 0x400000 is loaded into unmapped space and the entry
+  ;; address points at nothing.
+  ;;
+  ;; That is exactly how this was found. `build-executable` takes an `entry`
+  ;; argument, so a boot probe could set e_entry to 0x80000000 and still emit a
+  ;; text segment at 0x400000; qemu loaded the code where the header said, jumped
+  ;; where e_entry said, and executed empty RAM in silence. Two addresses, one of
+  ;; them a constant, and only the other one was a parameter.
+  (define elf-load-base (make-parameter #x400000))
   (define elf-header-size 64)
   (define ph-entry-size 56)
   (define ph-count 2)
@@ -52,7 +64,7 @@
   ;; the text its own page is what lets the two segments have different
   ;; permissions without overlapping.
   (define text-file-offset elf-page-size)
-  (define elf-text-vaddr (+ elf-load-base text-file-offset))
+  (define (elf-text-vaddr) (+ (elf-load-base) text-file-offset))
 
   (define (u16 n) (list (bitwise-and n #xff) (bitwise-and (ash n -8) #xff)))
   (define (u32 n)
@@ -125,7 +137,7 @@
              ;; segment starts at file offset 0 so the ELF header itself is
              ;; mapped, which is what a p_offset of 0 conventionally means.
              (u32 1) (u32 5)                        ; type=PT_LOAD, flags=R|X
-             (u64 0) (u64 elf-load-base) (u64 elf-load-base)
+             (u64 0) (u64 (elf-load-base)) (u64 (elf-load-base))
              (u64 (+ text-file-offset text-size))
              (u64 (+ text-file-offset text-size))
              (u64 elf-page-size)

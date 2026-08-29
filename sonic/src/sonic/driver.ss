@@ -297,10 +297,10 @@
                      ;; Nothing else was missing for the roots half of D21.
                      (meta (function-object-metadata o))
                      (img (build-executable target (function-object-code o) pool
-                                            (+ elf-text-vaddr start)
+                                            (+ (elf-text-vaddr) start)
                                             #x600000 runtime-data-size meta)))
                 (make-compiled img (function-object-code o) pool
-                               (+ elf-text-vaddr start) listing fns
+                               (+ (elf-text-vaddr) start) listing fns
                                gnames lrep meta)))))))))
 
   ;; Run the elision analysis until the parameter intervals stop improving.
