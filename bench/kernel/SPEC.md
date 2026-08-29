@@ -18,31 +18,34 @@ the container like everything else.
 
 Re-run `./compile-all.sh` after any language change and replace this block.
 
-**2026-08-28, after the variable shifts** (D212):
+**2026-08-28, after bytevectors** (D213):
 
 ```
-01-uart.sps     wants  bytevector bytevector-length bytevector-u8-ref
+01-uart.sps     COMPILES
 02-pagewalk.sps COMPILES
 03-ring.sps     wants  (nothing -- define-record-type swallows the file)
 04-irq.sps      COMPILES
 ```
 
-**Two of four compile.** Both are the driver-shaped ones.
+**Three of four.** What each one proves, read off the emitted image rather than
+off the source:
 
-`04-irq.sps`: four `mmio-u8-ref` calls become four `movzx`-from-memory in the
-image -- including the one in `irq-ack` whose value is discarded, which is what
-clears an interrupt and what DCE used to reap. 68 instructions.
-
-`02-pagewalk.sps`: 112 instructions, four variable shifts through BMI2's `shrx`,
-and the NX constant materialised exactly as `mov rcx, 0x8000000000000000`.
-
-Neither can be RUN hosted: both read `0x10000000`, a device window on qemu
-`virt` and a segfault under Linux. Running them is `4qp.1`.
-
-| still missing | bead |
+| program | evidence |
 | --- | --- |
-| bytevectors | `0wr.1` |
-| `define-record-type`, `raise`, `guard` | `9yp` |
+| `01-uart` | a polling loop on a status bit, and a message walked byte by byte out of a bytevector |
+| `02-pagewalk` | 112 instructions, four variable shifts through `shrx`, NX materialised as `mov rcx, 0x8000000000000000` |
+| `04-irq` | 68 instructions, and four source device reads are four `movzx`-from-memory -- including the discarded one that clears the interrupt |
+
+`03-ring` is the last, and it needs `define-record-type`, `raise` and `guard`
+(bead `9yp`).
+
+None of the three can be RUN hosted: all read `0x10000000`, a device window on
+qemu `virt` and a segfault under Linux. Running them is `4qp.1`.
+
+`01-uart` spells its message out one `bytevector-u8-set!` at a time. R7RS writes
+that `#u8(72 101 ...)`, which this compiler does not read, and `(bytevector 72
+101 ...)`, which is variadic and `prim-table` fixes every arity on purpose. Bead
+`f0z`.
 
 ### Earlier runs, so the movement is visible
 

@@ -9572,3 +9572,82 @@ Neither fixture can be RUN hosted: both read `0x10000000`, which is a device
 window on qemu `virt` and a segfault under Linux. That is `4qp.1`.
 
 Suite: 8690 checks, 0 failures. Smoke gate green.
+
+## D213 — bytevectors, and a check that was wrong every time it survived
+
+`0wr.1`'s remaining half. Byte-addressed storage the collector never traces:
+`heap-type-bytevector`, `load8`/`store8` as the scale-1 counterparts of
+`load`/`store`, and `%make-bytevector` on both targets.
+
+**Why it had to reach the allocator.** A 4 KiB ring buffer in `make-vector` is
+32 KiB of heap, and every element is scanned by the collector for a pointer it
+cannot contain. Emulating bytes on top of a vector keeps both costs. The header
+carries a new type word for the same reason D29 put the type there rather than in
+the pointer: the collector learns from the object what it may trace.
+
+**The length field is in BYTES while the bump rounds up to whole words**, and
+that asymmetry is the only place this departs from every other heap object.
+`vlen` yields the length word directly and a bounds check compares an index
+against it, so a length in words would bound every access at one eighth of the
+object. The test allocates a 6-byte bytevector followed by a 3-byte one and
+reads the second back: if the first's bump had not rounded to 8, they would
+overlap.
+
+### Three defects, none of them guessed
+
+**One: no RV64 program with a live type check has ever linked.**
+`target-rv64.ss`'s `type-check` case branched to `%type-error` — a label neither
+runtime has ever defined. The `bounds-check` and `overflow-check` cases beside it
+both build their label from the check's own name and land on `trap-bounds-check`
+and `trap-overflow-check`, which exist.
+
+D160 fixed exactly this in those two cases and left this one behind. Nothing
+noticed for the reason `runtime.ss` already records about the other two: nbody's
+checks are all discharged by proof or by policy, so it never references a trap at
+all. The first program to carry a surviving type check was a bytevector access,
+today.
+
+**Two: `make-bytevector` was missing from `fixnum-checked-prims`,** so its type
+check expected a heap pointer where an element count arrives.
+
+**Three, and this is the one worth keeping: the check is wrong whenever it
+survives.** After fixing (2) the program still trapped, and the emitted code says
+why:
+
+```
+(mov r10 (imm 6))
+(mov rax r10)
+(and rax (imm 7))
+(cmp rax (imm 0))
+(jne (label sonic-type-error))
+```
+
+The count arrives as a **raw** 6 — `prim-raw-args` says `raw-word` — and `6 & 7`
+is 6, never 0. So the fixnum-tag check on an allocator's count can never pass.
+`make-vector` and `make-flvector` have carried the same check for as long as they
+have existed, and it passes for them only because `elide.ss` always discharges
+it: `type-ok?` proves the count is a nonnegative fixnum from the interval domain
+and the check never reaches the emitter. Adding `make-bytevector` to that list is
+what actually fixed it.
+
+**A check that is only ever correct because it is always elided is not a check.**
+It is an assertion whose failure path is wrong, sitting behind an optimisation
+that has to keep succeeding. Nothing here breaks today, and nothing says so
+either — filed rather than fixed in passing, because the right answer is either
+to check the raw count against a range or to drop the check and say why.
+
+### Standing
+
+```
+01-uart.sps     COMPILES
+02-pagewalk.sps COMPILES
+03-ring.sps     wants define-record-type
+04-irq.sps      COMPILES
+```
+
+Three of four kernel fixtures. `01-uart` spells its message out one store at a
+time: R7RS writes `#u8(72 101 ...)`, which `read.ss` does not read, and
+`(bytevector 72 101 ...)`, which is variadic where `prim-table` fixes every arity
+on purpose. Filed.
+
+Suite: 8697 checks, 0 failures. Smoke gate green.
