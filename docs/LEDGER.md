@@ -9398,3 +9398,78 @@ each target provides is the thing that was missing here, and writing one down
 would reproduce the failure a year from now.
 
 Suite: 8669 checks, 0 failures. Smoke gate green.
+
+## D211 — u64, and the two walls found by trying to write its constants down
+
+`0wr.2`. Fixed-width machine-word arithmetic: `u64+ u64- u64* u64and u64ior
+u64xor u64=`, both targets, verified at bit 63.
+
+**The difference from the fixnum forms is entirely in `prim-table`.** `fx+`
+carries `overflow-check`; `u64+` carries nothing. By the time lowering runs there
+is no instruction left to differ about, so both map to `add`, and `u64` wraps
+where `fx+` traps — which is what the hardware does and what an address
+computation wants. Only the bitwise ops are new mach-ops.
+
+x86-64's `int-alu` was missing **`xor`**. `and` was there for the tag mask and
+`or` for pointer tagging, two reasons that had nothing to do with each other, and
+nothing had ever needed the third. Added and byte-verified: **100 instructions
+byte-exact against gas**, up from 96. RV64 needed no encoder work at all — `and`,
+`or`, `xor`, `sll`, `srl`, `sra` were all already in the binutils-verified set.
+
+**The evidence is cross-ISA, with a control.** `test/rv64-u64.sps` runs six shapes
+under both targets and compares the output byte for byte. `cmp` on two empty
+files also succeeds, so a second assertion checks 48 bytes actually arrived —
+without it, "the targets agree" would pass on two programs that both failed.
+
+```
+2^63                      9223372036854775808
+2^63 | 3                  9223372036854775811
+2^63 & 2^62               0
+2^63 + 2^63               0        <- wraps; fx+ would trap
+2^63 xor 2^63             0
+2^62 * 2                  9223372036854775808
+```
+
+---
+
+**Wall one: a variable shift count.** `u64shl`/`u64shr` are not in this slice, and
+the reason is not that they were forgotten. On RV64 they are free — `sll`/`srl`/
+`sra` are R-type and already verified. On x86-64 the count must sit in **CL**, and
+that is the same wall `idiv` hit, whose comment states it plainly: no allocator
+here can express "these two specific registers, and both are clobbered". A
+constant-only form does not close it either — a Sv39 walk is genuinely
+`(va >> (12 + 9*level))`.
+
+Filed with three options rather than a decision, and the third one first because
+it is a **fact rather than a preference**: BMI2's `shlx`/`shrx`/`sarx` take the
+count in any GPR and need no pin at all. The existing baseline guard is aimed at
+FMA specifically (D24), not at ISA level, and this compiler already emits
+AVX/VEX. So the floor may already permit BMI2 and nobody has had to find out.
+Settle that before building either of the other two.
+
+**Wall two: the constant that motivates the type cannot be written.**
+
+```
+rv64:    a constant outside the 32-bit range wants a literal pool, not a
+         six-instruction materialization sequence   [1152921504606846976]
+x86-64:  imm32-bytes: does not fit in 32 bits       [9223372036854775807]
+```
+
+Both refuse, and both refuse loudly — RV64's message names its own fix. But it
+means `(define pte-nx #x8000000000000000)` is unwritable, and that is the single
+constant the whole type exists for. Every value in the tests above is built by
+doubling for that reason. x86-64 already has `imm64-bytes` for `mov r64, imm64`,
+so the materialisation exists; what is missing is routing a wide constant to it
+instead of into an ALU immediate.
+
+**The fixture moved again, and it is close.** `04-irq.sps` is now **one
+primitive** from compiling, and that primitive is `+`. `02-pagewalk.sps` needs
+only the two shifts.
+
+```
+first run    01: 8 missing   02: 7   03: form   04: 4
+after mmio   01: 6           02: 6   03: form   04: 3
+now          01: 4           02: 2   03: form   04: 1
+```
+
+Suite: 8680 checks, 0 failures. Smoke gate green.
