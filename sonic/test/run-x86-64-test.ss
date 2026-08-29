@@ -1448,6 +1448,65 @@
       '(2345678901.0))
 
 
+;; --- A MACHINE WORD, PRINTED, AT WIDTHS A DOUBLE CANNOT HOLD ----------------
+;;
+;; `display` reads xmm0 unconditionally, so before `display-word` existed the
+;; only way to print an integer was `fx->fl` -- and a double carries 53
+;; significand bits where a page-table entry needs 64. Exactly the values that
+;; motivate a machine word are the ones that route destroys, which is why this
+;; blocked the u64 work rather than merely inconveniencing it (D207, bead 0rb).
+;;
+;; Read back as unsigned 64-bit words, for the same reason `display` is read
+;; back as doubles: eight raw bytes put no formatter of ours between the answer
+;; and the check.
+(define (read-words path)
+  (let* ((p (open-file-input-port path))
+         (bv (get-bytevector-all p)))
+    (close-port p)
+    (if (eof-object? bv)
+        '()
+        (let loop ((i 0) (acc '()))
+          (if (> (+ i 8) (bytevector-length bv))
+              (reverse acc)
+              (loop (+ i 8)
+                    (cons (bytevector-u64-ref bv i (endianness little)) acc)))))))
+
+(define (run-words! name source expected)
+  (display "       running: ") (display name) (newline)
+  (flush-output-port (current-output-port))
+  (let* ((f (string-append tmp ".sps"))
+         (_ (let ((p (open-file-output-port f (file-options no-fail)
+                                            (buffer-mode block) (native-transcoder))))
+              (put-string p source) (close-port p)))
+         (exe (string-append tmp ".bin"))
+         (__ (compile-sonic-to-file f '(display-word) exe))
+         (___ (system (string-append "chmod +x " exe)))
+         (code (system (string-append "timeout 20 " exe " > " tmp ".out 2>/dev/null")))
+         (out (read-words (string-append tmp ".out"))))
+    (ck! name (and (zero? code) (equal? out expected)))
+    (unless (and (zero? code) (equal? out expected))
+      (display "       exit=") (display code)
+      (display " got=") (write out) (display " want=") (write expected) (newline))))
+
+(run-words! "a machine word survives compilation, linking and execution"
+            "(define (main) (display-word (fx+ 40 2)))\n(main)\n"
+            '(42))
+
+;; THE POINT OF THE ROUTINE. 2^53+1 is the first integer a double cannot
+;; represent: as a double it becomes 2^53, so this value round-trips through
+;; `fx->fl` as the WRONG NUMBER and round-trips through `display-word` exactly.
+(run-words! "a value past a double's 53 significand bits is exact"
+            "(define (main) (display-word (fx+ 9007199254740992 1)))\n(main)\n"
+            '(9007199254740993))
+
+;; Computed rather than a literal, so constant folding cannot be what is being
+;; tested, and self-tail-recursive so the loop machinery is in the path.
+(run-words! "a word computed by a loop"
+            (string-append
+             "(define (sum i acc) (if (fx= i 0) acc (sum (fx- i 1) (fx+ acc i))))\n"
+             "(define (main) (display-word (sum 1000 0)))\n(main)\n")
+            '(500500))
+
 ;; --- DEVICE MEMORY: N READS IN THE SOURCE ARE N LOADS IN THE IMAGE ----------
 ;;
 ;; The failure this pins is a MISCOMPILE, not a missed optimisation. Written

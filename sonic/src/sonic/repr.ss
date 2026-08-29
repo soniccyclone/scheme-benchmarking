@@ -236,7 +236,14 @@
   ;; the mismatch is a REFUSAL, with a message naming both classes, rather than
   ;; a conversion.
   (define extern-arg-classes
-    '((display raw-f64)))
+    '((display raw-f64)
+      ;; The machine-word twin. `display` cannot serve both: it reads xmm0
+      ;; unconditionally, and the only route from a word to a double is
+      ;; `fx->fl`, which has 53 significand bits where a page-table entry needs
+      ;; 64 -- so exactly the values that motivate a machine word are the ones
+      ;; the conversion destroys. The refusal above stays a refusal for a
+      ;; TAGGED argument, which is the case that printed a stale xmm0.
+      (display-word raw-word)))
 
   (define (prim-result-class pr)
     (cond ((eq? pr 'vector-ref) (vector-element-class))

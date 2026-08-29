@@ -741,6 +741,39 @@
       (mov rax r15)
       (ret)
 
+      ;; ---- (display-word x) ----
+      ;;
+      ;; The same eight raw bytes to fd 1, for a MACHINE WORD rather than a
+      ;; double. It is a separate name rather than an overload of `display`
+      ;; because the two write different bit patterns from different register
+      ;; files, and because neither of them is R7RS `display`, which would
+      ;; print decimal text. Overloading would make the name wrong a third way.
+      ;;
+      ;; Why it exists: `display` reads xmm0 unconditionally, so a fixnum could
+      ;; only be printed by converting it to a double -- and a double carries 53
+      ;; significand bits where a page-table entry needs 64. Exactly the values
+      ;; that motivate a machine word are the ones the conversion destroys.
+      ;; See D207 and bead 0rb.
+      ;;
+      ;; THE WORD ARRIVES IN rcx, NOT r8. callconv.ss has one argument register
+      ;; list PER STORAGE CLASS -- tagged in (r8 r9), raw-word in
+      ;; (rcx rdx rsi rdi r10 r11) -- so `length`, whose argument is a tagged
+      ;; list, reads r8 while this one reads the head of the raw pool. Reading
+      ;; r8 here printed 6292561, an address out of the globals region, which is
+      ;; what a wrong argument register looks like when it happens to be live.
+      ;;
+      ;; rcx is stored FIRST, before the syscall arguments overwrite rsi, rdi
+      ;; and rdx -- all three of which are also raw-word argument registers.
+      display-word
+      (mov ,(abs-mem out-buffer-cell) rcx)
+      (mov rdi (imm 1))
+      (mov rsi (imm ,out-buffer-cell))
+      (mov rdx (imm 8))
+      (mov rax (imm ,sys-write))
+      (syscall)
+      (mov rax r15)
+      (ret)
+
       ;; A newline would corrupt a stream of raw doubles, so this writes
       ;; nothing. It returns nil, which is what an unspecified result is here.
       newline
@@ -1095,6 +1128,25 @@
       display
       (lui  t0 ,(hi20 out-buffer-cell))
       (fsd  fa0 t0 ,(lo12 out-buffer-cell))
+      (addi a0 zero 1)                           ; fd 1
+      (lui  a1 ,(hi20 out-buffer-cell))
+      (addi a1 a1 ,(lo12 out-buffer-cell))
+      (addi a2 zero 8)                           ; count
+      (addi a7 zero ,rv64-sys-write)
+      (ecall)
+      (addi a0 gp 0)                             ; nil, the unspecified result
+      (jalr zero ra 0)
+
+      ;; ---- (display-word x) ----
+      ;;
+      ;; The x86-64 routine's twin; see the comment there for why this is a
+      ;; separate name. The word arrives in t3, which is the head of RV64's
+      ;; raw-word argument pool -- NOT a0, and not fa0. callconv.ss keeps raw
+      ;; words out of the value registers on purpose: a raw word in a0 is a
+      ;; non-pointer the collector would scavenge.
+      display-word
+      (lui  t0 ,(hi20 out-buffer-cell))
+      (sd   t3 t0 ,(lo12 out-buffer-cell))
       (addi a0 zero 1)                           ; fd 1
       (lui  a1 ,(hi20 out-buffer-cell))
       (addi a1 a1 ,(lo12 out-buffer-cell))
