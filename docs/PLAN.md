@@ -15,6 +15,7 @@ and leave the plan describing the plan.
 | `LEDGER.md` | the decision record: what was ratified, what was reversed, what we got wrong |
 | `RESEARCH.md` | standards survey, cross-language comparison, Stalin analysis, measurement evidence |
 | `PROPOSAL.md` | prior art, the design we would propose, .NET architecture notes, compiler layering |
+| `SONICSCHEME.org` | the language definition that enables the optimizer: grammar, semantics of each extension, the superset relation to R6RS/R7RS, what to propose upstream |
 | `METHOD.md` | machine, measurement method, dependency table |
 | `CHEZ-ANALYSIS.md` | what Chez's optimizer already does, read from source, and the one capability it lacks |
 | `phases/NN-name/PLAN.md` | per phase: goal, inputs, work items, acceptance criteria, risks |

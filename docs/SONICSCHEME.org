@@ -1,0 +1,743 @@
+#+TITLE: SonicScheme: the language definition that enables a self-optimizing compiler
+#+SUBTITLE: What a Scheme standard has to add, written as grammar and semantics
+#+DATE: 2026-10-08
+#+OPTIONS: toc:2 num:t ^:nil
+#+STARTUP: showall
+
+* Purpose and provenance
+
+This document consolidates, in one place, the language-level findings that were
+until now scattered across ~PROPOSAL.md~, ~RESEARCH.md~, ~sonic/src/sonic/lang.ss~,
+~policy.ss~, ~alias.ss~, ~noalloc.ss~, the phase 3 and 4 ~RESULTS.md~ files,
+~bench/nbody/sonic-compat.sls~ and ledger entries D5, D7, D14, D24, D80, D208 and
+D216. Nothing here is new. Every rule below is lifted from code that runs, or from
+a ledger entry that cites a measurement, and the file that holds it is named.
+
+It answers one question: *how must a Scheme be defined so that an optimizing
+compiler for it is possible without leaving the standard?* It is not the design
+of the optimizer. It is the contract the optimizer needs the language to make.
+
+The answer has three parts.
+
+1. A grammar: the surface language SonicScheme accepts, partitioned into what it
+   takes from R7RS-small, what it takes from R6RS, and what it adds.
+2. The semantics of each addition, stated as what an implementation *may assume*,
+   *may do*, and *must refuse*, never as how it must analyse.
+3. The superset relation: exactly how SonicScheme extends R6RS and R7RS, so the
+   extension can be proposed upstream as an additive, erasable layer.
+
+* The finding in numbers
+
+The language design rests on measurements, not taste. The relevant ones, with the
+instrument named.
+
+** What each power is worth, retired instructions per nbody step (phase 3, Chez 10.0)
+
+| configuration        | storage           | checks | instr/step |  ratio |
+|----------------------+-------------------+--------+------------+--------|
+| ~chez-2a~ portable R6RS | boxed ~vector~    | on     |    9546.77 |        |
+| ~chez-4-safe~        | unboxed ~flvector~ | on     |    8521.42 | 1.12x  |
+| ~chez-4~             | unboxed ~flvector~ | off    |    1788.41 | 4.77x  |
+| ~chez-2c~ predicate-guarded, level 2 | unboxed | on |   8533.41 | 0.998x |
+
+Unboxing with checks held on: 1.12x. Removing checks with storage held unboxed:
+4.77x. Predicate guards at ~optimize-level 2~: nothing, because ~cptypes~ had
+already narrowed the types. The whole residual is bounds checking, and Chez's
+~cptypes-lattice.ss~ cannot represent an index range (~index~, ~length~ and
+~sub-index~ collapse to ~fixnum-pred~). Source: ~docs/phases/03-core-measurement/RESULTS.md~
+findings 2b and 2c.
+
+Consequence stated there and repeated here because it is the thesis: R7RS-large
+Tangerine, fully implemented everywhere, buys the 1.12x. The 4.77x is the thing no
+Scheme standard has ever contained.
+
+** The mechanism validated at the language level (phase 4, GNAT 15.2)
+
+| configuration    | policy                        | instr/step | vs scalar C |
+|------------------+-------------------------------+------------+-------------|
+| ~ada-8-checked~  | every check on                |    3195.00 | 4.89x       |
+| ~ada-8-named~    | ~pragma Suppress~ per check   |     801.00 | 1.22x       |
+| ~ada-8-all~      | ~Suppress (All_Checks)~       |     801.00 | 1.22x       |
+
+Named suppression and all-checks suppression are identical to the instruction.
+Granularity is free. D5 ratified on this number. Ada's check cost (3.99x) and
+Chez's (4.77x) land within 20% of each other on two unrelated implementations,
+which is corroboration that the cost is a property of the workload.
+
+** Where SonicScheme itself stands (D209, native Ubuntu host, 40 reps, bootstrap CI)
+
+| comparison                 | ratio  | 95% CI             | verdict                |
+|----------------------------+--------+--------------------+------------------------|
+| sonic vs c-scalar          | 1.0426 | [0.9746, 1.0841]   | no detected difference |
+| sonic vs c-native (-O3 -march=native) | 1.098 | over c-native [0.8801, 0.9990] | real, ~1.1x behind |
+| sonic-fma vs c-native      | 1.0345 | [0.9693, 1.1247] (D180) | no detected difference in 2 of 3 sessions |
+| fannkuch sonic vs c-native | ~1.2x  | D57, D86           | real                   |
+
+Checks emitted on the finished binaries (LOOP.md): nbody 0 bounds, 1 overflow;
+fannkuch 0 bounds, 3 overflow. Every elided check is a *proof*, counted apart from
+permissions; ~config-sonic.sps~ grants no policy at all.
+
+*Rust was never measured.* D86 records it in so many words: no config, no binary,
+~rustc~ not in the container, not one number taken. "Tied with ~gcc -O3
+-march=native~ on nbody" is the strongest claim the ledger supports. Do not cite
+Rust from this project.
+
+* The three powers, and where the standards stand
+
+~RESEARCH.md~ §2 separates three things that are routinely conflated.
+
+| power    | the program ...                                 | example elsewhere                      |
+|----------+-------------------------------------------------+----------------------------------------|
+| premise  | asserts a fact; the compiler propagates it      | CL ~declare~, C99 ~restrict~, C++23 ~[[assume]]~ |
+| policy   | tells the compiler to stop checking             | Ada ~pragma Suppress~, CL ~(safety 0)~ |
+| layout   | dictates representation in memory               | Ada rep clauses, CL specialized arrays, SRFI 160 |
+
+SonicScheme adds a fourth, which the build produced rather than the survey:
+
+| power     | the program ...                                          | example elsewhere               |
+|-----------+----------------------------------------------------------+---------------------------------|
+| guarantee | states an obligation the compiler must *refuse* to violate | none standard; dual of CL ~dynamic-extent~ |
+
+Where Scheme stands (~RESEARCH.md~ §1, verified from the specs):
+
+| standard             | instructions                                | premises         | policy | layout     | guarantee |
+|----------------------+---------------------------------------------+------------------+--------+------------+-----------|
+| R5RS                 | none                                        | none             | none   | none       | none      |
+| R6RS                 | ~(rnrs arithmetic fixnums/flonums/bitwise)~ | none             | none   | bytevectors | none      |
+| R7RS-small           | none (regressed)                            | none             | none   | ~u8~ bytevectors | none      |
+| R7RS-large Tangerine | SRFI 143, 144, 151                          | none             | none   | SRFI 160   | none      |
+| SRFI 145             | n/a                                         | ~assume~, unbound to a variable, no propagation | none | n/a | none      |
+| SRFI 253             | n/a                                         | binds, but *checks*; never deletes | none | n/a | none      |
+
+Three gaps, not one: *policy* has never been proposed by anyone in thirty years of
+SRFIs, *propagation* (a declared fact flowing to the operations that use the
+variable) has never been proposed either, and no standard or SRFI has a
+*guarantee* form, an obligation the implementation must refuse to violate. Phase 1 added a third: SRFI 145 imports
+fail on both Chez and Racket (D14), so no premise is portably expressible on any
+implementation today.
+
+* Grammar
+
+** Notation
+
+EBNF. ~<x>*~ zero or more, ~<x>+~ one or more, ~[x]~ optional. Terminals in
+~monospace~. Square brackets in source are parentheses (the R6RS bracket
+extension, accepted by ~read.ss~). ~<id>~ is an R7RS identifier. ~<datum>~ is R7RS
+7.1.2 datum syntax, which the reader accepts in full; what ~quote~ may hold is
+narrower and is stated where it applies.
+
+** Programs
+
+#+BEGIN_SRC ebnf
+<program>     ::= <header>* <definition>* <expression>*
+<header>      ::= "#!r6rs" | "(import" <import-spec>* ")"      ; read and discarded
+<definition>  ::= "(define" <id> <expression> ")"
+               |  "(define (" <id> <id>* ")" <body> ")"
+               |  "(define-syntax" <id> <syntax-rules> ")"
+               |  "(define-record-type" <id> "(" <id> <id>* ")" <id> <field-spec>* ")"
+               |  "(declare-no-allocation" <id>+ ")"                       ; EXTENSION
+<field-spec>  ::= "(" <id> <id> [<id>] ")"
+<body>        ::= <definition>* <expression>+
+#+END_SRC
+
+Constraints enforced by ~parse.ss~:
+
+- every definition precedes every expression. Interleaving is refused, because
+  ~Lcore~'s program is one binding group then one body, and hoisting would move
+  side effects past each other.
+- a top-level name is bound once. Redefinition is a store into a global cell, not
+  a second binding.
+- the externs of a compilation unit are *declared*, not inferred. A free variable
+  that is neither bound nor declared extern is an error. Inferring the list would
+  make a typo indistinguishable from a deliberate external reference.
+
+** Expressions: the R7RS-small subset
+
+Exactly the special forms ~expand.ss~ recognises. Nothing else is syntax.
+
+#+BEGIN_SRC ebnf
+<expression>  ::= <id>
+               |  <literal>
+               |  "(quote" <atom> ")"
+               |  "(if" <expression> <expression> [<expression>] ")"
+               |  "(lambda (" <id>* ")" <body> ")"                      ; no rest parameter
+               |  "(let" [<id>] "(" <binding>* ")" <body> ")"           ; named let allowed
+               |  "(let*" "(" <binding>* ")" <body> ")"
+               |  "(letrec" "(" <binding>* ")" <body> ")"
+               |  "(letrec*" "(" <binding>* ")" <body> ")"
+               |  "(begin" <expression>+ ")"
+               |  "(set!" <id> <expression> ")"
+               |  "(when" <expression> <body> ")"
+               |  "(unless" <expression> <body> ")"
+               |  "(cond" <cond-clause>+ ")"                             ; else and => supported
+               |  "(and" <expression>* ")"
+               |  "(or" <expression>* ")"
+               |  "(let-syntax" "(" <syntax-binding>* ")" <body> ")"
+               |  "(letrec-syntax" "(" <syntax-binding>* ")" <body> ")"
+               |  "(" <expression> <expression>* ")"                    ; application
+               |  <extension>
+<binding>     ::= "(" <id> <expression> ")"
+<literal>     ::= <number> | <boolean> | <character> | <string>
+<atom>        ::= <literal> | "()" | <id>
+<syntax-rules>::= "(syntax-rules" [<id>] "(" <id>* ")" "(" <pattern> <template> ")"* ")"
+#+END_SRC
+
+Hygiene is R7RS 4.3.2: binders alpha-renamed, template identifiers aliased to the
+macro's definition environment, literals compared by denotation. ~syntax-rules~
+only; no ~syntax-case~, no procedural transformers.
+
+What this subset deliberately refuses, and why each refusal is load-bearing:
+
+| refused                                 | reason                                                                 |
+|-----------------------------------------+------------------------------------------------------------------------|
+| rest parameters                         | ~Lcore~ lambda is fixed arity; a variadic frame has no static shape     |
+| ~(quote (1 2))~, quoted vectors         | would silently allocate on every evaluation of a "constant"            |
+| generic ~+~ over the numeric tower      | there is no tower; bignums allocate; ~+ - *~ are the 2-ary fixnum ops  |
+| ~case~, ~do~, ~quasiquote~, ~case-lambda~ | not yet written; nothing in the design forbids them                   |
+| ~raise~, ~guard~, ~call/cc~             | design filed (D214); the stack is owned, so they are reachable, not foreclosed |
+| strings beyond literals, chars beyond literals | the benchmarks never needed them                                 |
+
+** Primitives: the instruction set, with its checks
+
+A primitive is a name in ~prim-table~ (~lang.ss~) that nothing has bound. Bound
+wins. Arity is fixed for every primitive; a mismatch is a parse error, never a
+demotion to a call. Each row names the *checks that can apply* to that primitive,
+which is the vocabulary the policy form and the analysis both operate on.
+
+#+BEGIN_SRC ebnf
+<primitive-app> ::= "(" <primitive> <expression>* ")"       ; arity exactly as tabled
+#+END_SRC
+
+| family       | primitive                                   | arity | applicable checks           | origin            |
+|--------------+---------------------------------------------+-------+-----------------------------+-------------------|
+| fixnum       | ~fx+ fx- fx*~                               |     2 | ~overflow-check~            | R6RS              |
+|              | ~fxneg~                                     |     1 | ~overflow-check~            | SonicScheme (shim: ~(fx- x)~) |
+|              | ~fxquotient~                                |     2 | ~div-check overflow-check~  | R6RS ~fxdiv~ family |
+|              | ~fxremainder fxmodulo~                      |     2 | ~div-check~                 | R6RS              |
+|              | ~fx< fx<= fx= fx>= fx>~                     |     2 | none                        | R6RS (~fx=?~ etc.) |
+|              | ~+ - *~                                     |     2 | ~overflow-check~            | same ops as ~fx~; NOT R7RS ~+~ |
+| flonum       | ~fl+ fl- fl*~                               |     2 | ~fp-contract~               | R6RS              |
+|              | ~fl/~                                       |     2 | none (IEEE: no div-check)   | R6RS              |
+|              | ~flneg~                                     |     1 | none                        | SonicScheme; normative, not ~(fl- 0.0 x)~ |
+|              | ~flabs flsqrt~                              |     1 | none                        | R6RS              |
+|              | ~fl< fl<= fl= fl>= fl>~                     |     2 | none                        | R6RS              |
+| conversion   | ~fl->fx~                                    |     1 | ~overflow-check~            | SonicScheme       |
+|              | ~fx->fl~                                    |     1 | none                        | SonicScheme (R6RS ~fixnum->flonum~) |
+| flvector     | ~flvector-ref~                              |     2 | ~type-check bounds-check~   | Chez; SRFI 160 ~f64vector-ref~ |
+|              | ~flvector-set!~                             |     3 | ~type-check bounds-check~   | same              |
+|              | ~flvector-length~                           |     1 | ~type-check~                | same              |
+|              | ~make-flvector~                             |     2 | ~type-check~                | fill MANDATORY    |
+| vector       | ~vector-ref vector-set! vector-length make-vector~ | 2/3/1/2 | as flvector            | R7RS; fill MANDATORY |
+| bytevector   | ~bytevector-u8-ref bytevector-u8-set! bytevector-length make-bytevector~ | 2/3/1/2 | as flvector | R6RS/R7RS; fill MANDATORY |
+| pairs        | ~car cdr~                                   |     1 | ~type-check~                | R7RS              |
+|              | ~cons eq?~                                  |     2 | none                        | R7RS              |
+| predicates   | ~null? pair? fixnum? flonum? vector? flvector?~ |   1 | none                        | R7RS / R6RS / Chez |
+| error        | ~error~                                     |     1 | none                        | R7RS, narrowed    |
+| machine word | ~u64+ u64- u64* u64and u64ior u64xor u64=~  |     2 | NONE, by definition         | SonicScheme (EXTENSION) |
+|              | ~u64shl u64shr u64sar~                      |     2 | NONE                        | SonicScheme (EXTENSION) |
+| device       | ~mmio-u8-ref mmio-u64-ref~                  |     1 | NONE                        | SonicScheme (EXTENSION) |
+|              | ~mmio-u8-set! mmio-u64-set!~                |     2 | NONE                        | SonicScheme (EXTENSION) |
+
+Runtime externs, called rather than primcalled, declared per compilation unit:
+~display~, ~display-word~, ~newline~, ~command-line~, ~length~, ~cadr~,
+~string->number~. ~display-word~ prints a raw 64-bit word and is an extension;
+~display~ accepts ~raw-f64~ only (D207).
+
+Check applicability, inverted, because this is the table the policy form indexes:
+
+| check            | attaches to                                                                    |
+|------------------+--------------------------------------------------------------------------------|
+| ~bounds-check~   | ~flvector-ref/set!~, ~vector-ref/set!~, ~bytevector-u8-ref/set!~               |
+| ~type-check~     | the above, plus every ~*-length~, every ~make-*~ (on the count), ~car~, ~cdr~  |
+| ~overflow-check~ | ~fx+ fx- fx* fxneg fxquotient fl->fx + - *~                                    |
+| ~div-check~      | ~fxquotient fxremainder fxmodulo~                                              |
+| ~fp-contract~    | ~fl+ fl- fl*~ (a permission to rewrite, carried as a check for uniformity)     |
+
+** The extensions
+
+Three expression forms and one definition form. These are the whole addition at
+the syntax level.
+
+#+BEGIN_SRC ebnf
+<extension>    ::= "(declare" "(" <premise-binding>* ")" <body> ")"
+                |  "(declare-distinct" "(" <id> <id>+ ")" <body> ")"
+                |  "(policy" "(" <policy-binding>* ")" <body> ")"
+
+<premise-binding> ::= "(" <id> <premise> ")"
+<policy-binding>  ::= "(" <policy-name> <boolean> ")"
+
+<policy-name>  ::= "bounds-check" | "type-check" | "overflow-check"
+                |  "div-check" | "fp-contract"
+
+<premise>      ::= "flvector" | "vector" | "non-nan"      ; consumed by the analysis
+                |  "fixnum" | "flonum"                    ; accepted; no pass consumes them yet
+                |  <policy-name>                          ; accepted; inert (historical)
+#+END_SRC
+
+Static constraints (~parse.ss~, ~policy.ss~):
+
+- an unknown ~<policy-name>~ or ~<premise>~ is a parse error. A policy naming a
+  check that does not exist is a typo whose only effect would be silence.
+- one ~policy~ form naming the same check twice is refused.
+- ~declare-distinct~ takes two or more identifiers, all in scope.
+- ~declare~ binds premises to identifiers already in scope; it introduces no
+  binding.
+- ~declare-no-allocation~ appears at top level only, names procedures, and a name
+  that matches no procedure is refused.
+
+** Lcore: what the surface lowers to
+
+The forms survive expansion unchanged, so the optimizer sees them. This is the
+grammar every later pass is type-checked against (nanopass, D23).
+
+#+BEGIN_SRC scheme
+(define-language Lcore
+  (terminals (symbol (x)) (primitive (pr)) (control (c))
+             (policy-name (pn)) (premise-name (prem)) (boolean (b)) (datum (d)))
+  (Expr (e body)
+    x
+    (quote d)
+    (void)
+    (if e0 e1 e2)
+    (let ([x* e*] ...) body)
+    (letrec ([x* e*] ...) body)
+    (letrec* ([x* e*] ...) body)
+    (lambda (x* ...) body)
+    (call e0 e* ...)
+    (primcall pr ([pn* c*] ...) e* ...)      ; ONE CONTROL PER APPLICABLE CHECK
+    (set! x e)
+    (declare ([x* prem*] ...) body)
+    (declare-distinct (x* ...) body)
+    (policy ([pn* b*] ...) body)
+    (begin e* ... e))
+  (Program (prog)
+    (top ([x* e*] ...) (x2* ...) body)))     ; bindings, declared externs, body
+
+;; control ::= checked | unchecked | proved
+#+END_SRC
+
+The ~control~ terminal is the mechanism the whole project argued for. Whether a
+primitive checks is a property of the *call site*, carried one per applicable
+check. Three values:
+
+| control     | meaning                                              | emits check? |
+|-------------+------------------------------------------------------+--------------|
+| ~checked~   | the obligation is in force                           | yes          |
+| ~unchecked~ | a ~policy~ lifted it; the programmer took the risk   | no           |
+| ~proved~    | the analysis discharged it; semantically ~checked~   | no           |
+
+~unchecked~ and ~proved~ emit identical code and mean opposite things. They are
+kept distinct so that the compiler can report how many checks went by proof and
+how many by permission. Reporting the second as the first would be the most
+flattering way to lie about a result, and ~lower.ss~ counts them apart to make
+the honest claim possible.
+
+A check that survives to ~Lmach~ is ~(chk pn c d v* ...)~ with its control still
+attached. There is deliberately no mach-op spelling of a check (D27).
+
+* Semantics of the extensions
+
+Each section states: scope, default, what the implementation may do, what
+violation means, and what dropping the form costs. The last line is the one that
+matters for standardization.
+
+** E1. ~policy~: lexical, named check policy
+
+Environment: a finite map from policy names to booleans. Every name defaults to
+~#t~, which means *the conservative obligation is in force*. For a check that is
+"run it". For ~fp-contract~ that is "round twice, do not fuse". One polarity, one
+default, no per-name special case.
+
+#+BEGIN_SRC scheme
+(policy ([bounds-check #f]) body)     ; the bounds check may be omitted in body
+(policy ([fp-contract  #f]) body)     ; a multiply-add in body may be fused
+(policy ([bounds-check #t]) body)     ; re-enable inside an outer suppression
+#+END_SRC
+
+Rules:
+
+1. ~(policy ([pn b] ...) body)~ extends the environment for the lexical extent of
+   ~body~ and nothing else. Inner overrides outer. Leaving the scope restores the
+   outer environment by construction: the environment is a walk of the tree.
+2. The pass only ever *weakens*. A control is rewritten ~checked~ to ~unchecked~
+   when the environment says ~#f~ for that name. ~proved~ and ~unchecked~ are
+   never touched. The pass is therefore idempotent, and re-enabling inside a
+   suppression needs no save/restore protocol: every primcall starts ~checked~.
+3. An ~unchecked~ check may be omitted. If the error condition it guarded would
+   have occurred, execution is erroneous (Ada's word, ARM 11.5). No diagnostic is
+   owed.
+4. ~fp-contract~ granted permits one rewrite: ~a*b + c~ or ~c - a*b~ into a single
+   fused multiply-add with one rounding, provided both the product and the sum
+   stand inside a granted scope and the product has exactly that one use. The
+   result may differ in the last bit from the twice-rounded value. Reassociation
+   is *not* granted by any policy name; it is a global reordering whose result
+   depends on the vectorizer (D24, D80).
+5. The ~policy~ node is kept in the tree after resolution as a record of what the
+   programmer permitted.
+
+Dropping the form: sound. The program computes the same numbers and runs slower.
+~sonic-compat.sls~ defines ~policy~ as ~(let () body ...)~ and the same file runs
+under Chez bit-exact against the oracle.
+
+Why not a dial: CL's ~safety 0..3~ bundles "drop the bounds check in this kernel"
+with "drop the type check on data from a socket". Ada names each check and lets
+a region re-enable one. Phase 4 measured the named form costing exactly nothing
+against ~All_Checks~ (D5). Why not global: Chez's ~optimize-level~ cannot say
+"unchecked in this loop, checked everywhere else" because there is no "this
+loop" to name. That is wall 3 of the four that made Chez unable to host the
+experiment (D9).
+
+** E2. ~declare~: premises that bind and propagate
+
+#+BEGIN_SRC scheme
+(declare ([v flvector] [x non-nan]) body)
+#+END_SRC
+
+Within ~body~, for every unshadowed occurrence of the declared identifier, the
+implementation *may assume* the premise holds. Consumed today by ~elide.ss~:
+
+| premise    | what the analysis does with it                                                         |
+|------------+----------------------------------------------------------------------------------------|
+| ~flvector~ | the ~type-check~ on every ~flvector-ref/set!/length~ of ~v~ is discharged, reason ~premise~ |
+| ~vector~   | likewise for ~vector-*~                                                                |
+| ~non-nan~  | the false edge of a flonum comparison on ~x~ may be read as the opposite ordering. Without it a negated ~fl<~ licenses nothing, because NaN makes every comparison false, so ~(not (fl< a b))~ is true where ~(fl>= a b)~ is false. The false edge of every float guard is dead to the analysis until this premise exists. |
+| ~fixnum~, ~flonum~ | parsed and carried; no pass consumes them yet                                   |
+
+Violation is undefined behaviour. Dropping the form is sound.
+
+The premise vocabulary is *predicates*, not a type syntax. This is the SRFI 145 and
+SRFI 253 convention and it keeps the proposal small. The one design pressure to
+resist is combinator growth (~(f64vector-of flonum?)~ invites a contract
+language; Racket has one and it is large).
+
+** E3. ~declare-distinct~: non-aliasing as a premise
+
+#+BEGIN_SRC scheme
+(declare-distinct (p v m) body)
+#+END_SRC
+
+C99 ~restrict~. The named identifiers denote pairwise distinct storage, and inside
+~body~ they are the only access paths to that storage. Alias queries between any
+two of them answer ~must-not~. This is the *one* path in ~alias.ss~ that returns
+~must-not~ without a proof, and therefore the one path that can miscompile: the
+vectorizer reorders reads against writes on the strength of the answer and no
+runtime check exists downstream.
+
+Why it has to exist: allocation-site reasoning runs out at the procedure
+boundary. nbody's kernel takes its flvectors as *arguments*; the ~make-flvector~
+is in a caller the compiler may never see, so every query answers ~may~. One
+~may~ is the difference between vectorizing the inner loop and not. The
+information is genuinely not in the procedure; the programmer supplies it.
+
+Recorded per program after assignment conversion (which restores
+single-assignment, the precondition for a flow-insensitive answer). Requires two
+or more identifiers. Violation: undefined behaviour, with teeth. Dropping: sound,
+costs a vectorization.
+
+** E4. ~declare-no-allocation~: a guarantee the compiler must refuse to break
+
+#+BEGIN_SRC scheme
+(declare-no-allocation irq-ack read-pair data-ready? service)
+#+END_SRC
+
+Top-level. The named procedures, and everything reachable from them, allocate
+nothing. Unlike E1 to E3 this is not something the implementation *may assume*;
+it is something it *must check*, and the check is a compile-time refusal:
+
+#+BEGIN_EXAMPLE
+`outer` is declared allocation-free and allocates: it reaches
+`%make-vector` through outer -> allocs
+#+END_EXAMPLE
+
+Where it runs, and why that is normative rather than an implementation detail:
+
+- on the lowered graph, not the source. Two of the ways a program allocates are
+  invisible in its text: a flonum boxed because a polymorphic parameter also
+  receives a heap object (~%box-flonum~, inserted by ~convert.ss~), and a vector
+  allocator chosen from the fill's storage class at lowering. A source-level check
+  would hand a kernel author a guarantee that is wrong exactly where flonums meet
+  generic code.
+- before CSE and DCE, so the answer is a property of the program and not of
+  whether the program happened to use the object.
+- the allocating-routine list is checked against the runtime in both directions
+  (~noalloc-test.ss~). A missing entry here is a wrong answer, not a missed
+  optimization.
+
+Not covered, stated: the stack. Bounding recursion depth is a different analysis.
+
+Cost when satisfied: zero, verified by image equality. Dropping the form: sound,
+and the guarantee is lost, which for an interrupt handler on a freestanding target
+is a wild store rather than a slowdown. Hence a fourth power: a *guarantee*. CL's
+~dynamic-extent~ is the nearest relative and points the other way (it licenses
+stack allocation; this forbids heap allocation).
+
+** E5. Fixed-width machine words: ~u64~
+
+Layout plus instructions. Probe 9 measured that 3 tag bits leave 61 value bits, so
+an x86-64 page-table entry with NX at bit 63 does not fit a fixnum, and a numeric
+tower does not substitute because bignums allocate. The ~u64~ family carries *no
+checks at all, by definition*: ~fx+~ carries ~overflow-check~ because a fixnum that
+overflows has left the type; a ~u64~ that overflows has wrapped, which is what the
+hardware does and what an address computation wants. Same mach-ops as the fixnum
+forms, minus the check. Ordering comparison is deliberately absent (signed and
+unsigned compare are different instructions; equality is the one that does not
+care). ~u64shr~ is logical, ~u64sar~ arithmetic, separate names because separate
+instructions.
+
+** E6. Device memory: ~mmio~
+
+Delivered as separate operations, not as a ~volatile~ annotation on ~vector-ref~,
+and the reason is normative (D208). A device register is a raw physical address of
+fixed width, with no header to type-check and no length to bound. Spelled that
+way, there is nothing for an annotation to annotate, and every pass that could
+break a driver decides by the match it already performs: DCE's allowlist cannot
+reap a read whose value is discarded (reading the IIR clears the interrupt), CSE
+cannot fold two reads of one address (two FIFO pops are two bytes), and heap
+traffic is not reordered across a device access. The width is in the name because
+a narrower access is a different bus transaction, not a parameter. This is the
+arrangement Linux (~readl~/~writel~) and Rust (~read_volatile~) both settled on.
+
+Measured on ~bench/kernel/04-irq.sps~: four source reads are four ~movzx~ from
+memory in the image, including the discarded one.
+
+** E7. Restrictions that are themselves enabling
+
+These are not extensions. They are places where SonicScheme is *narrower* than
+R7RS on purpose, and each narrowing is what makes a guarantee statable.
+
+| restriction                                   | what it enables                                                        |
+|-----------------------------------------------+------------------------------------------------------------------------|
+| every primitive has a fixed arity             | association order of a variadic flonum op is observable in the result bits; bit-exact cross-agreement needs the order pinned |
+| ~make-vector~, ~make-flvector~, ~make-bytevector~ take a mandatory fill | an unfilled flvector is a determinism hazard; an unfilled vector is a wild pointer under a scanning collector |
+| ~quote~ holds atoms only                      | a quoted list would allocate on every evaluation of a "constant"       |
+| externs are declared                          | an unbound variable is a bug again, not a conservative answer          |
+| ~+ - *~ are the 2-ary fixnum ops              | no tower to dispatch through, so no allocation hides in arithmetic; a flonum at a fixnum primitive is *refused by name* rather than compiled into integer arithmetic on a double's bits (D212) |
+| ~flneg~ is normative for negation             | ~(fl- 0.0 x)~ and negation disagree at 0.0 and the sign survives the divide that follows |
+| ~fl/~ by zero is not a check                  | IEEE says infinity; trapping it would make the C arm right and us wrong |
+| contraction and reassociation default off     | the nineteen-way bit-exact cross-implementation oracle holds only then; it is the strongest correctness evidence in the tree (D24, D80) |
+
+* The propagation rule
+
+The one piece of genuinely new semantics. Stated as permission, never as
+mechanism, so a simple interpreter conforms by ignoring it and an optimizing
+compiler conforms by using it.
+
+#+BEGIN_QUOTE
+Within the lexical extent of a declaration binding identifier ~x~ to premise ~P~,
+and for every occurrence of ~x~ in that extent not shadowed by an inner binding,
+an implementation may:
+
+(a) assume ~(P x)~ holds, and treat any execution in which it does not as
+    erroneous;
+(b) discharge any check on a primitive application whose obligation is implied by
+    ~(P x)~ together with facts already established, marking it ~proved~;
+(c) select a type-specific operation for a primitive applied only to identifiers
+    whose premises determine its argument types;
+(d) choose an unboxed representation for ~x~ and for every value derived from it
+    whose representation the premises determine.
+
+Facts established by (a) flow through ~let~ bindings, through the taken edge of a
+conditional on ~x~ (as a refinement of ~x~ on that edge), and through joins (as
+the join of the incoming facts). A policy permission never establishes a fact;
+a premise never lifts an obligation it does not imply.
+#+END_QUOTE
+
+How SonicScheme realises it (so the rule is known to be implementable, not only
+statable): e-SSA with sigma on branch edges and phi at joins (~essa.ss~), an
+interval domain with exhaustive concretization soundness tests and a Pentagon
+layer (~interval.ss~, ~pentagon.ss~, D6), ABCD over the inequality graph
+(~abcd.ss~), storage-class assignment from the derived facts (~repr.ss~, SBCL's
+IR2 as the reference). Declarations are the *anchors* that make this local: given
+declared parameter types at a procedure boundary, ordinary flow analysis
+propagates through the body with no whole-program analysis and no closed world,
+so separate compilation survives. Stalin has nothing to anchor on and is bimodal
+for that reason (D7).
+
+* The conformance ladder
+
+The asymmetry that makes this safe to standardize. An implementation that ignores
+every extension is slow and correct. An implementation that trusts them is fast,
+and unsafe only if the program lied. The fallback direction is the safe one.
+
+| level | honours                       | existence proof                                           |
+|-------+-------------------------------+-----------------------------------------------------------|
+| L0    | nothing; all forms are ~(let () ...)~ | ~bench/nbody/sonic-compat.sls~ on Chez 10, bit-exact against the oracle |
+| L1    | ~policy~: omits ~unchecked~ checks | ~policy.ss~ + ~lower.ss~                                 |
+| L2    | ~declare~, ~declare-distinct~: propagates | ~elide.ss~, ~alias.ss~, ~slp.ss~                   |
+| L3    | ~declare-no-allocation~: refuses | ~noalloc.ss~                                           |
+| L4    | ~u64~, ~mmio~, ~display-word~ | ~lang.ss~, both selectors, both encoders                  |
+
+L0 is the whole argument for erasability. L3 is the exception: a program that
+depends on the guarantee is not merely slower at L0, it is unverified. A
+conforming L0 implementation should therefore at minimum *warn* that a
+~declare-no-allocation~ was ignored. SonicScheme does not yet say this anywhere;
+it is recorded here as a requirement for the proposal.
+
+* SonicScheme as a superset of R6RS and R7RS
+
+Precise statement, in two halves, because a loose "superset" would be false.
+
+** The additive half
+
+Every extension form is a declaration whose *removal preserves meaning*. No new
+values, no new control flow, no new observable behaviour on a conforming program.
+Therefore:
+
+- any R6RS or R7RS program is unaffected by the absence of the extension.
+- any SonicScheme program is an R6RS program once the four forms are given the
+  identity macro definitions in ~sonic-compat.sls~, and it computes the same
+  numbers. The nbody kernel is that program; it is one file under both compilers.
+
+That is the sense in which SonicScheme is a superset: an *erasable layer* over
+the standard, exactly the bargain SRFI 145 and C++23 ~[[assume]]~ already make.
+
+The non-erasable additions are library procedures, not semantics for old forms:
+
+| addition                                     | class       | nearest standard home                      |
+|----------------------------------------------+-------------+--------------------------------------------|
+| ~u64+ u64- u64* u64and u64ior u64xor u64= u64shl u64shr u64sar~ | layout + instruction | SRFI 143 is fixnum-width; SRFI 151 is bitwise on exact integers; neither is a wrapping 64-bit word |
+| ~mmio-u8-ref/set!~, ~mmio-u64-ref/set!~      | instruction | none; OS territory                         |
+| ~display-word~                               | runtime     | none; prints a raw word, not decimal text  |
+| ~flneg fxneg fl->fx fx->fl~                  | instruction | R6RS has ~fl-~ unary, ~fixnum->flonum~; renamed for arity-fixing |
+
+** Form by form, against R6RS
+
+| SonicScheme                                           | R6RS                                                   | relation            |
+|-------------------------------------------------------+--------------------------------------------------------+---------------------|
+| ~fx+ fx- fx* fx< fx<= fx= fx>= fx>~                   | ~(rnrs arithmetic fixnums)~ (~fx=?~ spellings)         | same ops, no ~?~, 2-ary |
+| ~fxquotient fxremainder fxmodulo~                     | ~fxdiv fxmod~ family                                   | renamed             |
+| ~fl+ fl- fl* fl/ flabs flsqrt fl< ...~                | ~(rnrs arithmetic flonums)~                            | same ops, 2-ary     |
+| ~bytevector-u8-ref/set! bytevector-length make-bytevector~ | ~(rnrs bytevectors)~                              | same; fill mandatory |
+| ~flvector-*~                                          | not R6RS; Chez-native; SRFI 160 ~f64vector-*~          | layout, standardized in Tangerine |
+| ~define-record-type~                                  | R6RS has ~(rnrs records syntactic)~                    | SonicScheme uses the R7RS/SRFI 9 shape instead |
+| ~#!r6rs~, brackets                                    | R6RS                                                   | accepted            |
+| ~declare declare-distinct policy declare-no-allocation~ | nothing                                              | ADDED, erasable     |
+| ~u64-* mmio-* display-word~                           | nothing                                                | ADDED, library      |
+
+** Form by form, against R7RS-small and Tangerine
+
+| SonicScheme                                           | R7RS                                                   | relation            |
+|-------------------------------------------------------+--------------------------------------------------------+---------------------|
+| ~quote if lambda let let* letrec letrec* begin set! when unless cond and or define define-syntax let-syntax letrec-syntax syntax-rules~ | 4.1, 4.2, 4.3, 5.3 | proper subset: no rest params, no ~case~/~do~/~quasiquote~/~case-lambda~/~guard~/~parameterize~/~delay~ |
+| ~define-record-type~ with ~(ctor field ...)~, ~pred~, ~(field accessor [modifier])~ | 5.5 | same shape; type id is a fixnum unique per compilation unit |
+| ~vector-ref vector-set! vector-length make-vector~    | 6.8                                                    | same; fill mandatory |
+| ~bytevector-u8-ref/set! bytevector-length make-bytevector~ | 6.9                                               | same; fill mandatory; no ~#u8(...)~ literal yet |
+| ~car cdr cons eq? null? pair?~                        | 6.1, 6.4                                               | same                |
+| ~+ - *~                                               | 6.2.6 generic, variadic                                | NARROWED to 2-ary fixnum |
+| ~fx*~ family                                          | Tangerine ~(scheme fixnum)~ = SRFI 143                 | same spellings      |
+| ~fl*~ family                                          | Tangerine ~(scheme flonum)~ = SRFI 144                 | same spellings      |
+| ~flvector-*~                                          | Tangerine ~(scheme vector f64)~ = SRFI 160             | renamed from ~f64vector-*~ |
+| ~error~                                               | 6.11, variadic                                         | narrowed to 1-ary   |
+| the four extension forms, ~u64-*~, ~mmio-*~           | nothing                                                | ADDED               |
+
+** Where it is a subset today, so nobody reads "superset" as "complete"
+
+SonicScheme's *core* is a proper subset of R7RS-small. The extension layer is
+additive over R6RS, R7RS-small and Tangerine alike. "Superset" is true of the
+layer and false of the core, and the proposal to the community is the layer, not
+the dialect. The missing core pieces are tabled under Gaps below and none of them
+is forbidden by the design.
+
+* What to bring to R7RS-large and the SRFI process
+
+** The gap, as the record shows it
+
+| power       | Scheme status                                                    | SonicScheme supplies           |
+|-------------+------------------------------------------------------------------+--------------------------------|
+| instructions | standardized (R6RS 2007, Tangerine 2019); SRFI 276 active       | nothing new; do not duplicate  |
+| layout      | standardized (SRFI 160, bytevectors)                              | ~u64~ only                     |
+| premises    | ~assume~ exists, unbound, orphaned, unimplemented (D14); SRFI 253 binds but only checks | ~declare~, ~declare-distinct~ |
+| *policy*    | never proposed by anyone                                          | ~policy~ with five named checks |
+| *propagation* | never proposed by anyone                                        | the rule above                 |
+| *guarantee* | never proposed by anyone                                          | ~declare-no-allocation~        |
+
+Three gaps, then, and the measurement says which matters: policy is the 4.77x,
+the standardized parts are the 1.12x.
+
+** Proposal shape, smallest first
+
+1. *Named check policy.* One form, ~policy~, lexically scoped, five names,
+   default on, violation erroneous, implementation may ignore. Lead with the
+   phase 3 and phase 4 numbers: 4.77x on Chez, 3.99x on GNAT, granularity free.
+   This is the one thing Ada and CL both have and Scheme has never had at any
+   point in its history.
+2. *Declaration premises with propagation.* ~declare~ over predicates, built on
+   SRFI 145 (the UB bargain) and SRFI 253 (the binding shape; ~lambda-checked~ is
+   the natural place to attach argument premises). The propagation rule is the
+   actual new text. Include ~non-nan~ as the worked example of a premise that is
+   not a type: it is the only thing that revives the false edge of a float guard.
+3. *Distinctness.* ~declare-distinct~ rides with 2. ~restrict~ has thirty years of
+   semantics to borrow.
+4. *Contraction as a named permission.* Already inside 1 as ~fp-contract~. C has
+   ~#pragma STDC FP_CONTRACT~; nobody in Lisp has anything, and gcc contracts by
+   default, so every Scheme-against-C comparison ever published compared two
+   different computations (D80).
+5. *Allocation-free guarantee.* ~declare-no-allocation~. New category; expect
+   resistance, because it obliges a check rather than permitting an omission.
+   Argue from the kernel fixture: it is the difference between a comment and a
+   refusal, and it costs zero when satisfied.
+6. *Fixed-width words and device access.* ~u64~ and ~mmio~ as small libraries. OS
+   territory; propose last, or separately.
+
+Comment on SRFI 276 (type-specific flonums) if anything is useful; its window
+closed 2026-08-22 and the instruction side has a competent working group.
+
+** Open problems the proposal has to answer
+
+From ~PROPOSAL.md~ §3, plus what the build added.
+
+- *Continuations.* Suppress a check, capture a continuation, re-enter with a
+  different type: the assumption is void. Ada and CL never had to solve this. The
+  specification may have to say suppression and re-entrant continuations do not
+  mix inside one scope.
+- *Separate compilation.* Declarations at a library boundary need an export
+  story (CL ~declaim~/~ftype~). SonicScheme's record type ids are unique per
+  compilation unit, which makes the predicate wrong rather than conservative
+  across units (D214). ~declare-no-allocation~ is a whole-program graph walk.
+- *Predicate combinator scope creep.* Draw the line at a fixed, small vocabulary
+  and defend it.
+- *Top-level mutability.* A top-level binding is reloaded from memory on every
+  use, so no loop bound is ever a constant (D87). A ~define-constant~ or an
+  immutability premise is the obvious fix and is not in the grammar yet.
+- *L0 and guarantees.* An implementation that ignores ~declare-no-allocation~
+  must say so (see the conformance ladder).
+- *Whether anybody implements it.* The sequence that answers this: build it,
+  measure the win on real code, lead with the number. That is what this repo did.
+
+* Where each piece lives
+
+| piece                                   | definition                      | realisation                           | pinned by                                   |
+|-----------------------------------------+---------------------------------+---------------------------------------+---------------------------------------------|
+| surface special forms                   | ~sonic/src/sonic/expand.ss~ ~special-forms~ | ~expand.ss~                  | ~test/expand-test.ss~                       |
+| primitive table, checks, arity          | ~sonic/src/sonic/lang.ss~ ~prim-table~ | ~parse.ss~                        | ~test/parse-test.ss~, ~test/lang-test.ss~   |
+| ~Lcore~ grammar, controls, policy/premise names | ~lang.ss~                 | nanopass                              | ~test/lang-test.ss~                         |
+| ~policy~ semantics                      | ~sonic/src/sonic/policy.ss~ header | ~policy.ss~                        | ~test/policy-test.ss~                       |
+| ~declare~ consumption                   | ~sonic/src/sonic/elide.ss~ ~apply-premise~ | ~elide.ss~, ~interval.ss~ ~iv-refine*~ | ~test/elide-test.ss~, ~test/interval-test.ss~ |
+| ~declare-distinct~ semantics            | ~sonic/src/sonic/alias.ss~ header | ~alias.ss~, ~slp.ss~                | ~test/alias-test.ss~, ~test/distinct-test.ss~ |
+| ~fp-contract~ rewrite                   | ~sonic/src/sonic/contract.ss~ header | ~contract.ss~                    | ~test/contract-test.ss~                     |
+| ~declare-no-allocation~                 | ~sonic/src/sonic/noalloc.ss~ header | ~noalloc.ss~, ~expand.ss~         | ~test/noalloc-test.ss~                      |
+| ~u64~, ~mmio~                           | ~lang.ss~ ~prim-table~, ~mach-ops~ | both selectors and encoders        | ~test/rv64-u64.sps~, ~test/x86-64-test.ss~, ~test/rv64-test.ss~ |
+| proof-vs-permission report              | ~sonic/src/sonic/lower.ss~      |                                       | ~test/pipeline-test.ss~                     |
+| L0 existence proof                      | ~bench/nbody/sonic-compat.sls~  | Chez 10                               | the bit-exact oracle, ~bench/nbody/SPEC.md~ |
+| the programs that exercise all of it    | ~bench/nbody/config-sonic*.sps~, ~bench/fannkuch/config-sonic.sps~, ~bench/kernel/*.sps~ | | ~bench/kernel/SPEC.md~ standing block |
+
+* Gaps, stated rather than discovered
+
+What the grammar above does not yet have, so this document cannot be mistaken
+for a claim of completeness.
+
+| gap                                                   | status                                                     |
+|-------------------------------------------------------+------------------------------------------------------------|
+| ~fixnum~ and ~flonum~ premises                        | parsed, carried, consumed by no pass                        |
+| check names used as premises                          | parsed, inert; a leftover from before premises and policies were split |
+| rest parameters, ~case~, ~do~, ~quasiquote~, ~case-lambda~ | absent                                                |
+| ~raise~, ~guard~, ~call/cc~                           | absent; design filed with D214 (handler as procedure, saved context) |
+| generic polymorphic ~+~                               | absent on purpose; the instruction side is solved, the control side is not (~overflow-check~ is meaningless on a float) |
+| ~#u8(...)~ literals, variadic ~(bytevector ...)~      | absent; filed                                              |
+| bignums, ratnums, complex, string operations          | absent; the tower is fixnum and flonum only                |
+| ~letrec*~ ordering                                    | the expander emits ~letrec~; ~Lcore~ has ~letrec*~; the sequential guarantee is dropped at the expander boundary |
+| the unspecified value                                 | expander spells it ~'()~, which is truthy; ~Lcore~ has ~(void)~; one line in ~expand.ss~ |
+| 16- and 32-bit ~mmio~                                 | absent until something needs them                          |
+| unsigned ordering on ~u64~                            | absent on purpose; different instruction                   |
+| a constant-binding form for top-level values          | absent; D87 is the cost                                    |
+| L0 warning on ignored guarantees                      | not specified anywhere yet                                 |
