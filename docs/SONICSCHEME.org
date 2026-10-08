@@ -100,18 +100,19 @@ SonicScheme adds a fourth, which the build produced rather than the survey:
 
 Where Scheme stands (~RESEARCH.md~ §1, verified from the specs):
 
-| standard             | instructions                                | premises         | policy | layout     |
-|----------------------+---------------------------------------------+------------------+--------+------------|
-| R5RS                 | none                                        | none             | none   | none       |
-| R6RS                 | ~(rnrs arithmetic fixnums/flonums/bitwise)~ | none             | none   | bytevectors |
-| R7RS-small           | none (regressed)                            | none             | none   | ~u8~ bytevectors |
-| R7RS-large Tangerine | SRFI 143, 144, 151                          | none             | none   | SRFI 160   |
-| SRFI 145             | n/a                                         | ~assume~, unbound to a variable, no propagation | none | n/a |
-| SRFI 253             | n/a                                         | binds, but *checks*; never deletes | none | n/a |
+| standard             | instructions                                | premises         | policy | layout     | guarantee |
+|----------------------+---------------------------------------------+------------------+--------+------------+-----------|
+| R5RS                 | none                                        | none             | none   | none       | none      |
+| R6RS                 | ~(rnrs arithmetic fixnums/flonums/bitwise)~ | none             | none   | bytevectors | none      |
+| R7RS-small           | none (regressed)                            | none             | none   | ~u8~ bytevectors | none      |
+| R7RS-large Tangerine | SRFI 143, 144, 151                          | none             | none   | SRFI 160   | none      |
+| SRFI 145             | n/a                                         | ~assume~, unbound to a variable, no propagation | none | n/a | none      |
+| SRFI 253             | n/a                                         | binds, but *checks*; never deletes | none | n/a | none      |
 
-Two gaps, not one: *policy* has never been proposed by anyone in thirty years of
-SRFIs, and *propagation* (a declared fact flowing to the operations that use the
-variable) has never been proposed either. Phase 1 added a third: SRFI 145 imports
+Three gaps, not one: *policy* has never been proposed by anyone in thirty years of
+SRFIs, *propagation* (a declared fact flowing to the operations that use the
+variable) has never been proposed either, and no standard or SRFI has a
+*guarantee* form, an obligation the implementation must refuse to violate. Phase 1 added a third: SRFI 145 imports
 fail on both Chez and Racket (D14), so no premise is portably expressible on any
 implementation today.
 
